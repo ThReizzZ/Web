@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# threi — files that must never be committed
+# ---------------------------------------------------------------------------
+
+# Secrets and local environment overrides
+.env
+.env.*
+!.env.example
+!**/.env.example
+apps/web/.env*.local
+services/api/.env
+
+# Node.js / Next.js
+node_modules/
+apps/web/.next/
+apps/web/out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Rust
+services/api/target/
+**/*.rs.bk
+apps/web/tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Test and coverage output
+coverage/
+*.profraw
+*.profdata
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local logs and temporary files
+*.log
+tmp/
+.tmp/
+
+# SQLx offline cache is intentionally versioned once compile-time checked
+# queries are introduced. Local database dumps are not.
+*.dump
+*.sql.gz
+
+# Local backups and TLS material
+backups/
+deploy/nginx/certs/
+deploy/nginx/certbot-webroot/

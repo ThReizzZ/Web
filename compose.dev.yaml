@@ -1,0 +1,16 @@
+# ---------------------------------------------------------------------------
+# Development-only overrides.
+#
+# Publishes PostgreSQL and Redis on the host loopback interface so a locally
+# running `cargo run` / `next dev` can reach them. Never use this file for a
+# production deployment.
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d postgres redis
+# ---------------------------------------------------------------------------
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_DEV_PORT:-5432}:5432"
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_DEV_PORT:-6379}:6379"
