@@ -14,10 +14,7 @@ const footerLinks = [
   },
   {
     title: "系统",
-    links: [
-      { label: "管理面板", href: "/admin" },
-      { label: "服务器状态", href: "/servers" },
-    ],
+    links: [{ label: "服务器状态", href: "/servers" }],
   },
 ] as const;
 
@@ -30,9 +27,7 @@ export function SiteFooter() {
           <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
             {siteConfig.description}
           </p>
-          <p className="text-xs text-muted-foreground">
-            预览环境：服务器状态、论坛内容与用户资料均为模拟数据。
-          </p>
+          <p className="text-xs text-muted-foreground">服务器、论坛与用户数据来自 ThRei API。</p>
         </div>
         {footerLinks.map((group) => (
           <div key={group.title} className="space-y-3">

@@ -58,6 +58,7 @@ pub struct Settings {
     pub http: HttpSettings,
     pub database: DatabaseSettings,
     pub redis: RedisSettings,
+    pub auth: AuthSettings,
     pub observability: ObservabilitySettings,
 }
 
@@ -79,6 +80,7 @@ impl Settings {
             http: HttpSettings::from_lookup(&lookup, environment)?,
             database: DatabaseSettings::from_lookup(&lookup)?,
             redis: RedisSettings::from_lookup(&lookup, environment)?,
+            auth: AuthSettings::from_lookup(&lookup, environment)?,
             observability: ObservabilitySettings::from_lookup(&lookup, environment)?,
         })
     }
@@ -237,6 +239,94 @@ impl RedisSettings {
 }
 
 #[derive(Clone)]
+pub struct AuthSettings {
+    pub web_url: String,
+    pub steam_return_url: String,
+    pub steam_realm: String,
+    pub cookie_secure: bool,
+    pub session_ttl_days: i64,
+    pub admin_steam_ids: Vec<String>,
+}
+
+impl AuthSettings {
+    fn from_lookup<F>(lookup: &F, environment: Environment) -> Result<Self, ConfigError>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let configured_web_url = optional(lookup, "WEB_URL");
+        if environment.is_production() && configured_web_url.is_none() {
+            return Err(ConfigError::Missing("WEB_URL"));
+        }
+        let web_url = configured_web_url
+            .unwrap_or_else(|| "http://localhost:3000".to_owned())
+            .trim_end_matches('/')
+            .to_owned();
+        validate_http_url("WEB_URL", &web_url)?;
+
+        let steam_return_url = optional(lookup, "STEAM_RETURN_URL")
+            .unwrap_or_else(|| format!("{web_url}/api/v1/auth/steam/callback"));
+        validate_http_url("STEAM_RETURN_URL", &steam_return_url)?;
+
+        let steam_realm = optional(lookup, "STEAM_REALM").unwrap_or_else(|| web_url.clone());
+        validate_http_url("STEAM_REALM", &steam_realm)?;
+
+        let session_ttl_days = number(lookup, "SESSION_TTL_DAYS", 30_i64)?;
+        if session_ttl_days <= 0 || session_ttl_days > 365 {
+            return Err(ConfigError::Invalid(
+                "SESSION_TTL_DAYS",
+                "must be between 1 and 365".to_owned(),
+            ));
+        }
+
+        let admin_steam_ids = optional(lookup, "ADMIN_STEAM_IDS")
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if let Some(invalid) = admin_steam_ids
+            .iter()
+            .find(|steam_id| steam_id.len() != 17 || !steam_id.chars().all(|c| c.is_ascii_digit()))
+        {
+            return Err(ConfigError::Invalid(
+                "ADMIN_STEAM_IDS",
+                format!("`{invalid}` is not a 17-digit SteamID64"),
+            ));
+        }
+
+        Ok(Self {
+            web_url,
+            steam_return_url,
+            steam_realm,
+            cookie_secure: optional_bool(lookup, "COOKIE_SECURE")?
+                .unwrap_or(environment.is_production()),
+            session_ttl_days,
+            admin_steam_ids,
+        })
+    }
+}
+
+fn validate_http_url(key: &'static str, value: &str) -> Result<(), ConfigError> {
+    if !(value.starts_with("http://") || value.starts_with("https://")) {
+        return Err(ConfigError::Invalid(
+            key,
+            "must start with http:// or https://".to_owned(),
+        ));
+    }
+    if value.contains(char::is_whitespace) {
+        return Err(ConfigError::Invalid(
+            key,
+            "must not contain whitespace".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone)]
 pub struct ObservabilitySettings {
     pub log_filter: String,
     pub log_json: bool,
@@ -365,6 +455,9 @@ mod tests {
         assert!(!settings.observability.log_json);
         assert_eq!(settings.http.port, 8080);
         assert_eq!(settings.http.cors_allowed_origins, Vec::<String>::new());
+        assert_eq!(settings.auth.web_url, "http://localhost:3000");
+        assert_eq!(settings.auth.session_ttl_days, 30);
+        assert!(!settings.auth.cookie_secure);
     }
 
     #[test]
@@ -379,12 +472,34 @@ mod tests {
             ("APP_ENV", "production"),
             ("DATABASE_URL", DATABASE_URL),
             ("REDIS_URL", "redis://:secret@redis:6379/0"),
+            ("WEB_URL", "https://threi.example"),
         ])
         .expect("production settings should be valid");
 
         assert!(!settings.http.docs_enabled);
         assert!(settings.redis.required);
         assert!(settings.observability.log_json);
+    }
+
+    #[test]
+    fn production_requires_an_explicit_web_url() {
+        let result = load(&[
+            ("APP_ENV", "production"),
+            ("DATABASE_URL", DATABASE_URL),
+            ("REDIS_URL", "redis://:secret@redis:6379/0"),
+        ]);
+        assert!(matches!(result, Err(ConfigError::Missing("WEB_URL"))));
+    }
+
+    #[test]
+    fn admin_steam_ids_must_be_valid() {
+        assert!(matches!(
+            load(&[
+                ("DATABASE_URL", DATABASE_URL),
+                ("ADMIN_STEAM_IDS", "not-a-steam-id"),
+            ]),
+            Err(ConfigError::Invalid("ADMIN_STEAM_IDS", _))
+        ));
     }
 
     #[test]

@@ -16,6 +16,14 @@ const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: true,
   poweredByHeader: false,
+  images: {
+    remotePatterns: [
+      { protocol: "https", hostname: "avatars.steamstatic.com" },
+      { protocol: "https", hostname: "avatars.akamai.steamstatic.com" },
+      { protocol: "https", hostname: "avatars.fastly.steamstatic.com" },
+      { protocol: "https", hostname: "steamcommunity.com" },
+    ],
+  },
   async headers() {
     return [
       {

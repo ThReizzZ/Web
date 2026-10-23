@@ -2,7 +2,8 @@ import { ArrowUpRight, MessageSquareText } from "lucide-react";
 import Link from "next/link";
 
 import { ForumCategoryIcon, categoryTone } from "@/features/forum/components/forum-category-icon";
-import type { ForumCategory } from "@/features/forum/data/forum";
+import type { ForumCategory } from "@/features/forum/types";
+import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export function CategoryCard({ category }: { category: ForumCategory }) {
@@ -27,7 +28,7 @@ export function CategoryCard({ category }: { category: ForumCategory }) {
           {category.topicCount} 主题
         </span>
         <span>{category.postCount.toLocaleString("zh-CN")} 回复</span>
-        <span className="ml-auto">{category.lastActivity}</span>
+        <span className="ml-auto">{formatRelativeTime(category.lastActivityAt)}</span>
       </div>
     </Link>
   );

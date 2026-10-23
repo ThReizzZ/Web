@@ -54,6 +54,10 @@ impl AppError {
         tracing::error!(error = %error, "internal server error");
         Self::Internal(error)
     }
+
+    pub fn internal_message(message: impl Into<String>) -> Self {
+        Self::internal(std::io::Error::other(message.into()))
+    }
 }
 
 impl From<sqlx::Error> for AppError {

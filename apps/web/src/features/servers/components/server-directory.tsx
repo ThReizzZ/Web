@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ServerCard } from "@/features/servers/components/server-card";
 import { ServerListRow } from "@/features/servers/components/server-list-row";
-import { gameServers, getOnlinePlayerTotal, searchServers } from "@/features/servers/data/servers";
+import {
+  getOnlinePlayerTotal,
+  searchServers,
+  type KzServer,
+} from "@/features/servers/data/servers";
 
 const VIEW_STORAGE_KEY = "threi.servers.view";
 const VIEW_CHANGE_EVENT = "threi:servers-view-change";
@@ -58,7 +62,7 @@ function getServerColumnCount() {
   return 3;
 }
 
-export function ServerDirectory() {
+export function ServerDirectory({ servers }: { servers: KzServer[] }) {
   const view = useSyncExternalStore(subscribeToView, getViewSnapshot, getServerViewSnapshot);
   const columnCount = useSyncExternalStore(
     subscribeToColumns,
@@ -66,12 +70,12 @@ export function ServerDirectory() {
     getServerColumnCount,
   );
   const [query, setQuery] = useState("");
-  const servers = searchServers(query);
-  const columns = Array.from({ length: columnCount }, () => [] as typeof servers);
-  servers.forEach((server, index) => {
+  const filteredServers = searchServers(servers, query);
+  const columns = Array.from({ length: columnCount }, () => [] as typeof filteredServers);
+  filteredServers.forEach((server, index) => {
     columns[index % columnCount]!.push(server);
   });
-  const onlineTotal = getOnlinePlayerTotal();
+  const onlineTotal = getOnlinePlayerTotal(servers);
 
   function selectView(nextView: ViewMode) {
     try {
@@ -90,7 +94,7 @@ export function ServerDirectory() {
           <h2 className="mt-1 text-2xl font-semibold tracking-tight">选择 KZ 服务器</h2>
           <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
             <Users className="size-3.5" aria-hidden="true" />
-            {onlineTotal} 位玩家在线，分布在 {gameServers.length} 个服务器
+            {onlineTotal} 位玩家在线，分布在 {servers.length} 个服务器
           </p>
         </div>
 
@@ -149,23 +153,29 @@ export function ServerDirectory() {
           ) : null}
         </div>
         <p className="text-xs text-muted-foreground" aria-live="polite">
-          显示 <span className="font-medium text-foreground">{servers.length}</span> /{" "}
-          {gameServers.length} 个服务器
+          显示 <span className="font-medium text-foreground">{filteredServers.length}</span> /{" "}
+          {servers.length} 个服务器
         </p>
       </div>
 
-      {servers.length === 0 ? (
+      {filteredServers.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border bg-card py-14 text-center">
           <Search className="size-8 text-muted-foreground" aria-hidden="true" />
           <div>
-            <p className="font-medium">没有找到匹配的服务器</p>
+            <p className="font-medium">
+              {servers.length === 0 ? "暂时还没有服务器记录" : "没有找到匹配的服务器"}
+            </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              可以尝试服务器名称、地图名、地区或玩家昵称。
+              {servers.length === 0
+                ? "服务器接入后，这里会显示真实的地图、在线玩家与连接地址。"
+                : "可以尝试服务器名称、地图名、地区或玩家昵称。"}
             </p>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={() => setQuery("")}>
-            清空搜索
-          </Button>
+          {servers.length > 0 ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => setQuery("")}>
+              清空搜索
+            </Button>
+          ) : null}
         </div>
       ) : view === "card" ? (
         <div
@@ -187,7 +197,7 @@ export function ServerDirectory() {
         </div>
       ) : (
         <div className="space-y-3">
-          {servers.map((server) => (
+          {filteredServers.map((server) => (
             <ServerListRow key={server.id} server={server} />
           ))}
         </div>

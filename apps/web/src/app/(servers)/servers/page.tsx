@@ -8,12 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ServerDirectory } from "@/features/servers/components/server-directory";
-import {
-  gameServers,
-  getFeaturedServer,
-  getMaxPlayerTotal,
-  getOnlinePlayerTotal,
-} from "@/features/servers/data/servers";
+import { getMaxPlayerTotal, getOnlinePlayerTotal } from "@/features/servers/data/servers";
+import { getServerApiClient } from "@/lib/api/server";
+import { fetchMe, fetchServers } from "@/services/content";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "服务器",
@@ -24,8 +23,8 @@ export const metadata: Metadata = {
 const steps = [
   {
     icon: Globe2,
-    title: "绑定 Steam 账号",
-    description: "在用户中心绑定 Steam，社区称号、计时记录和服务器身份会保持同步。",
+    title: "使用Steam登录",
+    description: "ThRei 只使用Steam登录。登录后可以查看个人资料；论坛与收藏写操作尚未接入。",
   },
   {
     icon: Copy,
@@ -39,28 +38,37 @@ const steps = [
   },
 ] as const;
 
-export default function ServersPage() {
-  const featured = getFeaturedServer();
-  const onlineTotal = getOnlinePlayerTotal();
-  const maxTotal = getMaxPlayerTotal();
+export default async function ServersPage() {
+  const client = await getServerApiClient();
+  const [servers, me] = await Promise.all([fetchServers(client), fetchMe(client)]);
+  const featured = servers.find((server) => server.featured) ?? servers[0];
+  const onlineTotal = getOnlinePlayerTotal(servers);
+  const maxTotal = getMaxPlayerTotal(servers);
 
   return (
     <PageContainer className="space-y-10 py-10">
       <section className="relative overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 text-white">
-        <Image
-          src={featured.mapImage}
-          alt=""
-          fill
-          priority
-          sizes="(min-width: 1024px) 72rem, 100vw"
-          className="object-cover opacity-45"
-          unoptimized
-        />
+        {featured?.mapImage ? (
+          <Image
+            src={featured.mapImage}
+            alt=""
+            fill
+            priority
+            sizes="(min-width: 1024px) 72rem, 100vw"
+            className="object-cover opacity-45"
+            unoptimized
+          />
+        ) : (
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-[radial-gradient(70%_120%_at_20%_0%,rgba(16,185,129,0.26),transparent_60%)]"
+          />
+        )}
         <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/25" />
         <div className="relative max-w-4xl p-7 sm:p-10 lg:p-12">
           <Badge variant="success" className="bg-emerald-400/15 text-emerald-200">
             <span className="size-1.5 rounded-full bg-emerald-300" aria-hidden="true" />
-            {gameServers.length} 个 KZ 服务器开放中
+            {servers.length > 0 ? `${servers.length} 个 KZ 服务器开放中` : "等待服务器接入"}
           </Badge>
           <h1 className="mt-5 text-3xl font-semibold tracking-tight sm:text-4xl lg:text-5xl">
             <span className="block">KZ 服务器目录</span>
@@ -83,31 +91,23 @@ export default function ServersPage() {
               variant="outline"
               className="border-white/25 bg-white/5 text-white hover:bg-white/10 hover:text-white"
             >
-              <Link href="/forum/topic/new-player-bind">KZ 新手指南</Link>
+              {me.user ? (
+                <Link href="/account">进入用户中心</Link>
+              ) : (
+                <a href="/api/v1/auth/steam/login">使用Steam登录</a>
+              )}
             </Button>
           </div>
           <dl className="mt-9 grid max-w-2xl grid-cols-2 gap-4 sm:grid-cols-4">
-            <div>
-              <dt className="text-xs text-white/55">在线玩家</dt>
-              <dd className="mt-1 text-2xl font-semibold tabular-nums">{onlineTotal}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-white/55">社区容量</dt>
-              <dd className="mt-1 text-2xl font-semibold tabular-nums">{maxTotal}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-white/55">服务器 tickrate</dt>
-              <dd className="mt-1 text-2xl font-semibold">128</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-white/55">KZ 服务器</dt>
-              <dd className="mt-1 text-2xl font-semibold">{gameServers.length}</dd>
-            </div>
+            <Stat label="在线玩家" value={onlineTotal} />
+            <Stat label="社区容量" value={maxTotal} />
+            <Stat label="服务器 tickrate" value={servers[0]?.tickrate ?? 0} />
+            <Stat label="KZ 服务器" value={servers.length} />
           </dl>
         </div>
       </section>
 
-      <ServerDirectory />
+      <ServerDirectory servers={servers} />
 
       <section className="grid gap-4 rounded-2xl border bg-muted/25 p-6 sm:p-8 lg:grid-cols-3">
         <div className="lg:col-span-3">
@@ -136,24 +136,53 @@ export default function ServersPage() {
             <Server className="size-5" aria-hidden="true" />
           </span>
           <div>
-            <p className="text-sm font-medium">还没有社区账号？</p>
-            <p className="text-xs text-muted-foreground">
-              绑定 Steam 后可以保存服务器、同步 KZ 记录并参与论坛讨论。
-            </p>
+            {me.user ? (
+              <>
+                <p className="text-sm font-medium">已使用Steam登录</p>
+                <p className="text-xs text-muted-foreground">
+                  当前身份：{me.user.name}。可以前往用户中心查看自己的记录。
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-medium">还没有登录？</p>
+                <p className="text-xs text-muted-foreground">
+                  ThRei 只使用Steam登录。登录后可以查看个人资料。
+                </p>
+              </>
+            )}
           </div>
         </div>
         <Button asChild variant="outline">
-          <Link href="/account">
-            <Users aria-hidden="true" />
-            前往用户中心
-          </Link>
+          {me.user ? (
+            <Link href="/account">
+              <Users aria-hidden="true" />
+              前往用户中心
+            </Link>
+          ) : (
+            <a href="/api/v1/auth/steam/login">
+              <Users aria-hidden="true" />
+              使用Steam登录
+            </a>
+          )}
         </Button>
       </div>
 
-      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Map className="size-3.5" aria-hidden="true" />
-        页面中的服务器状态、地图和在线玩家为预览数据。
-      </p>
+      {servers.length === 0 ? (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Map className="size-3.5" aria-hidden="true" />
+          当前数据库中没有服务器记录。管理员添加服务器后，这里会自动显示真实状态和地址。
+        </p>
+      ) : null}
     </PageContainer>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <dt className="text-xs text-white/55">{label}</dt>
+      <dd className="mt-1 text-2xl font-semibold tabular-nums">{value.toLocaleString("zh-CN")}</dd>
+    </div>
   );
 }

@@ -12,6 +12,15 @@ export function ServerStatusBadge({ status }: { status: ServerStatus }) {
     );
   }
 
+  if (status === "offline") {
+    return (
+      <Badge variant="muted">
+        <span className="size-1.5 rounded-full bg-muted-foreground" aria-hidden="true" />
+        离线
+      </Badge>
+    );
+  }
+
   return (
     <Badge variant="success">
       <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />

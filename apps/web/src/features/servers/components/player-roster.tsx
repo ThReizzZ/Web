@@ -18,9 +18,9 @@ export function PlayerRoster({
     >
       {players.map((player) => (
         <li
-          key={player.name}
+          key={`${player.name}-${player.connectedAt ?? ""}`}
           data-player-name={player.name}
-          data-player-avatar={player.avatar}
+          data-player-avatar={player.avatarUrl ?? ""}
           title={player.name}
           className={cn(
             "min-w-0 border bg-background/75",
@@ -31,7 +31,7 @@ export function PlayerRoster({
         >
           <UserAvatar
             name={player.name}
-            avatar={player.avatar}
+            avatarUrl={player.avatarUrl}
             size="xs"
             className={cn(
               "ring-1 ring-background",

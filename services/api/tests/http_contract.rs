@@ -240,3 +240,69 @@ async fn cors_allows_configured_origin_only() {
     let (_, headers, _) = send(router, denied).await;
     assert!(!headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
 }
+
+#[tokio::test]
+async fn steam_login_redirects_to_steam_openid() {
+    let router = test_router(&test_settings(false, ""));
+    let request = Request::builder()
+        .uri("/api/v1/auth/steam/login")
+        .body(Body::empty())
+        .expect("request should build");
+
+    let (status, headers, _) = send(router, request).await;
+
+    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+    let location = headers[header::LOCATION]
+        .to_str()
+        .expect("location should be a string");
+    assert!(location.starts_with("https://steamcommunity.com/openid/login?"));
+    assert!(location.contains("openid.mode=checkid_setup"));
+}
+
+#[tokio::test]
+async fn me_returns_null_without_a_session() {
+    let router = test_router(&test_settings(false, ""));
+    let request = Request::builder()
+        .uri("/api/v1/auth/me")
+        .body(Body::empty())
+        .expect("request should build");
+
+    let (status, _, body) = send(router, request).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["user"].is_null());
+}
+
+#[tokio::test]
+async fn account_requires_authentication() {
+    let router = test_router(&test_settings(false, ""));
+    let request = Request::builder()
+        .uri("/api/v1/account")
+        .body(Body::empty())
+        .expect("request should build");
+
+    let (status, headers, body) = send(router, request).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], "unauthorized");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+}
+
+#[tokio::test]
+async fn admin_endpoints_require_authentication() {
+    for path in [
+        "/api/v1/admin/admins",
+        "/api/v1/admin/users/lookup?steamId64=76561198000000000",
+        "/api/v1/admin/bans",
+        "/api/v1/admin/whitelist",
+    ] {
+        let router = test_router(&test_settings(false, ""));
+        let request = Request::builder()
+            .uri(path)
+            .body(Body::empty())
+            .expect("request should build");
+        let (status, _, body) = send(router, request).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "path {path}");
+        assert_eq!(body["error"]["code"], "unauthorized", "path {path}");
+    }
+}

@@ -2,7 +2,7 @@
 
 > 本文记录当前**已实现**的架构，以及明确规划但**尚未实现**的能力。
 > 架构发生变化时，必须同步更新本文与 [DEVELOPMENT.md](DEVELOPMENT.md)。
-> 当前版本：`0.1.0`（架构初始化）。
+> 当前版本：`0.1.0`（Steam 登录与真实数据接入）。
 
 ## 1. 目标与阶段
 
@@ -15,7 +15,9 @@ ThRei 是一个长期运营的 CS:GO KZ 社区系统，统一承载官网、服�
 - 为后续用户、权限、论坛、通知、审核、审计和系统配置模块预留扩展点；
 - 不提前引入微服务、消息队列等尚无实际需求的基础设施。
 
-本阶段**没有**实现登录、权限、真实服务器状态、论坛持久化数据、审核或审计。前端已使用本地模拟数据填充页面，相关后端能力在本文中标记为“规划”。
+当前已实现 Steam OpenID 登录、数据库会话、真实业务表、服务器/论坛/社区/用户中心/管理统计的只读 API，以及管理面板的服务端角色校验。前端不再使用模拟数据。
+
+尚未实现：论坛发帖/回复、资料与收藏写接口、游戏服务器实时上报、审核/审计写流程、登录限流与 CSRF 令牌、CI 和自动化部署验证。相关能力在本文中明确标记为“规划”。
 
 ## 2. 技术选型
 
@@ -74,8 +76,8 @@ compose.dev.yaml         本地开发用的基础设施端口覆盖
 
 ### 与初始规划的差异
 
-- **没有 `apps/web/public/`**：目前没有静态资源需求。图标和 manifest 由 `src/app/icon.svg`、`src/app/manifest.ts` 生成；等真正需要静态文件时再创建。
-- **`services/api/src/modules/` 当前只有边界说明**，没有空业务目录。业务模块在需求明确后创建，避免“占位目录 + 空抽象文件”。
+- **`apps/web/public/` 保留为空静态资源目录**（`.gitkeep`）；图标和 manifest 由 `src/app/icon.svg`、`src/app/manifest.ts` 生成。
+- **`services/api/src/modules/` 已有真实业务模块**：`auth`、`servers`、`forum`、`community`、`account`、`admin`。没有为了抽象而创建空目录。
 - **没有独立的通用 `models/`、`services/`、`repositories/` 顶层目录**。未来每个业务模块内部按 `routes / service / repository / dto` 组织，减少跨模块耦合。
 - **健康检查放在根路径 `/health/*`**，不纳入 `/api/v1`，因为它们属于基础设施探针；Nginx 会隐藏这些路径。
 - **`routes/system.rs` 属于基础设施元信息**，不是业务模块，因此没有放入 `modules/`。
@@ -105,6 +107,7 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 - `ForumSearchForm`：React Hook Form + Zod + `useRouter`；
 - `ServerDirectory`：3 列卡片墙/列表显示模式切换、`localStorage` 偏好与 1/2/3 列响应式分配；
 - `CopyAddressButton` / `JoinServerButton`：剪贴板、原生 `<dialog>` 加入说明与交互状态；
+- `LogoutButton`：调用登出 API 并刷新导航；
 - `error.tsx` / `global-error.tsx`：错误边界需要交互；
 - Radix `Label` / `Separator` 包装组件（基础交互组件）。
 
@@ -114,8 +117,8 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 
 - `src/lib/api/client.ts`：与框架无关的 `ApiClient`，统一处理 base URL、超时、`credentials`、JSON 解析和错误归一化；错误类型为 `ApiError`，包含 HTTP 状态、业务错误码和 `x-request-id`。
 - `src/lib/api/browser.ts`：浏览器客户端。`NEXT_PUBLIC_API_BASE_URL` 为空时使用同源 `/api/v1`（生产由 Nginx 转发；本地由 Next rewrite 转发）。
-- `src/lib/api/server.ts`：仅服务端使用（`server-only`），通过 `API_INTERNAL_URL` 访问容器内 API，并转发 Cookie、请求 ID，为未来会话接入做准备。服务端密钥不进入客户端 bundle。
-- `src/services/*.ts`：按资源封装类型化端点，并用 Zod 校验关键响应（当前为 `system/info`）。
+- `src/lib/api/server.ts`：仅服务端使用（`server-only`），通过 `API_INTERNAL_URL` 访问容器内 API，并转发 Cookie、请求 ID；Steam 会话就是这样在 Server Components 中读取的。服务端密钥不进入客户端 bundle。
+- `src/services/content.ts`：按资源封装服务器、论坛、社区、用户中心、管理员与 `/auth/me` 端点；`src/services/system.ts` 保留系统信息校验。
 - `src/hooks/*.ts`：TanStack Query hooks，统一 key 和刷新策略。
 
 本地开发时，`next.config.ts` 根据 `API_INTERNAL_URL` 生成 `/api/v1/:path*` rewrite。生产环境 Nginx 在请求到达 Next 之前就处理 `/api/`，因此 rewrite 不是生产流量的主路径。
@@ -128,27 +131,34 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 - `not-found.tsx`、`error.tsx`、`global-error.tsx` 已建立。论坛列表刻意不使用父级 `loading.tsx`，以免流式渲染使 `notFound()` 无法返回真正的 404 状态码。
 - 用户中心与管理面板设置 `noindex`。
 
-### 5.5 认证与前端访问控制（规划）
+### 5.5 认证与前端访问控制
 
-前端可以做路由级重定向和菜单显隐以改善体验，但**不能作为授权依据**。后续：
+Steam 是唯一登录方式：
 
-- 未认证访问 `/account`、`/admin` 由服务端会话检查后重定向；
-- 管理操作按钮按权限隐藏，同时 API 必须再次校验；
-- Cookie 由 API 签发，前端不存储访问令牌到 `localStorage`。
+- 顶部导航在未登录时显示“使用Steam登录”，链接到 `/api/v1/auth/steam/login`。
+- “管理面板”入口只在当前用户角色为 `admin` 时加入顶部导航；匿名用户和普通成员不渲染该入口，页脚也不展示管理员入口。
+- `(admin)` layout 在服务端再次读取会话：匿名访问重定向到 `/account`，非管理员重定向到首页，只有管理员渲染管理面板。
+- 管理面板页面：`/admin` 运营概览、`/admin/admins` 管理员管理、`/admin/bans` 封禁管理、`/admin/whitelist` 白名单审核；共享服务端角色门禁与响应式侧边导航。服务状态入口已移除，其信息由运营概览覆盖。
+- API 跳转 Steam OpenID；Steam 回调到 `${WEB_URL}/api/v1/auth/steam/callback`。
+- API 向 Steam 校验断言，记录/更新 `users`，生成随机会话令牌；数据库只保存令牌的 SHA-256 哈希，浏览器收到 HttpOnly Cookie。
+- 服务端请求通过 `getServerApiClient()` 转发 Cookie；`/auth/me` 决定导航显示登录按钮还是用户头像。
+- `/account` 未登录时显示 Steam 登录卡片；`/admin` 未登录或非管理员时显示受限提示。
+- 管理员由 `ADMIN_STEAM_IDS` 首次引导；之后通过管理面板维护角色。API `/admin/*` 再次校验，不依赖前端隐藏。
 
-当前 `/admin` 是公开演示面板：数据为前端模拟内容，认证与授权尚未实现，文档明确警告不得直接公网暴露。
+前端访问控制只改善体验，最终授权在 API。当前没有写操作接口，因此暂未引入 CSRF 令牌；后续写接口必须先补 CSRF 与限流。
 
-### 5.6 预览数据与模块组织
+### 5.6 真实数据与模块组织
 
-当前页面内容来自前端模块内的本地模拟数据，不经过数据库或 API：
+页面数据通过 Server Components 调用 API，API 再查询 PostgreSQL：
 
-- `src/features/servers/data/servers.ts`：12 个 CS:GO KZ 服务器的地图、地址、tickrate，以及带模拟头像的完整在线玩家列表；
-- `src/features/forum/data/forum.ts`：分类、主题、回复，支持本地搜索；
-- `src/features/account/data/account.ts`：当前演示用户、活动、通知与安全概览；
-- `src/features/admin/data/dashboard.ts`：运营指标、审核队列与审计日志；
-- `apps/web/public/images/servers/*.svg`：本地服务器地图预览图。
+- `src/services/content.ts`：`/servers`、`/forum/*`、`/community/overview`、`/account`、`/admin/overview`、`/auth/me` 的类型化请求。
+- `src/features/servers/data/servers.ts`：仅保留 `KzServer` / `KzPlayer` 类型、地址与搜索/统计工具，不含数据。
+- `src/features/forum/types.ts`、`features/account/types.ts`、`features/admin/types.ts`：API 响应类型。
+- 服务器、分类、主题、回复、用户、会话、收藏和在线玩家均来自数据库表。
+- 数据库为空时页面显示空状态，不回退到伪造内容。
+- 迁移预置 1 篇官方新手指南；作者为 `users.is_system=true` 的系统账号，不计入成员/活跃统计。论坛“新手指南”卡片通过“查看教学”跳转到该主题。
 
-这些数据只用于界面预览，刷新不会保存修改，也不代表真实服务器状态。后续接入 API 时，应将数据读取替换为服务端查询，并保持组件边界不变。页面底部和管理面板明确标注“预览数据”。
+服务器 `server_players` 表已就绪，但尚未接入游戏服务器插件实时上报；当前在线玩家以该表中的 `last_seen_at`（5 分钟窗口）为准。
 
 ## 6. 后端架构
 
@@ -165,11 +175,11 @@ src/routes/fallback.rs      统一 404 / 405 错误
 src/middleware/request_id.rs 请求 ID 注入、校验、透传、trace span
 src/errors/                 统一 AppError 与错误响应结构
 src/infrastructure/         PostgreSQL、Redis、日志初始化
-src/modules/                未来业务模块边界说明
+src/modules/                auth / servers / forum / community / account / admin
 src/bin/migrate.rs          独立迁移二进制
 ```
 
-未来业务模块（尚未实现）：`users`、`rbac`、`servers`、`forum`、`notifications`、`moderation`、`audit`、`settings`。`servers` 将负责服务器目录、状态同步和在线玩家查询。每个模块内部建议：
+已实现模块：`auth`（Steam OpenID、会话、用户）、`servers`（目录、在线玩家与白名单标记）、`forum`（分类/主题/回复读取）、`community`（统计）、`account`（当前用户概览）、`admin`（运营统计）、`admin_users`（管理员增删/禁用）、`bans`（封禁/解封）、`whitelist`（申请审核与服务器白名单）。每个模块目前按职责分文件；后续写接口继续沿用以下结构：
 
 ```text
 modules/<name>/
@@ -237,6 +247,12 @@ modules/<name>/
 | `REDIS_REQUIRED` | 生产默认 `true` | Redis 不可用时是否阻止就绪 |
 | `REDIS_CONNECT_TIMEOUT_SECS` | `5` | Redis 启动连接超时 |
 | `CORS_ALLOWED_ORIGINS` | 空 | 逗号分隔的 http(s) origin |
+| `WEB_URL` | 开发 `http://localhost:3000`；生产必填 | 浏览器访问的公开 Web origin，用于 Steam 回跳 |
+| `STEAM_RETURN_URL` | `${WEB_URL}/api/v1/auth/steam/callback` | Steam OpenID return_to，必须是公开可访问地址 |
+| `STEAM_REALM` | `${WEB_URL}` | Steam OpenID realm |
+| `COOKIE_SECURE` | 生产默认 `true` | 会话 Cookie 是否加 `Secure`；本地 HTTP 设为 `false` |
+| `SESSION_TTL_DAYS` | `30` | 会话有效期（1–365 天） |
+| `ADMIN_STEAM_IDS` | 空 | 逗号分隔的 17 位 SteamID64；仅用于首次引导管理员，之后由管理面板维护角色 |
 | `API_DOCS_ENABLED` | 非生产默认 `true` | 是否挂载 OpenAPI UI |
 | `REQUEST_TIMEOUT_SECS` | `30` | 请求处理超时 |
 | `REQUEST_BODY_LIMIT_BYTES` | `1048576` | 请求体上限 |
@@ -279,8 +295,13 @@ modules/<name>/
 - 迁移使用 `sqlx::migrate!` 嵌入二进制，由独立的 `migrate` 二进制执行，**API 启动不自动迁移**。
 - 迁移文件名 `YYYYMMDDHHMMSS_description.sql`，已应用迁移不可修改；修正通过新迁移完成。
 - PostgreSQL DDL 在事务中执行；SQLx 在 `_sqlx_migrations` 记录版本、校验和与执行结果。
-- 初始迁移只建立 `pgcrypto` 与 `set_updated_at()` 触发器函数，不创建业务表。
-- 业务表按模块需求新增，命名、索引、约束、审计字段和软删除策略在对应模块设计中确定。
+- 初始迁移建立 `pgcrypto` 与 `set_updated_at()`；后续迁移建立用户、会话、服务器、在线玩家、分类、主题、回复、收藏表。
+- 业务表使用外键、唯一约束、CHECK 约束和索引；主题/回复采用 `deleted_at` 软删除字段，当前读取接口只返回未删除记录。
+- `users.is_system` 标记官方系统账号；成员数、角色分布、最近注册和活跃统计会排除这些账号。
+- `users.is_disabled` 禁用管理员账号；禁用会撤销会话并阻止登录。
+- `bans` 保存 SteamID64、原因、到期时间、操作者与解封记录；生效封禁阻止登录。
+- `server_whitelist`、`whitelist_applications` 管理服务器白名单与审核；`servers.requires_whitelist` 标记需要白名单的服务器。
+- 迁移只新增，不修改已应用迁移。
 - 禁止应用启动时删除/重建数据库；禁止容器启动时无条件清空卷。
 - 备份/恢复流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
@@ -302,24 +323,26 @@ modules/<name>/
 - 当前使用 `allkeys-lru` 与 `--save ""`。若未来把用户会话放入 Redis，必须重新评估淘汰策略与持久化要求。
 - Redis 不发布公网端口，只加入内部网络。
 
-## 9. 认证与权限设计（规划，未实现）
+## 9. 认证与权限设计（当前实现）
 
-目标边界：
+已实现：
 
-- **用户**：身份、资料、凭据状态；不直接携带权限判断。
-- **角色**：权限集合（如 `member`、`moderator`、`admin`）。
-- **权限**：后端稳定标识（如 `forum.topic.delete`、`admin.audit.read`），路由与 service 双重校验。
-- **会话**：服务端存储的不透明随机令牌（数据库保存哈希），Cookie 为 `HttpOnly; Secure; SameSite=Lax; Path=/`。
-- **CSRF**：Cookie 会话 + 双提交令牌（`x-csrf-token`），写请求校验；登录/登出也覆盖。
-- **密码**：Argon2id；禁止明文、可逆加密或自行实现哈希。
-- **登录限流**：按 IP + 账号维度，Redis 计数/滑动窗口；失败响应不泄露账号是否存在。
-- **管理审计**：写操作记录操作者、动作、目标、时间、请求 ID、结果；审计表只追加。
-- **密钥**：Cookie 签名/加密密钥、SMTP 等通过环境变量或后续 secret manager 注入，不提交 Git，不写入日志。
-- **前端路由保护**：服务端读取会话后重定向；隐藏菜单不作为授权。
+- **身份**：Steam OpenID 2.0 是唯一登录方式；没有本地密码、邮箱注册或备用登录。
+- **校验**：回调收到断言后，将参数以 `openid.mode=check_authentication` POST 回 Steam；只有 `is_valid:true` 才信任 `claimed_id` 中的 SteamID64。
+- **用户**：按 `steam_id64` upsert；从公开 Steam profile XML 读取昵称和头像，失败时使用可读的 Steam 用户占位名称。
+- **会话**：64 位十六进制随机令牌；数据库只保存 SHA-256 哈希；30 天过期（可配置）。
+- **Cookie**：`threi_session`，`HttpOnly; SameSite=Lax; Path=/`，生产加 `Secure`；前端不把令牌写入 `localStorage`。
+- **角色**：`member` / `moderator` / `admin`；`ADMIN_STEAM_IDS` 仅首次引导，之后由管理面板维护；管理页面和 API 均校验。
+- **登出**：删除数据库会话并返回过期 Cookie。
+- **权限**：`/api/v1/account` 需要登录；`/api/v1/admin/*` 需要管理员；公开读取接口不需要登录。管理员管理、封禁、白名单审核在 API 层再次校验。
 
-接入顺序建议：用户表/会话 → 登录限流/CSRF → RBAC → 管理面板保护 → 审计。
+尚未实现：
 
-当前已具备的基础：请求 ID、统一错误、Cookie 透传的 Server API 客户端、CORS 白名单、独立中间件层、PostgreSQL/Redis 连接。**没有**任何认证代码或默认账号。
+- 登录/回调限流；Steam 已承担主要身份验证，但仍需防滥用。
+- CSRF 令牌；当前只有登出 POST 和只读接口，后续写接口必须补。
+- RBAC 细粒度权限（当前只区分 admin 与其他角色）。
+- 管理员操作审计表、会话设备管理、强制下线。
+- 真实 Steam 账号的端到端自动化验收。
 
 ## 10. 部署拓扑
 
@@ -363,24 +386,24 @@ Compose 服务：
 
 **限制：**
 
-- 没有认证、授权、CSRF、限流；管理面板公开可见。
-- 没有业务表和业务 API；服务器、论坛、用户中心和管理面板使用前端模拟数据，刷新后不持久化。
-- 没有后台任务、邮件、真实服务器状态同步、通知投递和文件存储。
+- 写接口、CSRF、登录限流、审核与审计尚未实现；论坛/服务器内容目前只能通过数据库或后续管理接口写入。
+- 游戏服务器插件到 `server_players` 的实时上报尚未实现，在线玩家可能为空。
+- 没有后台任务、邮件、通知投递和文件存储。
 - 没有 CI、指标、集中日志和自动备份。
 - Nginx 只配置了 HTTP；HTTPS 仅有示例。
-- 本次初始化环境无 Docker，镜像构建与容器启动未实际执行。
-- `.sqlx` 尚未引入（无编译期查询）。
+- 本机无 Docker，镜像构建、Compose 启动和 `nginx -t` 未实际执行。
+- `.sqlx` 尚未引入（使用运行时查询）。
 - 前端没有纳入仓库的自动化组件/E2E 测试；本次使用本地无头浏览器做过手工交互验证。
+- Steam 登录的最终授权需要真实 Steam 账号在浏览器完成。
 
 **建议顺序：**
 
 1. 在有 Docker 的主机完成镜像构建、Compose 启动和健康检查；
-2. 用户/会话/登录限流/CSRF；
-3. RBAC 与管理面板保护 + 审计；
-4. 论坛分类、主题、回复（含分页、审核状态）；
-5. 通知与用户中心；
-6. 内容审核工作流；
-7. CI、备份自动化、指标与 HTTPS 自动化。
+2. 真实 Steam 账号登录验收 + 登录限流/CSRF；
+3. 论坛发帖/回复、资料编辑、收藏写接口；
+4. 游戏服务器在线玩家上报；
+5. 管理审核与审计；
+6. CI、备份自动化、指标与 HTTPS 自动化。
 
 ## 14. 关键决策记录
 
@@ -393,9 +416,11 @@ Compose 服务：
 | API 错误格式 | 错误统一包裹，成功直接返回 | 简单、易扩展，避免过度嵌套 |
 | 前端 API 访问 | 浏览器同源，SSR 走内部地址 | 减少 CORS 与密钥暴露 |
 | API 文档 | 开发默认开，生产默认关 | 降低生产信息面，保留开发效率 |
-| 管理面板 | 公开演示面板（模拟数据） | 尚未实现认证；文档与界面明确警告 |
-| 初始迁移 | 仅扩展与触发器函数 | 不提前创建无需求业务表 |
-| 前端目录 | route groups + features（含本地模拟数据） | 布局边界与业务模块清晰，便于后续替换为 API |
+| 登录方式 | Steam OpenID 唯一登录 | 与 KZ 玩家身份一致，避免维护第二套密码 |
+| 会话存储 | PostgreSQL 哈希令牌 + HttpOnly Cookie | 可撤销、可过期；当前不需要 Redis 持久化会话 |
+| 管理面板 | 服务端会话 + 管理员 API 双重校验 | 前端隐藏不作为授权依据 |
+| 数据来源 | PostgreSQL 业务表 | 删除前端模拟数据，空库显示空状态 |
+| 前端目录 | route groups + features + services | 布局边界与 API 读取清晰 |
 
 ## 15. 文档维护
 

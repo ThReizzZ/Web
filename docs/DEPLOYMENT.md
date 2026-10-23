@@ -32,7 +32,10 @@ cp .env.example .env
 | `POSTGRES_PASSWORD` | 强随机密码 |
 | `DATABASE_URL` | 必须与 `POSTGRES_*` 一致；密码需 URL-safe/百分号编码 |
 | `REDIS_PASSWORD` | 强随机密码；会被拼入 API 的 `REDIS_URL` |
-| `SITE_URL` | 公开访问地址，如 `https://community.example.com` |
+| `SITE_URL` | 公开访问地址，如 `https://community.example.com`；Compose 用它派生 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM` |
+| `COOKIE_SECURE` | HTTPS 生产环境保持 `true`；仅本地 HTTP 调试设为 `false` |
+| `SESSION_TTL_DAYS` | 会话有效期，默认 30 天，范围 1–365 |
+| `ADMIN_STEAM_IDS` | 管理员 SteamID64，逗号分隔；空值表示没有管理员 |
 | `SERVER_NAME` | Nginx server_name，如 `community.example.com` |
 | `HTTP_BIND` | 默认 `127.0.0.1`；公网部署改为 `0.0.0.0` 并配置防火墙 |
 | `HTTP_PORT` | 默认 `80`；若前置了其他 TLS 代理可改为 `8080` |
@@ -55,6 +58,8 @@ DATABASE_URL=postgres://threi:<hex-password>@postgres:5432/threi
 > 修改 `POSTGRES_PASSWORD`/数据库名后必须同步 `DATABASE_URL`。
 > 修改 `REDIS_PASSWORD` 后无需改 API 配置，Compose 会重新生成 `REDIS_URL`。
 > `.env` 被 Git 忽略，权限建议 `chmod 600 .env`。
+>
+> Steam 回调 origin 必须与用户浏览器实际访问的公开地址一致。远程浏览器不能用 `127.0.0.1` 作为回调地址；否则浏览器会尝试连接它自己的本机端口。Compose 由 `SITE_URL` 派生回调地址。
 
 ## 3. 校验与构建
 
@@ -228,12 +233,14 @@ ss -ltnp | grep ':80\|:443'
 docker compose exec -T api curl -fsS http://127.0.0.1:8080/health/ready
 ```
 
-### 管理面板暴露风险
+### 管理面板访问
 
-当前 `/admin` **没有认证**。生产上线前必须：
+`/admin` 已在 Web 服务端检查 Steam 会话与 `admin` 角色，`/api/v1/admin/overview` 也会再次校验；顶部导航只对管理员显示“管理面板”。生产环境仍需：
 
-- 完成登录、RBAC 和管理面板服务端保护；或
-- 在 Nginx 临时限制来源，例如：
+- 在 `ADMIN_STEAM_IDS` 中配置至少一位初始管理员 SteamID64；之后可在管理面板“管理员”页面添加、取消或禁用管理员；
+- 生产环境至少保留两位正常管理员；系统拒绝取消或禁用最后一位可用管理员；
+- 首次登录后从用户中心确认 SteamID64，再更新配置并重新登录；
+- 不把管理面板作为公网匿名入口；必要时叠加 Nginx 来源限制：
 
 ```nginx
 location /admin {
@@ -242,7 +249,11 @@ location /admin {
 }
 ```
 
-这只是临时缓解，不是认证方案。
+网络限制是额外防护，不能替代 Steam 登录和角色校验。
+
+### 封禁与白名单
+
+管理面板已提供封禁/解封与白名单审核。封禁会阻止网站登录并撤销会话；白名单/封禁的**游戏内拦截**需要 CS:GO 服务器插件读取 `bans`、`server_whitelist` 和 `servers.requires_whitelist`，部署时需单独安装并配置插件。API 仅负责管理数据和审核流程。
 
 ## 9. 备份与恢复
 
@@ -355,7 +366,7 @@ curl -fsS http://127.0.0.1/api/v1/system/info
 - [ ] 备份已配置并验证恢复
 - [ ] `docker compose ps` 所有服务 healthy（`migrate` 为 exited 0）
 - [ ] API/Web 健康检查通过
-- [ ] 管理面板已受保护（认证或临时网络限制）
+- [ ] `ADMIN_STEAM_IDS` 已配置，管理面板与管理员 API 验证通过
 - [ ] HTTPS 证书有效，HSTS 仅在验证后启用
 - [ ] 日志中无密钥、Cookie 或连接串
 - [ ] 已阅读并遵守 `docs/DEVELOPMENT.md` 的日志规则
@@ -366,5 +377,6 @@ curl -fsS http://127.0.0.1/api/v1/system/info
 
 - 已通过独立 Compose v5.6.1 二进制执行 `docker compose config`；
 - 未实际执行镜像构建、容器启动、Nginx 配置加载和 HTTPS 验证；
-- 已在临时 PostgreSQL 17.11 + Redis 7.4.11 实例上验证迁移、健康检查和 API；
+- 已在局域网 PostgreSQL 18.6 + Redis 7.4 实例上验证迁移、健康检查、真实数据 API、Steam 登录重定向与未登录/登出流程；
+- 未使用真实 Steam 账号完成最终授权，也未执行 Docker/HTTPS 验证；
 - 首次在具备 Docker 的主机部署时，必须执行 `docker compose build`、`docker compose up -d` 并完成第 12 节检查。

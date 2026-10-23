@@ -9,45 +9,59 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ForumCategoryIcon, categoryTone } from "@/features/forum/components/forum-category-icon";
 import { TopicRow } from "@/features/forum/components/topic-row";
-import { forumCategories, getCategory, getCategoryTopics } from "@/features/forum/data/forum";
 import { categorySlugSchema } from "@/features/forum/lib/params";
+import { getServerApiClient } from "@/lib/api/server";
+import { formatRelativeTime } from "@/lib/format";
+import { fetchForumCategories, fetchForumTopics } from "@/services/content";
 import { cn } from "@/lib/utils";
+
+export const dynamic = "force-dynamic";
 
 interface CategoryPageProps {
   params: Promise<{ category: string }>;
 }
 
-export function generateStaticParams() {
-  return forumCategories.map((category) => ({ category: category.slug }));
-}
-
 export async function generateMetadata({ params }: CategoryPageProps): Promise<Metadata> {
   const { category: slug } = await params;
   const parsed = categorySlugSchema.safeParse(slug);
-  const category = parsed.success ? getCategory(parsed.data) : undefined;
-
-  if (!category) {
+  if (!parsed.success) {
     return { title: "分类未找到" };
   }
 
-  return {
-    title: category.name,
-    description: category.description,
-    alternates: { canonical: `/forum/${category.slug}` },
-  };
+  try {
+    const client = await getServerApiClient();
+    const categories = await fetchForumCategories(client);
+    const category = categories.find((item) => item.slug === parsed.data);
+    return category
+      ? {
+          title: category.name,
+          description: category.description,
+          alternates: { canonical: `/forum/${category.slug}` },
+        }
+      : { title: "分类未找到" };
+  } catch {
+    return { title: "分类未找到" };
+  }
 }
 
 export default async function CategoryPage({ params }: CategoryPageProps) {
   const { category: slug } = await params;
   const parsed = categorySlugSchema.safeParse(slug);
-  const category = parsed.success ? getCategory(parsed.data) : undefined;
+  if (!parsed.success) {
+    notFound();
+  }
 
+  const client = await getServerApiClient();
+  const [categories, topics] = await Promise.all([
+    fetchForumCategories(client),
+    fetchForumTopics(client, { category: parsed.data, limit: 50 }),
+  ]);
+  const category = categories.find((item) => item.slug === parsed.data);
   if (!category) {
     notFound();
   }
 
-  const topics = getCategoryTopics(category.slug);
-  const otherCategories = forumCategories.filter((item) => item.slug !== category.slug);
+  const otherCategories = categories.filter((item) => item.slug !== category.slug);
 
   return (
     <PageContainer className="space-y-8 py-10">
@@ -94,11 +108,13 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
                 {category.topicCount} 个主题 · {category.postCount.toLocaleString("zh-CN")} 条回复
               </CardDescription>
             </div>
-            <span className="text-xs text-muted-foreground">最后更新 {category.lastActivity}</span>
+            <span className="text-xs text-muted-foreground">
+              最后更新 {formatRelativeTime(category.lastActivityAt)}
+            </span>
           </CardHeader>
           <CardContent>
             {topics.length > 0 ? (
-              topics.map((topic) => <TopicRow key={topic.id} topic={topic} />)
+              topics.map((topic) => <TopicRow key={topic.slug} topic={topic} />)
             ) : (
               <div className="flex flex-col items-center gap-3 py-12 text-center">
                 <MessageSquareText className="size-8 text-muted-foreground" aria-hidden="true" />
@@ -126,7 +142,7 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">最近活跃</span>
-                <span>{category.lastActivity}</span>
+                <span>{formatRelativeTime(category.lastActivityAt)}</span>
               </div>
             </CardContent>
           </Card>
@@ -155,7 +171,7 @@ export default async function CategoryPage({ params }: CategoryPageProps) {
                 <Server className="size-4 text-primary" aria-hidden="true" />
                 去游戏里看看
               </CardTitle>
-              <CardDescription>把讨论变成一次真实的建造或探索。</CardDescription>
+              <CardDescription>把讨论变成一次真实的跳跃。</CardDescription>
             </CardHeader>
             <CardContent>
               <Button asChild variant="outline" size="sm" className="w-full">

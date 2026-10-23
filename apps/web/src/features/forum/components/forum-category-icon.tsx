@@ -7,7 +7,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { CategoryIcon } from "@/features/forum/data/forum";
+import type { CategoryIcon } from "@/features/forum/types";
 import { cn } from "@/lib/utils";
 
 const icons: Record<CategoryIcon, LucideIcon> = {

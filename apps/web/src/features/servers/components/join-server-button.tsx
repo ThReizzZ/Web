@@ -1,7 +1,6 @@
 "use client";
 
 import { Gamepad2, X } from "lucide-react";
-import Image from "next/image";
 import { useRef } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -36,7 +35,7 @@ export function JoinServerButton({
         onClick={() => dialogRef.current?.showModal()}
       >
         <Gamepad2 aria-hidden="true" />
-        {enabled ? "加入游戏" : "维护中"}
+        {enabled ? "加入游戏" : server.status === "maintenance" ? "维护中" : "离线"}
       </Button>
 
       <dialog
@@ -51,14 +50,16 @@ export function JoinServerButton({
       >
         <div className="relative">
           <div className="relative h-36 overflow-hidden rounded-t-2xl">
-            <Image
-              src={server.mapImage}
-              alt={`${server.map} 地图`}
-              fill
-              sizes="34rem"
-              className="object-cover"
-              unoptimized
-            />
+            {server.mapImage ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={server.mapImage}
+                alt={`${server.map} 地图`}
+                className="absolute inset-0 size-full object-cover"
+              />
+            ) : (
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(16,185,129,0.35),transparent_55%)]" />
+            )}
             <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 to-transparent" />
             <div className="absolute inset-x-0 top-0 flex items-start justify-between p-4">
               <ServerStatusBadge status={server.status} />
@@ -131,8 +132,9 @@ export function JoinServerButton({
             </div>
 
             <p className="text-xs text-muted-foreground">
-              当前在线 {server.players.length} / {server.maxPlayers} 人 · 延迟约 {server.latencyMs}{" "}
-              ms · KZ 计时器与检查点由服务器插件提供。
+              当前在线 {server.players.length} / {server.maxPlayers} 人 ·{" "}
+              {server.latencyMs === null ? "延迟未知" : `延迟约 ${server.latencyMs} ms`} · KZ
+              计时器与检查点由服务器插件提供。
             </p>
           </div>
         </div>

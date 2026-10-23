@@ -8,7 +8,6 @@ export const siteConfig = {
     { title: "服务器", href: "/servers" },
     { title: "论坛", href: "/forum" },
     { title: "用户中心", href: "/account" },
-    { title: "管理面板", href: "/admin" },
   ],
 } as const;
 

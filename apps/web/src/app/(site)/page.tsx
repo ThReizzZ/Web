@@ -1,33 +1,24 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
-import {
-  ArrowRight,
-  Gamepad2,
-  MessageSquareText,
-  Server,
-  Sparkles,
-  Trophy,
-  Users,
-} from "lucide-react";
+import { ArrowRight, Gamepad2, MessageSquareText, Server, Sparkles, Users } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/page-container";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { getAnnouncements, getLatestTopics, type ForumTopic } from "@/features/forum/data/forum";
 import { TopicRow } from "@/features/forum/components/topic-row";
+import type { ForumTopic } from "@/features/forum/types";
 import { PlayerRoster } from "@/features/servers/components/player-roster";
 import { ServerCard } from "@/features/servers/components/server-card";
-import {
-  gameServers,
-  getFeaturedServer,
-  getFeaturedServers,
-  getMaxPlayerTotal,
-  getOnlinePlayerTotal,
-} from "@/features/servers/data/servers";
+import { getMaxPlayerTotal, getOnlinePlayerTotal } from "@/features/servers/data/servers";
+import { getServerApiClient } from "@/lib/api/server";
+import { formatRelativeTime } from "@/lib/format";
 import { siteConfig } from "@/lib/site-config";
+import { fetchCommunityStats, fetchForumTopics, fetchServers } from "@/services/content";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: { absolute: siteConfig.title },
@@ -35,42 +26,56 @@ export const metadata: Metadata = {
   alternates: { canonical: "/" },
 };
 
-const communityStats = [
-  { label: "社区成员", value: "2,846" },
-  { label: "主题讨论", value: "696" },
-  { label: "累计回复", value: "4,598" },
-  { label: "游戏时长", value: "18,420h" },
-];
+export default async function HomePage() {
+  const client = await getServerApiClient();
+  const [servers, stats, latestTopics, announcements] = await Promise.all([
+    fetchServers(client),
+    fetchCommunityStats(client),
+    fetchForumTopics(client, { limit: 5 }),
+    fetchForumTopics(client, { category: "announcements", limit: 3 }),
+  ]);
 
-export default function HomePage() {
-  const featured = getFeaturedServer();
-  const featuredServers = getFeaturedServers();
-  const onlineTotal = getOnlinePlayerTotal();
-  const maxTotal = getMaxPlayerTotal();
-  const latestTopics = getLatestTopics(5);
-  const announcements = getAnnouncements(3);
+  const featured = servers.find((server) => server.featured) ?? servers[0];
+  const featuredServers = servers.filter((server) => server.featured).slice(0, 3);
+  const displayedServers = featuredServers.length > 0 ? featuredServers : servers.slice(0, 3);
+  const onlineTotal = getOnlinePlayerTotal(servers);
+  const maxTotal = getMaxPlayerTotal(servers);
 
   return (
     <>
       <section className="relative overflow-hidden border-b border-slate-800 bg-slate-950 text-white">
-        <Image
-          src={featured.mapImage}
-          alt=""
-          fill
-          priority
-          sizes="100vw"
-          className="object-cover opacity-40"
-          unoptimized
-        />
+        {featured?.mapImage ? (
+          <Image
+            src={featured.mapImage}
+            alt=""
+            fill
+            priority
+            sizes="100vw"
+            className="object-cover opacity-40"
+            unoptimized
+          />
+        ) : (
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-[radial-gradient(70%_120%_at_20%_0%,rgba(16,185,129,0.24),transparent_60%)]"
+          />
+        )}
         <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/30" />
         <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-slate-950 to-transparent" />
         <PageContainer className="relative py-20 sm:py-28">
-          <Link href="/forum/topic/season-three-rush" className="inline-flex">
+          {announcements[0] ? (
+            <Link href={`/forum/topic/${announcements[0].slug}`} className="inline-flex">
+              <Badge variant="success" className="max-w-full bg-emerald-400/15 text-emerald-200">
+                <Sparkles className="shrink-0" aria-hidden="true" />
+                <span className="truncate">{announcements[0].title}</span>
+              </Badge>
+            </Link>
+          ) : (
             <Badge variant="success" className="bg-emerald-400/15 text-emerald-200">
               <Sparkles aria-hidden="true" />
-              第三赛季「极速阶梯」已开启
+              ThRei KZ 社区
             </Badge>
-          </Link>
+          )}
           <h1 className="mt-6 max-w-4xl text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl lg:text-6xl">
             <span className="block">一个专注 KZ 的社区，</span>
             <span className="block text-emerald-300">找服务器，记录成绩。</span>
@@ -83,7 +88,7 @@ export default function HomePage() {
             <Button asChild size="lg" className="bg-white text-slate-950 hover:bg-white/90">
               <Link href="/servers">
                 <Gamepad2 aria-hidden="true" />
-                加入服务器
+                浏览服务器
                 <ArrowRight aria-hidden="true" />
               </Link>
             </Button>
@@ -93,56 +98,45 @@ export default function HomePage() {
               variant="outline"
               className="border-white/25 bg-white/5 text-white hover:bg-white/10 hover:text-white"
             >
-              <Link href="/forum">浏览社区论坛</Link>
+              <a href="/api/v1/auth/steam/login">使用Steam登录</a>
             </Button>
           </div>
 
           <dl className="mt-12 grid max-w-3xl grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
-            <div>
-              <dt className="text-xs text-white/55">在线玩家</dt>
-              <dd className="mt-1 text-2xl font-semibold tabular-nums">
-                {onlineTotal}
-                <span className="text-sm font-normal text-white/45"> / {maxTotal}</span>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-white/55">开放服务器</dt>
-              <dd className="mt-1 text-2xl font-semibold tabular-nums">{gameServers.length}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-white/55">本周新主题</dt>
-              <dd className="mt-1 text-2xl font-semibold tabular-nums">96</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-white/55">社区成员</dt>
-              <dd className="mt-1 text-2xl font-semibold tabular-nums">2,846</dd>
-            </div>
+            <Stat label="在线玩家" value={onlineTotal} detail={`/ ${maxTotal}`} />
+            <Stat label="开放服务器" value={servers.length} />
+            <Stat label="本周新主题" value={stats.newTopicsWeek} />
+            <Stat label="社区成员" value={stats.members} />
           </dl>
         </PageContainer>
       </section>
 
-      <section className="border-b bg-card py-4">
-        <PageContainer className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm text-muted-foreground">
-              <span className="font-mono text-foreground">{featured.map}</span> 当前有{" "}
-              <span className="font-medium text-foreground">{featured.players.length} 位玩家</span>
-              在线：
-            </p>
-            <PlayerRoster players={featured.players} variant="list" />
-          </div>
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
-              全节点运行正常
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <Trophy className="size-3.5" aria-hidden="true" />
-              十月 KZ 计时赛报名中
-            </span>
-          </div>
-        </PageContainer>
-      </section>
+      {featured ? (
+        <section className="border-b bg-card py-4">
+          <PageContainer className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm text-muted-foreground">
+                <span className="font-mono text-foreground">{featured.map}</span> 当前有{" "}
+                <span className="font-medium text-foreground">
+                  {featured.players.length} 位玩家
+                </span>
+                在线：
+              </p>
+              <PlayerRoster players={featured.players} variant="list" />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
+                {servers.length} 个服务器已接入
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <MessageSquareText className="size-3.5" aria-hidden="true" />
+                {stats.activeMembersWeek} 位成员本周活跃
+              </span>
+            </div>
+          </PageContainer>
+        </section>
+      ) : null}
 
       <section className="py-16 sm:py-20">
         <PageContainer className="space-y-8">
@@ -161,11 +155,19 @@ export default function HomePage() {
               </Link>
             </Button>
           </div>
-          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {featuredServers.map((server) => (
-              <ServerCard key={server.id} server={server} compact />
-            ))}
-          </div>
+          {displayedServers.length > 0 ? (
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {displayedServers.map((server) => (
+                <ServerCard key={server.id} server={server} compact />
+              ))}
+            </div>
+          ) : (
+            <EmptyCard
+              icon={<Server aria-hidden="true" />}
+              title="还没有服务器记录"
+              description="服务器接入后会在这里显示地图、在线玩家和连接地址。"
+            />
+          )}
         </PageContainer>
       </section>
 
@@ -186,9 +188,13 @@ export default function HomePage() {
                 </Button>
               </CardHeader>
               <CardContent>
-                {latestTopics.map((topic) => (
-                  <TopicRow key={topic.id} topic={topic} showCategory />
-                ))}
+                {latestTopics.length > 0 ? (
+                  latestTopics.map((topic) => (
+                    <TopicRow key={topic.slug} topic={topic} showCategory />
+                  ))
+                ) : (
+                  <p className="py-8 text-center text-sm text-muted-foreground">论坛还没有主题。</p>
+                )}
               </CardContent>
             </Card>
 
@@ -199,30 +205,32 @@ export default function HomePage() {
                   <CardDescription>开服、赛季和社区活动安排。</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {announcements.map((topic) => (
-                    <AnnouncementLink key={topic.id} topic={topic} />
-                  ))}
+                  {announcements.length > 0 ? (
+                    announcements.map((topic) => (
+                      <AnnouncementLink key={topic.slug} topic={topic} />
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">暂时没有公告。</p>
+                  )}
                 </CardContent>
               </Card>
 
               <Card>
                 <CardHeader>
                   <CardTitle>社区数据</CardTitle>
-                  <CardDescription>这个月，社区一直在生长。</CardDescription>
+                  <CardDescription>来自数据库的实时统计。</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
-                    {communityStats.map((stat) => (
-                      <div key={stat.label}>
-                        <p className="text-xs text-muted-foreground">{stat.label}</p>
-                        <p className="mt-1 text-xl font-semibold tabular-nums">{stat.value}</p>
-                      </div>
-                    ))}
+                    <CommunityStat label="社区成员" value={stats.members} />
+                    <CommunityStat label="主题讨论" value={stats.topics} />
+                    <CommunityStat label="累计回复" value={stats.replies} />
+                    <CommunityStat label="在线人数" value={stats.onlinePlayers} />
                   </div>
                   <Separator />
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Users className="size-3.5" aria-hidden="true" />
-                    过去 7 天有 1,236 位成员登录过
+                    本周有 {stats.activeMembersWeek} 位成员在社区活跃
                   </div>
                 </CardContent>
               </Card>
@@ -241,20 +249,20 @@ export default function HomePage() {
             <div className="relative mx-auto max-w-2xl">
               <Badge variant="success" className="bg-emerald-400/15 text-emerald-200">
                 <Server aria-hidden="true" />
-                服务器长期开放
+                使用Steam登录
               </Badge>
               <h2 className="mt-5 text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
-                准备好刷新你的第一个 KZ 记录了吗？
+                使用Steam登录，查看你的社区资料。
               </h2>
               <p className="mt-3 text-sm leading-relaxed text-white/65 sm:text-base">
-                复制服务器地址，打开 CS:GO 控制台输入 connect，然后从起点开始。
+                ThRei 只使用Steam登录。登录后可以查看自己的社区资料和 Steam 身份。
               </p>
               <div className="mt-8 flex flex-wrap justify-center gap-3">
                 <Button asChild size="lg" className="bg-white text-slate-950 hover:bg-white/90">
-                  <Link href="/servers">
+                  <a href="/api/v1/auth/steam/login">
                     <Gamepad2 aria-hidden="true" />
-                    选择服务器
-                  </Link>
+                    使用Steam登录
+                  </a>
                 </Button>
                 <Button
                   asChild
@@ -262,7 +270,7 @@ export default function HomePage() {
                   variant="outline"
                   className="border-white/25 bg-white/5 text-white hover:bg-white/10 hover:text-white"
                 >
-                  <Link href="/forum/topic/welcome-to-threi">阅读新手指南</Link>
+                  <Link href="/forum">浏览社区论坛</Link>
                 </Button>
               </div>
             </div>
@@ -273,18 +281,61 @@ export default function HomePage() {
   );
 }
 
+function Stat({ label, value, detail }: { label: string; value: number; detail?: string }) {
+  return (
+    <div>
+      <dt className="text-xs text-white/55">{label}</dt>
+      <dd className="mt-1 text-2xl font-semibold tabular-nums">
+        {value.toLocaleString("zh-CN")}
+        {detail ? <span className="text-sm font-normal text-white/45"> {detail}</span> : null}
+      </dd>
+    </div>
+  );
+}
+
+function CommunityStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-xl font-semibold tabular-nums">{value.toLocaleString("zh-CN")}</p>
+    </div>
+  );
+}
+
 function AnnouncementLink({ topic }: { topic: ForumTopic }) {
   return (
     <Link
-      href={`/forum/topic/${topic.id}`}
+      href={`/forum/topic/${topic.slug}`}
       className="block rounded-lg border bg-muted/20 p-3 transition-colors hover:border-primary/25 hover:bg-accent/40"
     >
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-        <span>{topic.lastActivity}</span>
+        <span>{formatRelativeTime(topic.lastActivityAt)}</span>
         <span className="text-border">·</span>
-        <span>{topic.tags[0]}</span>
+        <span>{topic.categoryName}</span>
       </div>
       <p className="mt-1 line-clamp-2 text-sm font-medium">{topic.title}</p>
     </Link>
+  );
+}
+
+function EmptyCard({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-xl border bg-card py-14 text-center">
+      <span className="grid size-11 place-items-center rounded-full bg-muted text-muted-foreground">
+        {icon}
+      </span>
+      <div>
+        <p className="font-medium">{title}</p>
+        <p className="mt-1 max-w-md text-sm text-muted-foreground">{description}</p>
+      </div>
+    </div>
   );
 }

@@ -1,5 +1,3 @@
-import Image from "next/image";
-
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -27,19 +25,17 @@ export function ServerCard({
       data-server-id={server.id}
       className={cn("flex h-full gap-0 overflow-hidden py-0", className)}
     >
-      <div className="relative aspect-[16/9] overflow-hidden">
-        <Image
-          src={server.mapImage}
-          alt={`${server.map} 地图预览`}
-          fill
-          sizes={
-            compact
-              ? "(min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
-              : "(min-width: 1536px) 33vw, (min-width: 768px) 50vw, 100vw"
-          }
-          className="object-cover transition-transform duration-700 hover:scale-[1.03]"
-          unoptimized
-        />
+      <div className="relative aspect-[16/9] overflow-hidden bg-slate-900">
+        {server.mapImage ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={server.mapImage}
+            alt={`${server.map} 地图预览`}
+            className="absolute inset-0 size-full object-cover transition-transform duration-700 hover:scale-[1.03]"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(16,185,129,0.35),transparent_55%)]" />
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/25 to-transparent" />
         <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-4">
           <div className="flex flex-wrap gap-2">
@@ -47,6 +43,11 @@ export function ServerCard({
             <Badge variant="secondary" className="bg-white/15 text-white backdrop-blur">
               KZ
             </Badge>
+            {server.requiresWhitelist ? (
+              <Badge variant="warning" className="bg-amber-400/20 text-amber-100 backdrop-blur">
+                白名单
+              </Badge>
+            ) : null}
           </div>
           <Badge
             variant="outline"
@@ -77,7 +78,7 @@ export function ServerCard({
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
           <span>{server.tickrate} tick</span>
-          <span>延迟 {server.latencyMs} ms</span>
+          <span>{server.latencyMs === null ? "延迟未知" : `延迟 ${server.latencyMs} ms`}</span>
           <span>{server.tags.slice(0, compact ? 2 : 3).join(" · ")}</span>
         </div>
 
