@@ -4,7 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "ThRei 社区",
     short_name: "ThRei",
-    description: "面向长期运营的社区系统。",
+    description: "ThRei CS:GO KZ 攀爬与跳跃社区。",
     start_url: "/",
     display: "standalone",
     background_color: "#fbfbfd",

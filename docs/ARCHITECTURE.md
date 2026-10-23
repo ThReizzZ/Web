@@ -6,7 +6,7 @@
 
 ## 1. 目标与阶段
 
-ThRei 是一个长期运营的 Minecraft 社区系统，统一承载官网、服务器状态、论坛、用户中心和管理面板。
+ThRei 是一个长期运营的 CS:GO KZ 社区系统，统一承载官网、服务器目录、论坛、用户中心和管理面板。
 第一阶段采用**模块化单体**（modular monolith），目标是：
 
 - 建立清晰的前后端职责边界和目录边界；
@@ -103,7 +103,7 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 - `QueryProvider`：TanStack Query 的客户端上下文；
 - `SystemStatusCard`：浏览器端 API 探测与刷新；
 - `ForumSearchForm`：React Hook Form + Zod + `useRouter`；
-- `ServerDirectory`：卡片/列表显示模式切换与 `localStorage` 偏好；
+- `ServerDirectory`：3 列卡片墙/列表显示模式切换、`localStorage` 偏好与 1/2/3 列响应式分配；
 - `CopyAddressButton` / `JoinServerButton`：剪贴板、原生 `<dialog>` 加入说明与交互状态；
 - `error.tsx` / `global-error.tsx`：错误边界需要交互；
 - Radix `Label` / `Separator` 包装组件（基础交互组件）。
@@ -142,7 +142,7 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 
 当前页面内容来自前端模块内的本地模拟数据，不经过数据库或 API：
 
-- `src/features/servers/data/servers.ts`：服务器信息、地图、在线玩家样例；
+- `src/features/servers/data/servers.ts`：12 个 CS:GO KZ 服务器的地图、地址、tickrate，以及带模拟头像的完整在线玩家列表；
 - `src/features/forum/data/forum.ts`：分类、主题、回复，支持本地搜索；
 - `src/features/account/data/account.ts`：当前演示用户、活动、通知与安全概览；
 - `src/features/admin/data/dashboard.ts`：运营指标、审核队列与审计日志；

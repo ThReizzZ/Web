@@ -61,7 +61,7 @@ export default function AccountPage() {
       <section className="overflow-hidden rounded-3xl border bg-card shadow-sm">
         <div className="relative h-36 overflow-hidden bg-slate-950">
           <Image
-            src="/images/servers/elysium-valley.svg"
+            src="/images/servers/kz-beginner.svg"
             alt=""
             fill
             sizes="(min-width: 1024px) 72rem, 100vw"
@@ -182,7 +182,7 @@ export default function AccountPage() {
             <CardHeader className="flex flex-row flex-wrap items-end justify-between gap-3">
               <div>
                 <CardTitle>我的服务器</CardTitle>
-                <CardDescription>收藏的世界与当前在线状态。</CardDescription>
+                <CardDescription>收藏的 KZ 服务器与当前在线状态。</CardDescription>
               </div>
               <Button asChild variant="ghost" size="sm">
                 <Link href="/servers">全部服务器</Link>
@@ -211,7 +211,7 @@ export default function AccountPage() {
                       <ServerStatusBadge status={server.status} />
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {server.playerCount}/{server.maxPlayers} 在线 · {server.map}
+                      {server.players.length}/{server.maxPlayers} 在线 · {server.map}
                     </p>
                     <p className="mt-1 text-xs text-primary opacity-0 transition-opacity group-hover:opacity-100">
                       查看服务器

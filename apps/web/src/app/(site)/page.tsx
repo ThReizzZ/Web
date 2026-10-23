@@ -12,17 +12,18 @@ import {
 } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/page-container";
-import { UserAvatar } from "@/components/shared/user-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { getAnnouncements, getLatestTopics, type ForumTopic } from "@/features/forum/data/forum";
 import { TopicRow } from "@/features/forum/components/topic-row";
+import { PlayerRoster } from "@/features/servers/components/player-roster";
 import { ServerCard } from "@/features/servers/components/server-card";
 import {
   gameServers,
   getFeaturedServer,
+  getFeaturedServers,
   getMaxPlayerTotal,
   getOnlinePlayerTotal,
 } from "@/features/servers/data/servers";
@@ -43,6 +44,7 @@ const communityStats = [
 
 export default function HomePage() {
   const featured = getFeaturedServer();
+  const featuredServers = getFeaturedServers();
   const onlineTotal = getOnlinePlayerTotal();
   const maxTotal = getMaxPlayerTotal();
   const latestTopics = getLatestTopics(5);
@@ -63,19 +65,19 @@ export default function HomePage() {
         <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/30" />
         <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-slate-950 to-transparent" />
         <PageContainer className="relative py-20 sm:py-28">
-          <Link href="/forum/topic/season-three-islands" className="inline-flex">
+          <Link href="/forum/topic/season-three-rush" className="inline-flex">
             <Badge variant="success" className="bg-emerald-400/15 text-emerald-200">
               <Sparkles aria-hidden="true" />
-              第三赛季「群岛纪元」已开启
+              第三赛季「极速阶梯」已开启
             </Badge>
           </Link>
-          <h1 className="mt-6 max-w-3xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl lg:text-6xl">
-            在 ThRei 的世界里，
-            <span className="text-emerald-300">和朋友们一起建造、探索、留下故事。</span>
+          <h1 className="mt-6 max-w-4xl text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl lg:text-6xl">
+            <span className="block">一个专注 KZ 的社区，</span>
+            <span className="block text-emerald-300">找服务器，记录成绩。</span>
           </h1>
           <p className="mt-6 max-w-2xl text-base leading-relaxed text-white/70 sm:text-lg">
-            一个以长期生存、共同建造和友好交流为核心的 Minecraft
-            社区。加入服务器，找到你的聚落，也找到愿意一起熬夜赶工的人。
+            这里整理 KZ
+            服务器、地图和玩家记录。可以按难度、人数或延迟挑选，也可以到论坛交流路线与技巧。
           </p>
           <div className="mt-9 flex flex-wrap gap-3">
             <Button asChild size="lg" className="bg-white text-slate-950 hover:bg-white/90">
@@ -121,22 +123,13 @@ export default function HomePage() {
 
       <section className="border-b bg-card py-4">
         <PageContainer className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="flex -space-x-2">
-              {featured.players.slice(0, 5).map((player) => (
-                <UserAvatar
-                  key={player.name}
-                  name={player.name}
-                  avatar={player.avatar}
-                  size="sm"
-                  className="ring-card"
-                />
-              ))}
-            </div>
+          <div className="flex flex-wrap items-center gap-2">
             <p className="text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">{featured.playerCount} 位玩家</span>{" "}
-              正在 Elysium Valley 建造与探索
+              <span className="font-mono text-foreground">{featured.map}</span> 当前有{" "}
+              <span className="font-medium text-foreground">{featured.players.length} 位玩家</span>
+              在线：
             </p>
+            <PlayerRoster players={featured.players} variant="list" />
           </div>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
@@ -145,7 +138,7 @@ export default function HomePage() {
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Trophy className="size-3.5" aria-hidden="true" />
-              十月建筑大赛报名中
+              十月 KZ 计时赛报名中
             </span>
           </div>
         </PageContainer>
@@ -156,9 +149,9 @@ export default function HomePage() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <p className="text-sm font-medium text-primary">服务器</p>
-              <h2 className="mt-1 text-3xl font-semibold tracking-tight">选择一个世界开始</h2>
+              <h2 className="mt-1 text-3xl font-semibold tracking-tight">推荐 KZ 服务器</h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                长期生存、自由创造与周末竞技，每个世界都有自己的节奏。
+                新手教学、连跳、长跳和极限攀爬，每个服务器都有自己的地图与节奏。
               </p>
             </div>
             <Button asChild variant="outline">
@@ -169,7 +162,7 @@ export default function HomePage() {
             </Button>
           </div>
           <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {gameServers.map((server) => (
+            {featuredServers.map((server) => (
               <ServerCard key={server.id} server={server} compact />
             ))}
           </div>
@@ -186,7 +179,7 @@ export default function HomePage() {
                     <MessageSquareText className="size-4 text-primary" aria-hidden="true" />
                     社区动态
                   </CardTitle>
-                  <CardDescription>来自服务器、建筑工坊和新手区的最新讨论。</CardDescription>
+                  <CardDescription>来自 KZ 地图、技巧教学和新手区的最新讨论。</CardDescription>
                 </div>
                 <Button asChild variant="ghost" size="sm">
                   <Link href="/forum">进入论坛</Link>
@@ -251,10 +244,10 @@ export default function HomePage() {
                 服务器长期开放
               </Badge>
               <h2 className="mt-5 text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
-                准备好留下你的第一块方块了吗？
+                准备好刷新你的第一个 KZ 记录了吗？
               </h2>
               <p className="mt-3 text-sm leading-relaxed text-white/65 sm:text-base">
-                不需要复杂的申请流程。复制服务器地址，启动游戏，然后在出生岛找一条你喜欢的路。
+                复制服务器地址，打开 CS:GO 控制台输入 connect，然后从起点开始。
               </p>
               <div className="mt-8 flex flex-wrap justify-center gap-3">
                 <Button asChild size="lg" className="bg-white text-slate-950 hover:bg-white/90">

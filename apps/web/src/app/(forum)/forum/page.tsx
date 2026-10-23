@@ -30,7 +30,7 @@ import { gameServers, getOnlinePlayerTotal } from "@/features/servers/data/serve
 
 export const metadata: Metadata = {
   title: "论坛",
-  description: "在 ThRei 论坛与社区成员交流服务器动态、建筑作品、玩法心得与问题反馈。",
+  description: "在 ThRei 论坛与社区成员交流 KZ 地图、技巧、服务器动态、活动与问题反馈。",
   alternates: { canonical: "/forum" },
 };
 
@@ -72,7 +72,8 @@ export default async function ForumPage({ searchParams }: ForumPageProps) {
             1,236 位本周活跃
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <Server className="size-3.5" aria-hidden="true" />3 个服务器
+            <Server className="size-3.5" aria-hidden="true" />
+            {gameServers.length} 个服务器
           </span>
         </div>
       </header>

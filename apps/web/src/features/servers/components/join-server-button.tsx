@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CopyAddressButton } from "@/features/servers/components/copy-address-button";
 import { ServerStatusBadge } from "@/features/servers/components/server-status-badge";
-import { getServerAddress, type GameServer } from "@/features/servers/data/servers";
+import { getServerAddress, type KzServer } from "@/features/servers/data/servers";
 
 export function JoinServerButton({
   server,
@@ -16,7 +16,7 @@ export function JoinServerButton({
   variant = "default",
   size = "default",
 }: {
-  server: GameServer;
+  server: KzServer;
   className?: string;
   variant?: "default" | "outline";
   size?: "sm" | "default";
@@ -59,7 +59,7 @@ export function JoinServerButton({
               className="object-cover"
               unoptimized
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 to-transparent" />
+            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 to-transparent" />
             <div className="absolute inset-x-0 top-0 flex items-start justify-between p-4">
               <ServerStatusBadge status={server.status} />
               <Button
@@ -74,7 +74,7 @@ export function JoinServerButton({
               </Button>
             </div>
             <div className="absolute inset-x-0 bottom-0 p-4 text-white">
-              <p className="text-xs text-white/70">{server.map}</p>
+              <p className="font-mono text-xs text-white/70">{server.map}</p>
               <h2 id={`join-${server.id}-title`} className="text-xl font-semibold">
                 {server.name}
               </h2>
@@ -83,20 +83,29 @@ export function JoinServerButton({
 
           <div className="space-y-5 p-5">
             <div className="flex flex-wrap gap-2">
-              <Badge variant="secondary">{server.mode}</Badge>
-              <Badge variant="outline">{server.version}</Badge>
+              <Badge variant="secondary">CS:GO KZ</Badge>
+              <Badge variant="outline">{server.tickrate} tick</Badge>
               <Badge variant="outline">{server.region}</Badge>
+              <Badge variant="outline">
+                {server.players.length}/{server.maxPlayers} 在线
+              </Badge>
             </div>
 
             <div className="rounded-xl border bg-muted/30 p-4">
               <p className="text-xs text-muted-foreground">服务器地址（IP : PORT）</p>
               <p className="mt-1 font-mono text-sm font-medium break-all">{address}</p>
-              <div className="mt-3 flex gap-2">
-                <CopyAddressButton address={address} label="复制服务器地址" className="flex-1" />
-                <Button type="button" variant="ghost" onClick={() => dialogRef.current?.close()}>
-                  关闭
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Button asChild>
+                  <a href={`steam://connect/${address}`}>
+                    <Gamepad2 aria-hidden="true" />
+                    启动 CS:GO
+                  </a>
                 </Button>
+                <CopyAddressButton address={address} label="复制服务器地址" className="w-full" />
               </div>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                需要本机已安装 Steam 与 CS:GO；浏览器可能会询问是否打开 Steam。
+              </p>
             </div>
 
             <div>
@@ -104,21 +113,26 @@ export function JoinServerButton({
               <ol className="mt-2 space-y-2 text-sm text-muted-foreground">
                 <li className="flex gap-2">
                   <span className="font-mono text-xs text-primary">01</span>
-                  启动 Minecraft Java 版 {server.version}，进入「多人游戏」。
+                  启动 Steam，选择 Counter-Strike: Global Offensive。
                 </li>
                 <li className="flex gap-2">
                   <span className="font-mono text-xs text-primary">02</span>
-                  选择「添加服务器」，把上方地址粘贴到服务器地址栏。
+                  打开开发者控制台，输入{" "}
+                  <code className="rounded bg-muted px-1 font-mono text-xs text-foreground">
+                    connect {address}
+                  </code>
+                  。
                 </li>
                 <li className="flex gap-2">
                   <span className="font-mono text-xs text-primary">03</span>
-                  保存后双击服务器，即可进入 {server.map}。
+                  或直接点击上方“启动 CS:GO”，由 Steam 连接服务器。
                 </li>
               </ol>
             </div>
 
             <p className="text-xs text-muted-foreground">
-              当前在线 {server.playerCount} / {server.maxPlayers} 人 · 延迟约 {server.latencyMs} ms
+              当前在线 {server.players.length} / {server.maxPlayers} 人 · 延迟约 {server.latencyMs}{" "}
+              ms · KZ 计时器与检查点由服务器插件提供。
             </p>
           </div>
         </div>

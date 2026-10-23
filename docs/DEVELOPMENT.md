@@ -17,6 +17,283 @@
 
 ---
 
+## 2026年10月23日 22时14分11秒 服务器卡片改为三列错落卡片墙
+
+### 背景
+
+用户认为上一版的双列卡片“特别丑、比例不好”，要求重新设计；随后确认单列横向展示卡“不叫卡片排列，叫做列表排列”，需要继续改回真正的卡片排列。
+
+上一记录 `2026年10月23日 21时57分29秒 服务器玩家头像展示与 hero 文案调整` 中“服务器目录取消三列卡片、统一两列”的布局描述，已被本次三列卡片墙取代；旧记录保留用于追溯。
+
+### 变更内容
+
+#### 1. 卡片视图改为三列错落卡片墙
+
+- 服务器目录卡片视图从单列横向展示卡改为多列卡片墙：
+  - 1280px 及以上：3 列；
+  - 768–1279px：2 列；
+  - 手机：1 列。
+- 使用 `useSyncExternalStore` 订阅 `matchMedia`，在 1/2/3 列之间切换；服务端快照固定为 3 列，避免首屏布局不确定。
+- 卡片按列分配，而不是使用 CSS `columns` 的列优先顺序：每列独立纵向排列，首行按服务器顺序显示，避免出现首行跳号。
+- 卡片使用自然高度，不再为了同行等高而把玩家面板拉满；少人数服务器不会出现大面积空白。
+- 每张卡片内部的地图、玩家面板、地址和操作区保持完整结构；按钮仍在卡片底部对齐。
+
+#### 2. 卡片比例与玩家布局
+
+- `ServerCard` 地图头图从 `16:7` 调整为 `16:9`，让 3 列宽度下的卡片头部不再过扁。
+- 玩家头像列表固定两列，避免在 3 列卡片中因内部三列过窄导致昵称换行。
+- 所有在线玩家头像与昵称仍然完整展示，不省略、不使用“+N”。
+- 首页推荐服务器仍使用现有卡片网格；地图头图比例同步为 `16:9`。
+- 删除上一版临时使用的 `server-showcase-card.tsx`，卡片视图重新使用统一的 `ServerCard`。
+
+#### 3. 列表视图保持不变
+
+- 列表仍使用 `ServerListRow`，显示地图缩略图、描述、玩家头像与昵称、地址和操作按钮。
+- 卡片墙按内容高度排列，因此同行卡片底部不再强制对齐；这是为了避免少人数服务器出现大块空白。
+- 每张卡片内部的“复制地址/加入游戏”按钮仍保持同一行、同一高度。
+
+### 涉及文件
+
+- `apps/web/src/features/servers/components/server-directory.tsx`
+- `apps/web/src/features/servers/components/server-card.tsx`
+- `apps/web/src/features/servers/components/player-roster.tsx`
+- `apps/web/src/features/servers/components/server-showcase-card.tsx`（删除）
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `docs/DEVELOPMENT.md`（本记录）
+
+### 数据库与 API 变化
+
+- 无数据库迁移、Rust API 或 OpenAPI 契约变化。
+- 服务器、玩家头像、昵称和在线状态仍为前端模拟数据，刷新不会持久化，也不代表真实服务器或 Steam 账号。
+- 服务器地址继续使用保留域名 `*.threi.example`，不会连接真实 CS:GO 服务器。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 6 项、HTTP 契约测试 10 项，共 16 项通过；
+  - TypeScript、ESLint、Prettier 全部通过。
+- `npm run build`：通过，静态生成 24 个页面/路由。
+- Playwright 无头 Chromium 验证：
+  - 1920 / 1440 / 1280 宽度下为 3 列，卡片宽度均为约 352px；
+  - 1024 / 768 宽度下为 2 列，390 宽度下为 1 列；
+  - 首行卡片顶部坐标一致且列位置不同，第二张卡片从第一列继续纵向排列；
+  - 12 个服务器卡片均渲染，Beginner 显示 9 个玩家头像，Hardcore 显示 28 个；
+  - 抽查 Beginner / Hardcore 卡片，复制/加入按钮高度均为 36px，顶部坐标一致；
+  - 所有测试宽度无横向溢出；
+  - 列表视图仍显示 12 个服务器和 28 个 Hardcore 玩家头像；
+  - 首页玩家头像正常渲染；
+  - `/`、`/servers`、`/forum`、`/forum/maps`、`/forum/topic/season-three-rush`、`/account`、`/admin` 均返回 200；
+  - 复制地址和加入游戏弹窗验证通过，console/pageerror 无错误。
+- 未执行：Docker 镜像构建、容器启动、`nginx -t`、HTTPS 验证（本机无 Docker daemon）；未连接真实 CS:GO 服务器验证。
+
+
+---
+
+## 2026年10月23日 21时57分29秒 服务器玩家头像展示与 hero 文案调整
+
+### 背景
+
+用户认为首页标题“在 ThRei 的 KZ 世界里，和朋友们一起起跳、连跳、刷新记录。”和服务器页标题“找到你的 KZ 服务器，从一次起跳开始。”语气过于中二、煽情，需要改成更平实的表述。
+
+同时，服务器目录目前只显示玩家昵称，用户希望在玩家名称旁同时显示头像，并要求重新规划玩家列表的布局；头像和名称先使用模拟数据。
+
+### 变更内容
+
+#### 1. 首页与服务器页文案收敛
+
+- 首页 hero 标题从“在 ThRei 的 KZ 世界里……刷新记录”改为：
+  - “一个专注 KZ 的社区，”
+  - “找服务器，记录成绩。”
+- 首页说明改为介绍服务器、地图和玩家记录，并提示可以到论坛交流路线与技巧。
+- 首页特色服务器在线栏从“正在热身”改为“当前有 N 位玩家在线”，并展示玩家头像。
+- 服务器页 hero 标题从“找到你的 KZ 服务器，从一次起跳开始。”改为：
+  - “KZ 服务器目录”
+  - “地图、玩家与地址。”
+- 服务器页说明改为介绍新手、连跳、长跳和进阶服务器，以及查看玩家、复制地址和启动 CS:GO 的操作。
+- 服务器页 metadata、目录区标题“选择 KZ 服务器”、统计文案“在线，分布在 12 个服务器”同步改为平实表述。
+- 首页服务器推荐区标题改为“推荐 KZ 服务器”。
+
+#### 2. 玩家模拟头像数据
+
+- 新增 `KzPlayer` 接口，包含 `name` 和 `avatar` 字段；`KzServer.players` 从 `string[]` 改为 `KzPlayer[]`。
+- 保留 40 个模拟玩家昵称，新增 20 组本地 Tailwind 渐变色板，按玩家顺序生成稳定的模拟字母头像。
+- 同一玩家在不同服务器中复用同一头像；不依赖外部图片服务，也不代表真实 Steam 头像。
+- 服务器搜索同步改为读取 `player.name`，仍可按玩家昵称查找服务器。
+
+#### 3. 玩家头像与昵称布局
+
+- 新增 `PlayerRoster` 组件，统一卡片、列表和首页在线栏的玩家展示。
+- 每个玩家条目包含：
+  - `UserAvatar` 小型渐变字母头像；
+  - 完整玩家昵称；
+  - `title` 提示和 `data-player-name` / `data-player-avatar` 属性，便于测试与后续替换。
+- 卡片视图使用两列或三列网格，根据卡片宽度切换；列表视图使用带边框的横向玩家标签。
+- 玩家昵称不截断、不使用“+N”隐藏，长昵称自动换行。
+- 首页特色服务器在线栏复用列表变体，头像与昵称一起展示。
+- 服务器卡片数量较多时，玩家面板继续使用 `flex-1` 填充并在底部显示剩余空位，保持“复制地址/加入游戏”按钮对齐。
+
+#### 4. 卡片宽度与响应式调整
+
+- 服务器目录取消 1920 宽度下的三列卡片，统一最多两列，避免玩家头像和昵称被压缩。
+- 首页特色服务器卡片在紧凑模式下使用两列玩家头像布局，避免三列卡片中的昵称换行过多。
+- 1920、1440、1024、768 和 390 宽度下验证无横向溢出，玩家名称完整显示，按钮仍对齐。
+
+### 涉及文件
+
+- `apps/web/src/components/shared/user-avatar.tsx`
+- `apps/web/src/features/servers/data/servers.ts`
+- `apps/web/src/features/servers/components/player-roster.tsx`（新增）
+- `apps/web/src/features/servers/components/server-card.tsx`
+- `apps/web/src/features/servers/components/server-list-row.tsx`
+- `apps/web/src/features/servers/components/server-directory.tsx`
+- `apps/web/src/app/(site)/page.tsx`
+- `apps/web/src/app/(servers)/servers/page.tsx`
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `docs/DEVELOPMENT.md`（本记录）
+
+### 数据库与 API 变化
+
+- 无数据库迁移、Rust API 或 OpenAPI 契约变化。
+- 玩家头像、昵称和在线状态仍为前端模拟数据，刷新不会持久化，也不代表真实服务器或 Steam 账号。
+- 服务器地址继续使用保留域名 `*.threi.example`，不会连接真实 CS:GO 服务器。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 6 项、HTTP 契约测试 10 项，共 16 项通过；
+  - TypeScript、ESLint、Prettier 全部通过。
+- `npm run build`：通过，静态生成 24 个页面/路由。
+- Playwright 无头 Chromium 验证：
+  - `/servers` 渲染 12 个服务器卡片；
+  - `KZ | Beginner` 显示 9 个玩家头像和昵称，`KZ | Hardcore` 显示 28 个，名称完整；
+  - 列表视图同样显示 9 / 28 个头像和昵称；
+  - 首页在线栏和特色服务器共渲染 48 个玩家头像条目；
+  - 搜索玩家 `n0va` 返回 2 个服务器，`LongJumpLarry` 也能命中；
+  - 1920、1440、1024、768 宽度下卡片底边和“复制地址/加入游戏”按钮坐标一致，按钮高度均为 36px，无横向溢出；
+  - 390 宽度下无横向溢出，玩家头像和昵称完整，按钮高度和顶部坐标一致；
+  - 所有检查页面返回 200，浏览器 console 与 pageerror 均无错误。
+- 未执行：Docker 镜像构建、容器启动、`nginx -t`、HTTPS 验证（本机无 Docker daemon）；未连接真实 CS:GO 服务器验证头像或玩家状态。
+
+
+---
+
+## 2026年10月23日 21时37分32秒 站点主题切换为 CS:GO KZ 与服务器目录扩展
+
+### 背景
+
+用户确认网站的设计与样式搭配可以保留，但内容主题错误：站点实际是 Minecraft 社区，需要整体改为 **CS:GO 的 KZ 模式**。同时提出两点界面要求：
+
+1. 服务器数量可能达到 10–30 个，服务器目录需要能承载这个规模，并且每个服务器的**全部在线玩家名称**都要显示；
+2. 修复服务器卡片中“复制地址”和“加入游戏”按钮与其他卡片未对齐的问题。
+
+上一记录 `2026年10月23日 20时52分04秒 服务器页面与全站模拟内容上线预览` 中关于 3 个 Minecraft 服务器、三张旧地图和 Minecraft Java 版加入步骤的描述，已被本记录中的 12 个 CS:GO KZ 服务器与 Steam/控制台连接方式取代；旧记录保留用于追溯。
+
+### 变更内容
+
+#### 1. 全站从 Minecraft 切换为 CS:GO KZ
+
+- 官网首页 hero、服务器推荐、论坛动态、社区数据与 CTA 改为 KZ 语境；
+- 论坛分类改为公告与活动、综合讨论、地图与记录、技巧与教学、帮助与反馈；
+- 8 个论坛主题、回复、作者角色与站内链接全部改为 KZ 地图、连跳、长跳、计时赛和新手绑定等主题；
+- 用户中心 bio、最近活动、通知、徽章、收藏服务器与 Steam 账号标签改为 KZ 内容；
+- 管理面板角色、审核队列、审计日志、最近主题和服务器节点说明改为 KZ 运营语境；
+- 站点描述、manifest、页脚、README、架构文档与 CHANGELOG 同步更新；
+- 删除旧 Minecraft 服务器地图 SVG 和无用的 `player-avatar.tsx`。
+
+#### 2. 服务器目录扩展到 12 个 KZ 服务器
+
+- 重写 `features/servers/data/servers.ts`，新增 `KzServer` 数据模型：服务器名、地图、描述、状态、IP、端口、区域、tickrate、人数上限、延迟、标签、完整在线玩家数组和地图预览图；
+- 新增 12 个 KZ 服务器，人数上限均为 32，在线玩家共 184 人；每个服务器提供独立的 IP:PORT 与地图；
+- 在线玩家使用 `string[]` 保存，卡片和列表都渲染全部名称，不使用省略号或“+N”隐藏；
+- 新增 12 张本地 KZ 地图预览 SVG，放在 `apps/web/public/images/servers/`；
+- 新增服务器搜索：可按服务器名、地图、地区、描述、标签或在线玩家昵称过滤；
+- 服务器卡片视图使用 `md:grid-cols-2 2xl:grid-cols-3`，列表视图纵向堆叠，适配 10–30 个服务器的规模；
+- 列表行展示缩略图、描述、tickrate、延迟、完整玩家标签、地址和操作按钮；
+- “加入游戏”弹窗改为 CS:GO：提供 `steam://connect/IP:PORT` 入口、控制台 `connect IP:PORT` 命令和三步加入说明；
+- 服务器页 hero 展示特色服务器背景、在线人数/容量/tickrate/服务器数统计，并保留三步进入指南与用户中心 CTA。
+
+#### 3. 修复卡片按钮对齐
+
+- 卡片使用 `flex h-full flex-col` 结构，操作区使用 `mt-auto` 固定在内容底部；
+- 地址框与两个按钮放在同一个底部操作区，按钮使用 `grid grid-cols-2 gap-2` 等宽排列；
+- “复制地址”和“加入游戏”统一为默认尺寸（36px 高），避免顶部对齐但底部错位；
+- 列表行操作列使用 `lg:justify-between`，地址在上、按钮在下；
+- 在线人数较少的卡片让玩家面板 `flex-1` 填充剩余高度，并在底部显示“还有 N 个空位 / 复制地址加入”，避免按钮对齐后留下无意义空白；
+- 在 1920、1440、1024、768 和 390 宽度下验证同行卡片底边、复制/加入按钮的 y 坐标与高度一致。
+
+#### 4. 响应式标题修正
+
+- 首页和服务器页 hero 标题改为显式分行，避免中文词在窄屏被拆开；
+- 首页标题字号调整为 `text-3xl sm:text-4xl md:text-5xl lg:text-6xl`，390px 宽度下不再出现“服务/器”或“起/跳”跨行断裂；
+- 服务器页标题缩短为“找到你的 KZ 服务器，从一次起跳开始。”。
+
+### 涉及文件
+
+- 服务器数据与组件：
+  - `apps/web/src/features/servers/data/servers.ts`
+  - `apps/web/src/features/servers/components/server-card.tsx`
+  - `apps/web/src/features/servers/components/server-list-row.tsx`
+  - `apps/web/src/features/servers/components/server-directory.tsx`
+  - `apps/web/src/features/servers/components/join-server-button.tsx`
+  - 删除 `apps/web/src/features/servers/components/player-avatar.tsx`
+- 服务器页面与素材：
+  - `apps/web/src/app/(servers)/servers/page.tsx`
+  - `apps/web/public/images/servers/kz-{beginner,bhop-city,longjump-lab,hardcore,climb-alpha,skyline,neon,frost,dune,void,marble,aztec}.svg`
+  - 删除 `elysium-valley.svg`、`aether-workshop.svg`、`ember-arena.svg`
+- 全站内容：
+  - `apps/web/src/app/(site)/page.tsx`
+  - `apps/web/src/app/(forum)/forum/page.tsx`
+  - `apps/web/src/features/forum/data/forum.ts`
+  - `apps/web/src/features/forum/components/forum-category-icon.tsx`
+  - `apps/web/src/features/account/data/account.ts`
+  - `apps/web/src/app/(account)/account/page.tsx`
+  - `apps/web/src/features/admin/data/dashboard.ts`
+  - `apps/web/src/app/(admin)/admin/page.tsx`
+  - `apps/web/src/lib/site-config.ts`
+  - `apps/web/src/app/manifest.ts`
+  - `apps/web/src/components/layout/site-footer.tsx`
+- 文档：
+  - `README.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/CHANGELOG.md`
+  - `docs/DEVELOPMENT.md`（本记录）
+
+### 数据库与 API 变化
+
+- 无数据库结构或迁移变更。
+- 无 Rust API 路由、请求/响应结构或 OpenAPI 契约变更。
+- 服务器目录、论坛、用户中心和管理面板仍使用前端静态预览数据；刷新不会保存修改，也不代表真实服务器状态。
+- 服务器地址继续使用保留域名 `*.threi.example`，不会连接真实 CS:GO 服务器。
+- `/admin` 仍未接入鉴权，生产环境不得公开。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 6 项、HTTP 契约测试 10 项，共 16 项通过；
+  - TypeScript `tsc --noEmit` 通过；
+  - ESLint `--max-warnings=0` 通过；
+  - Prettier `--check` 通过。
+- `npm run build`：通过，静态生成 24 个页面/路由；`/servers` 单页渲染 12 个服务器卡片，同时生成 5 个论坛分类页和 8 个论坛主题页。
+- Playwright 无头 Chromium 验证：
+  - `/servers` 默认卡片视图渲染 12 个服务器；
+  - `KZ | Beginner` 显示 9 个玩家，`KZ | Hardcore` 显示 28 个玩家，未隐藏任何名称；
+  - 搜索 `kz_hardcore` 返回 1 个结果，清空后恢复 12 个；列表视图显示 12 个服务器和 28 个 Hardcore 玩家；
+  - 视图切换后刷新页面仍保持列表模式，`localStorage` 值为 `list`；
+  - 复制结果为 `kz01.threi.example:27015`；
+  - 加入弹窗可见，Steam 链接为 `steam://connect/kz01.threi.example:27015`；
+  - 1920、1440、1024、768 宽度下，同行卡片底边一致，复制/加入按钮 y 坐标一致且高度均为 36px；
+  - 390 宽度下无横向溢出，玩家列表完整，复制/加入按钮高度均为 36px 且顶部对齐；
+  - `/`、`/forum`、`/forum/maps`、`/forum/topic/season-three-rush`、`/forum?q=长跳`、`/account`、`/admin` 均返回 200；
+  - 浏览器 console 与 pageerror 均无错误。
+- 未执行：Docker 镜像构建、容器启动、`nginx -t`、HTTPS 与生产反向代理验证（本机无 Docker daemon）；未连接真实 CS:GO 服务器验证连接与 KZ 插件行为。
+
+
+---
+
 ## 2026年10月23日 20时52分04秒 服务器页面与全站模拟内容上线预览
 
 ### 背景

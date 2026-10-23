@@ -66,7 +66,7 @@ export const recentUsers: RecentUser[] = [
   {
     name: "Rift",
     handle: "@rift",
-    role: "竞技队长",
+    role: "计时赛队长",
     joinedAt: "48 分钟前",
     status: "正常",
     avatar: "from-orange-400 to-amber-600",
@@ -90,7 +90,7 @@ export const recentUsers: RecentUser[] = [
   {
     name: "Yuki",
     handle: "@yuki",
-    role: "场景设计",
+    role: "地图作者",
     joinedAt: "3 小时前",
     status: "正常",
     avatar: "from-fuchsia-400 to-pink-600",
@@ -100,8 +100,8 @@ export const recentUsers: RecentUser[] = [
 export const moderationQueue: ModerationItem[] = [
   {
     id: "mod-1",
-    target: "主题：出售稀有物品，价格私聊",
-    reason: "疑似交易广告，与本社区规则不符",
+    target: "主题：出售 KZ 计时器修改脚本",
+    reason: "疑似作弊/外挂，与本社区规则不符",
     reporter: "匿名举报",
     time: "8 分钟前",
     severity: "中",
@@ -124,7 +124,7 @@ export const moderationQueue: ModerationItem[] = [
   },
   {
     id: "mod-4",
-    target: "主题：服务器客户端下载链接",
+    target: "主题：KZ 客户端 config 下载链接",
     reason: "外部链接安全性待确认",
     reporter: "白露",
     time: "2 小时前",
@@ -139,7 +139,7 @@ export const auditLog: AuditEntry[] = [
     id: "audit-3",
     actor: "澄海",
     action: "移动主题",
-    target: "#1038 → 创造工坊",
+    target: "#1038 → 地图与记录",
     time: "昨天 22:06",
   },
   { id: "audit-4", actor: "系统", action: "自动隐藏", target: "回复 #8831", time: "昨天 21:54" },
@@ -157,5 +157,5 @@ export const systemSettings = [
   { label: "注册状态", value: "开放", detail: "需要邮箱验证" },
   { label: "维护模式", value: "关闭", detail: "全部服务器可访问" },
   { label: "内容审核", value: "自动 + 人工", detail: "高风险内容进入队列" },
-  { label: "服务器节点", value: "3 个在线", detail: "最后检查于 1 分钟前" },
+  { label: "服务器节点", value: "12 个在线", detail: "最后检查于 1 分钟前" },
 ];

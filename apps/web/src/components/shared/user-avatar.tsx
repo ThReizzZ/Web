@@ -8,10 +8,11 @@ export function UserAvatar({
 }: {
   name: string;
   avatar: string;
-  size?: "sm" | "md" | "lg" | "xl";
+  size?: "xs" | "sm" | "md" | "lg" | "xl";
   className?: string;
 }) {
   const sizeClass = {
+    xs: "size-6 text-[10px]",
     sm: "size-7 text-[11px]",
     md: "size-9 text-xs",
     lg: "size-12 text-sm",

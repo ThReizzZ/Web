@@ -56,7 +56,7 @@ export function SiteFooter() {
         <p>
           © {new Date().getFullYear()} {siteConfig.name}. All rights reserved.
         </p>
-        <p>Minecraft Java 版 · 长期生存社区</p>
+        <p>CS:GO KZ · 攀爬与跳跃社区</p>
       </PageContainer>
     </footer>
   );

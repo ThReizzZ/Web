@@ -1,7 +1,7 @@
 export const siteConfig = {
   name: "ThRei",
   title: "ThRei 社区",
-  description: "ThRei 是一个以长期生存、共同建造和友好交流为核心的 Minecraft 社区。",
+  description: "ThRei 是一个以 CS:GO KZ 攀爬、连跳和长跳玩法为核心的社区。",
   url: resolveSiteUrl(process.env.NEXT_PUBLIC_SITE_URL),
   nav: [
     { title: "官网", href: "/" },

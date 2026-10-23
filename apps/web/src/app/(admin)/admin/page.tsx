@@ -380,14 +380,14 @@ export default async function AdminOverviewPage() {
             <CardHeader className="flex flex-row flex-wrap items-end justify-between gap-3">
               <div>
                 <CardTitle>服务器节点</CardTitle>
-                <CardDescription>当前世界与在线玩家。</CardDescription>
+                <CardDescription>KZ 服务器与在线玩家。</CardDescription>
               </div>
               <Button asChild variant="ghost" size="sm">
                 <Link href="/servers">服务器页</Link>
               </Button>
             </CardHeader>
             <CardContent className="space-y-3">
-              {gameServers.map((server) => (
+              {gameServers.slice(0, 6).map((server) => (
                 <div
                   key={server.id}
                   className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5"
@@ -402,13 +402,21 @@ export default async function AdminOverviewPage() {
                     </p>
                   </div>
                   <p className="shrink-0 text-right text-sm tabular-nums">
-                    {server.playerCount}/{server.maxPlayers}
+                    {server.players.length}/{server.maxPlayers}
                     <span className="block text-[10px] font-normal text-muted-foreground">
                       在线
                     </span>
                   </p>
                 </div>
               ))}
+              {gameServers.length > 6 ? (
+                <Link
+                  href="/servers"
+                  className="flex items-center justify-center rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+                >
+                  查看全部 {gameServers.length} 个服务器
+                </Link>
+              ) : null}
             </CardContent>
           </Card>
         </section>
