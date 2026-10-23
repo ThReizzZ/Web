@@ -1,4 +1,4 @@
-# threi 部署手册
+# ThRei 部署手册
 
 > 适用于本仓库的 Compose 栈：`nginx`、`web`、`api`、`migrate`、`postgres`、`redis`。
 > 所有命令均在仓库根目录执行。生产环境必须替换全部示例密钥，并在防火墙后运行。

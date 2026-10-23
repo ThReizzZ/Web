@@ -7,7 +7,8 @@ const footerLinks = [
   {
     title: "社区",
     links: [
-      { label: "论坛首页", href: "/forum" },
+      { label: "服务器", href: "/servers" },
+      { label: "论坛", href: "/forum" },
       { label: "用户中心", href: "/account" },
     ],
   },
@@ -15,7 +16,7 @@ const footerLinks = [
     title: "系统",
     links: [
       { label: "管理面板", href: "/admin" },
-      { label: "管理概览", href: "/admin" },
+      { label: "服务器状态", href: "/servers" },
     ],
   },
 ] as const;
@@ -30,7 +31,7 @@ export function SiteFooter() {
             {siteConfig.description}
           </p>
           <p className="text-xs text-muted-foreground">
-            当前为架构初始化版本：官网、论坛、用户中心与管理面板共享同一套 API 和身份体系。
+            预览环境：服务器状态、论坛内容与用户资料均为模拟数据。
           </p>
         </div>
         {footerLinks.map((group) => (
@@ -55,7 +56,7 @@ export function SiteFooter() {
         <p>
           © {new Date().getFullYear()} {siteConfig.name}. All rights reserved.
         </p>
-        <p>Next.js · Axum · PostgreSQL · Redis</p>
+        <p>Minecraft Java 版 · 长期生存社区</p>
       </PageContainer>
     </footer>
   );

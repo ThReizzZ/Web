@@ -26,10 +26,10 @@ export function SystemStatusCard({ initialInfo }: { initialInfo?: SystemInfo | n
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ServerCog className="size-4 text-primary" aria-hidden="true" />
-          API 连通性
+          平台服务
         </CardTitle>
         <CardDescription>
-          浏览器通过统一 API 客户端读取服务元信息。该检查不包含数据库地址或任何凭据。
+          由统一 API 客户端读取平台服务信息；不会展示数据库地址或凭据。
         </CardDescription>
         <CardAction>
           <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
@@ -48,7 +48,7 @@ export function SystemStatusCard({ initialInfo }: { initialInfo?: SystemInfo | n
         ) : error ? (
           <Alert variant="destructive">
             <AlertCircle aria-hidden="true" />
-            <AlertTitle>API 当前不可用</AlertTitle>
+            <AlertTitle>平台服务当前不可用</AlertTitle>
             <AlertDescription>
               <p>{error instanceof ApiError ? error.message : "请求失败，请稍后重试。"}</p>
               {error instanceof ApiError ? (
@@ -66,25 +66,23 @@ export function SystemStatusCard({ initialInfo }: { initialInfo?: SystemInfo | n
                 <CheckCircle2 aria-hidden="true" />
                 已连接
               </Badge>
-              <span className="text-sm text-muted-foreground">
-                浏览器 → Nginx（生产）/ Next.js 代理（开发）→ Rust API
-              </span>
+              <span className="text-sm text-muted-foreground">前端已连接到 ThRei 平台 API</span>
             </div>
             <dl className="grid gap-4 text-sm sm:grid-cols-2">
               <div>
-                <dt className="text-muted-foreground">服务</dt>
+                <dt className="text-muted-foreground">平台</dt>
                 <dd className="font-mono">{data.name}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">API 版本</dt>
+                <dt className="text-muted-foreground">接口版本</dt>
                 <dd className="font-mono">{data.api_version}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">构建版本</dt>
+                <dt className="text-muted-foreground">版本</dt>
                 <dd className="font-mono">{data.version}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">运行环境</dt>
+                <dt className="text-muted-foreground">环境</dt>
                 <dd className="font-mono">{data.environment}</dd>
               </div>
             </dl>

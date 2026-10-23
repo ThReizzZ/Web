@@ -1,4 +1,4 @@
-# threi 架构说明
+# ThRei 架构说明
 
 > 本文记录当前**已实现**的架构，以及明确规划但**尚未实现**的能力。
 > 架构发生变化时，必须同步更新本文与 [DEVELOPMENT.md](DEVELOPMENT.md)。
@@ -6,7 +6,7 @@
 
 ## 1. 目标与阶段
 
-threi 是一个长期运营的社区系统，统一承载官网、论坛、用户中心和管理面板。
+ThRei 是一个长期运营的 Minecraft 社区系统，统一承载官网、服务器状态、论坛、用户中心和管理面板。
 第一阶段采用**模块化单体**（modular monolith），目标是：
 
 - 建立清晰的前后端职责边界和目录边界；
@@ -15,7 +15,7 @@ threi 是一个长期运营的社区系统，统一承载官网、论坛、用�
 - 为后续用户、权限、论坛、通知、审核、审计和系统配置模块预留扩展点；
 - 不提前引入微服务、消息队列等尚无实际需求的基础设施。
 
-本阶段**没有**实现登录、权限、论坛数据、审核或审计。相关设计在本文中标记为“规划”。
+本阶段**没有**实现登录、权限、真实服务器状态、论坛持久化数据、审核或审计。前端已使用本地模拟数据填充页面，相关后端能力在本文中标记为“规划”。
 
 ## 2. 技术选型
 
@@ -88,12 +88,13 @@ compose.dev.yaml         本地开发用的基础设施端口覆盖
 ```text
 src/app/layout.tsx                根布局：html/body、全局样式、QueryProvider
 src/app/(site)/                   官网布局（/）
+src/app/(servers)/                服务器布局（/servers）
 src/app/(forum)/                  论坛布局（/forum、/forum/[category]、/forum/topic/[id]）
 src/app/(account)/                用户中心布局（/account）
 src/app/(admin)/                  独立管理面板布局（/admin）
 ```
 
-每个 route group 拥有自己的 layout；根布局只提供全局 provider。官网、论坛、用户中心共享 `SiteShell`（导航/页脚/主 landmark），管理面板使用独立的侧边栏和状态栏，避免业务代码混在同一布局中。
+每个 route group 拥有自己的 layout；根布局只提供全局 provider。官网、服务器、论坛、用户中心共享 `SiteShell`（导航/页脚/主 landmark），管理面板使用独立的侧边栏和状态栏，避免业务代码混在同一布局中。
 
 ### 5.2 Server / Client Components 边界
 
@@ -102,6 +103,8 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 - `QueryProvider`：TanStack Query 的客户端上下文；
 - `SystemStatusCard`：浏览器端 API 探测与刷新；
 - `ForumSearchForm`：React Hook Form + Zod + `useRouter`；
+- `ServerDirectory`：卡片/列表显示模式切换与 `localStorage` 偏好；
+- `CopyAddressButton` / `JoinServerButton`：剪贴板、原生 `<dialog>` 加入说明与交互状态；
 - `error.tsx` / `global-error.tsx`：错误边界需要交互；
 - Radix `Label` / `Separator` 包装组件（基础交互组件）。
 
@@ -120,8 +123,8 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 ### 5.4 SEO 与错误页面
 
 - 根布局定义 `metadataBase`、标题模板、OpenGraph、Twitter、robots。
-- 页面提供 `generateMetadata`（分类/帖子按参数生成标题）。
-- `robots.ts`、`sitemap.ts`、`manifest.ts`、`icon.svg` 已建立。
+- 页面提供 `generateMetadata`（分类/帖子按参数生成标题，服务器页有独立 metadata）。
+- `robots.ts`、`sitemap.ts`（含 `/servers`）、`manifest.ts`、`icon.svg` 已建立。
 - `not-found.tsx`、`error.tsx`、`global-error.tsx` 已建立。论坛列表刻意不使用父级 `loading.tsx`，以免流式渲染使 `notFound()` 无法返回真正的 404 状态码。
 - 用户中心与管理面板设置 `noindex`。
 
@@ -133,7 +136,19 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 - 管理操作按钮按权限隐藏，同时 API 必须再次校验；
 - Cookie 由 API 签发，前端不存储访问令牌到 `localStorage`。
 
-当前 `/admin` 是公开骨架，文档明确警告不得直接公网暴露。
+当前 `/admin` 是公开演示面板：数据为前端模拟内容，认证与授权尚未实现，文档明确警告不得直接公网暴露。
+
+### 5.6 预览数据与模块组织
+
+当前页面内容来自前端模块内的本地模拟数据，不经过数据库或 API：
+
+- `src/features/servers/data/servers.ts`：服务器信息、地图、在线玩家样例；
+- `src/features/forum/data/forum.ts`：分类、主题、回复，支持本地搜索；
+- `src/features/account/data/account.ts`：当前演示用户、活动、通知与安全概览；
+- `src/features/admin/data/dashboard.ts`：运营指标、审核队列与审计日志；
+- `apps/web/public/images/servers/*.svg`：本地服务器地图预览图。
+
+这些数据只用于界面预览，刷新不会保存修改，也不代表真实服务器状态。后续接入 API 时，应将数据读取替换为服务端查询，并保持组件边界不变。页面底部和管理面板明确标注“预览数据”。
 
 ## 6. 后端架构
 
@@ -154,7 +169,7 @@ src/modules/                未来业务模块边界说明
 src/bin/migrate.rs          独立迁移二进制
 ```
 
-未来业务模块（尚未实现）：`users`、`rbac`、`forum`、`notifications`、`moderation`、`audit`、`settings`。每个模块内部建议：
+未来业务模块（尚未实现）：`users`、`rbac`、`servers`、`forum`、`notifications`、`moderation`、`audit`、`settings`。`servers` 将负责服务器目录、状态同步和在线玩家查询。每个模块内部建议：
 
 ```text
 modules/<name>/
@@ -349,13 +364,13 @@ Compose 服务：
 **限制：**
 
 - 没有认证、授权、CSRF、限流；管理面板公开可见。
-- 没有业务表和业务 API；论坛/用户中心/管理面板只是布局骨架。
-- 没有后台任务、邮件、搜索、通知投递和文件存储。
+- 没有业务表和业务 API；服务器、论坛、用户中心和管理面板使用前端模拟数据，刷新后不持久化。
+- 没有后台任务、邮件、真实服务器状态同步、通知投递和文件存储。
 - 没有 CI、指标、集中日志和自动备份。
 - Nginx 只配置了 HTTP；HTTPS 仅有示例。
 - 本次初始化环境无 Docker，镜像构建与容器启动未实际执行。
 - `.sqlx` 尚未引入（无编译期查询）。
-- 前端没有自动化组件/E2E 测试。
+- 前端没有纳入仓库的自动化组件/E2E 测试；本次使用本地无头浏览器做过手工交互验证。
 
 **建议顺序：**
 
@@ -378,9 +393,9 @@ Compose 服务：
 | API 错误格式 | 错误统一包裹，成功直接返回 | 简单、易扩展，避免过度嵌套 |
 | 前端 API 访问 | 浏览器同源，SSR 走内部地址 | 减少 CORS 与密钥暴露 |
 | API 文档 | 开发默认开，生产默认关 | 降低生产信息面，保留开发效率 |
-| 管理面板 | 当前公开骨架 | 尚未实现认证；文档与界面明确警告 |
+| 管理面板 | 公开演示面板（模拟数据） | 尚未实现认证；文档与界面明确警告 |
 | 初始迁移 | 仅扩展与触发器函数 | 不提前创建无需求业务表 |
-| 前端目录 | route groups + features | 布局边界与业务模块清晰 |
+| 前端目录 | route groups + features（含本地模拟数据） | 布局边界与业务模块清晰，便于后续替换为 API |
 
 ## 15. 文档维护
 

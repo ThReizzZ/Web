@@ -20,7 +20,7 @@ export default function NotFound() {
         <p className="font-mono text-sm text-muted-foreground">404</p>
         <h1 className="text-2xl font-semibold tracking-tight">页面不存在</h1>
         <p className="max-w-md text-sm text-muted-foreground">
-          该地址尚未实现、已被移除，或者标识格式不正确。
+          该地址不存在、已被移除，或者标识格式不正确。
         </p>
       </div>
       <div className="flex flex-wrap justify-center gap-3">

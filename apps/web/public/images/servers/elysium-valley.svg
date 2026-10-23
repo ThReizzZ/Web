@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" role="img" aria-labelledby="title desc">
+  <title id="title">Elysium Valley</title>
+  <desc id="desc">A stylized green valley with mountains, a river and forest.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="0.48" stop-color="#bae6fd"/>
+      <stop offset="1" stop-color="#ecfccb"/>
+    </linearGradient>
+    <linearGradient id="far" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5b8c7a"/>
+      <stop offset="1" stop-color="#315b4b"/>
+    </linearGradient>
+    <linearGradient id="near" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3f7c5a"/>
+      <stop offset="1" stop-color="#1f4d3a"/>
+    </linearGradient>
+    <linearGradient id="river" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#67e8f9"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+    <linearGradient id="haze" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#1e3a2f" stop-opacity="0.55"/>
+    </linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="640" fill="url(#sky)"/>
+  <circle cx="948" cy="126" r="72" fill="#fef9c3" opacity="0.85"/>
+  <circle cx="948" cy="126" r="108" fill="#fef08a" opacity="0.18"/>
+  <path d="M0 342 118 244l78 58 94-122 96 122 104-76 102 96 120-92 92 86 102-64 120 88 74-54v322H0Z" fill="url(#far)" opacity="0.72"/>
+  <path d="M0 402 112 322l102 62 104-82 98 92 90-56 114 74 116-48 92 74 128-70 124 58 120-50v230H0Z" fill="url(#near)"/>
+  <path d="M-40 640c122-96 210-120 318-106 126 16 170 94 302 82 138-12 210-112 354-94 110 14 186 80 306 66v84H-40Z" fill="#173d2e"/>
+  <path d="M-30 640c88-70 184-92 284-72 82 16 132 68 224 70 116 4 178-64 300-66 144-4 236 72 382 44l70-10v90H-30Z" fill="#0f2e23" opacity="0.9"/>
+  <path d="M760 640c14-82 44-118 90-172 44-52 96-74 120-126 18-40 24-84 24-132" fill="none" stroke="#0e7490" stroke-width="42" stroke-linecap="round" opacity="0.5"/>
+  <path d="M760 640c14-82 44-118 90-172 44-52 96-74 120-126 18-40 24-84 24-132" fill="none" stroke="url(#river)" stroke-width="24" stroke-linecap="round"/>
+  <g fill="#2f6f4e" opacity="0.95">
+    <circle cx="130" cy="470" r="42"/><circle cx="178" cy="488" r="30"/><circle cx="96" cy="502" r="26"/>
+    <circle cx="1040" cy="482" r="46"/><circle cx="1092" cy="512" r="32"/><circle cx="986" cy="520" r="26"/>
+    <circle cx="392" cy="526" r="36"/><circle cx="436" cy="548" r="24"/>
+  </g>
+  <g fill="#163f2f">
+    <rect x="124" y="500" width="10" height="46" rx="4"/><rect x="1036" y="516" width="10" height="46" rx="4"/><rect x="388" y="548" width="8" height="38" rx="4"/>
+  </g>
+  <g fill="#86efac" opacity="0.6">
+    <circle cx="152" cy="438" r="8"/><circle cx="1068" cy="444" r="9"/><circle cx="416" cy="494" r="6"/><circle cx="248" cy="548" r="5"/><circle cx="920" cy="560" r="6"/>
+  </g>
+  <path d="M0 586c214-26 362-12 520 16 184 32 364 18 680-28v66H0Z" fill="#0b241b" opacity="0.72"/>
+  <rect width="1200" height="640" fill="url(#grid)"/>
+  <rect width="1200" height="640" fill="url(#haze)"/>
+</svg>

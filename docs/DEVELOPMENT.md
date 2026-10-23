@@ -17,6 +17,231 @@
 
 ---
 
+## 2026年10月23日 20时52分04秒 服务器页面与全站模拟内容上线预览
+
+### 背景
+
+用户希望在顶部导航增加服务器功能页，展示当前服务器人数、IP/PORT、地图与地图图片、在线玩家名称和人数上限；提供卡片/列表两种显示模式（默认卡片），并在合适位置提供复制 IP:PORT 和加入游戏按钮。同时，官网、论坛、用户中心和管理面板不应继续展示架构原则或“模块骨架”，而应替换为模拟开发环境数据，以便预览上线后的实际观感。
+
+本次全部为前端展示层和本地模拟数据，不接入真实服务器状态，也不改变数据库或 API 契约。页面中的服务器地址使用保留域名 `*.threi.example`，不会连接真实服务器。
+
+### 变更内容
+
+#### 1. 服务器模块与 `/servers`
+
+- 新增 `src/features/servers` 数据与组件：
+  - 3 个模拟服务器：Elysium Valley（长期生存）、Aether Workshop（自由创造）、Ember Arena（竞技与活动）；
+  - 每个服务器包含 IP、PORT、地图、版本、区域、延迟、在线人数、人数上限和在线玩家样例；
+  - 玩家列表显示头像色块、名称、角色，并标注“显示 N / 总在线人数”。
+- 新增三张本地地图预览 SVG：Elysium Valley、Aether Workshop、Ember Arena，放在 `public/images/servers/`。
+- 新增 `(servers)` route group 和 `/servers` 页面，顶部导航、页脚、sitemap 同步加入服务器入口。
+- 新增卡片/列表显示切换：
+  - 默认卡片模式；
+  - 使用 `useSyncExternalStore` 读取 `localStorage`，避免 effect 内同步 setState；
+  - 用户选择在下一次访问时保留。
+- 新增“复制地址”按钮：
+  - 复制完整 `IP:PORT`；
+  - 优先使用 `navigator.clipboard`，提供旧浏览器降级；
+  - 复制成功后显示“已复制”，并通过 `aria-live` 通知辅助技术。
+- 新增“加入游戏”按钮：
+  - 打开原生 `<dialog>`，展示服务器信息、完整地址、复制按钮和 Minecraft Java 版加入步骤；
+  - 支持关闭按钮、点击遮罩关闭和 Escape 关闭。
+- 服务器卡片和列表模式均完整展示 IP:PORT，不再截断；复制与加入按钮在卡片中并排展示。
+- 修正服务器卡片/列表的响应式布局，移动端 390px 宽度下地址和按钮仍可正常显示。
+
+#### 2. 官网首页
+
+- 移除架构原则、数据流、技术栈清单和安全规划说明。
+- 新首页包含：
+  - 服务器地图背景 Hero、第三赛季公告入口、在线玩家与社区统计；
+  - 三个服务器的快捷卡片（含地图、人数、地址、复制和加入按钮）；
+  - 最新论坛主题、公告与活动、社区数据；
+  - 服务器长期开放 CTA 和加入引导。
+- 页脚增加“预览环境：服务器状态、论坛内容与用户资料均为模拟数据”说明。
+
+#### 3. 论坛
+
+- 新增论坛模拟数据：5 个分类、8 个主题、作者/角色/标签/浏览数/回复和详细回复内容。
+- 论坛首页改为分类卡片、最新讨论、社区概览、最近活跃成员和新手指南侧栏。
+- 搜索支持按标题、摘要、标签、作者和分类名过滤本地模拟主题，并显示结果数量与空状态。
+- 分类页展示分类信息、主题列表、其他分类与服务器入口。
+- 帖子详情页展示完整正文、标签、作者、浏览/回复统计和逐条回复；未知分类/帖子返回真正 404。
+- 新增服务器状态卡片填充分类网格，更新搜索框占位文案。
+
+#### 4. 用户中心
+
+- 使用模拟用户“星野”替换骨架内容：头像、角色、简介、加入时间、地区、资料完整度。
+- 增加主题/回复/游戏时长/社区贡献统计，最近活动、我的主题、通知、徽章、账号安全和收藏服务器。
+- 修正横幅欢迎文字被头像遮挡的问题。
+
+#### 5. 管理面板
+
+- 移除“后续业务模块边界”和开发占位说明，替换为完整模拟运营面板：
+  - 注册成员、今日活跃、主题总数、待审核内容统计；
+  - 最近 7 天在线/新主题柱状图、角色分布；
+  - 最近注册用户、最近主题、审核队列、管理操作审计；
+  - 系统设置摘要、平台服务状态、服务器节点状态。
+- 管理侧边栏改为指向页面内各区块的锚点链接，移除“待实现”徽章。
+- 保留“演示数据”标识和未接入认证/权限的安全提示。
+- 平台服务卡片改为更产品化的“平台服务”文案，同时保留真实 API 连通性检查。
+- 修正 `CardHeader` 布局错位、设置卡片多余空白和移动端导航。
+
+#### 6. 文案与资源
+
+- 修正全局错误页、404 页中的开发期措辞。
+- 移除页面上残留的“骨架 / 尚未实现 / 待实现”展示文案（安全提示和模拟数据说明除外）。
+- Web Dockerfile 增加 `COPY public ./public`，确保地图图片进入生产运行镜像。
+- README 增加主要页面说明和模拟数据声明；ARCHITECTURE 增加服务器路由、模拟数据模块和未来 `servers` 后端模块边界；CHANGELOG 增加 Unreleased 汇总。
+
+### 涉及文件
+
+#### 新增
+
+| 文件 | 用途 |
+| --- | --- |
+| `apps/web/public/images/servers/elysium-valley.svg` | Elysium Valley 地图预览图 |
+| `apps/web/public/images/servers/aether-workshop.svg` | Aether Workshop 地图预览图 |
+| `apps/web/public/images/servers/ember-arena.svg` | Ember Arena 地图预览图 |
+| `apps/web/src/app/(servers)/layout.tsx` | 服务器页面布局边界 |
+| `apps/web/src/app/(servers)/servers/page.tsx` | `/servers` 页面、Hero、统计、加入步骤 |
+| `apps/web/src/features/servers/data/servers.ts` | 服务器/玩家模拟数据、地址工具函数 |
+| `apps/web/src/features/servers/components/server-directory.tsx` | 卡片/列表切换与 localStorage 偏好 |
+| `apps/web/src/features/servers/components/server-card.tsx` | 卡片模式服务器展示 |
+| `apps/web/src/features/servers/components/server-list-row.tsx` | 列表模式服务器展示 |
+| `apps/web/src/features/servers/components/server-status-badge.tsx` | 在线/维护状态徽章 |
+| `apps/web/src/features/servers/components/player-avatar.tsx` | 服务器玩家头像色块 |
+| `apps/web/src/features/servers/components/copy-address-button.tsx` | 复制 IP:PORT 按钮与状态反馈 |
+| `apps/web/src/features/servers/components/join-server-button.tsx` | 加入游戏说明对话框 |
+| `apps/web/src/components/shared/user-avatar.tsx` | 通用用户头像组件 |
+| `apps/web/src/features/forum/data/forum.ts` | 分类、主题、回复模拟数据与搜索 |
+| `apps/web/src/features/forum/components/category-card.tsx` | 论坛分类卡片 |
+| `apps/web/src/features/forum/components/forum-category-icon.tsx` | 分类图标与配色映射 |
+| `apps/web/src/features/forum/components/topic-row.tsx` | 主题列表行 |
+| `apps/web/src/features/account/data/account.ts` | 用户中心模拟资料、通知、活动 |
+| `apps/web/src/features/admin/data/dashboard.ts` | 管理面板统计、审核、审计数据 |
+
+#### 修改
+
+| 文件 | 修改 |
+| --- | --- |
+| `apps/web/src/app/(site)/page.tsx` | 官网首页重写为服务器/社区内容 |
+| `apps/web/src/app/(forum)/forum/page.tsx` | 分类、搜索、最新讨论和侧栏 |
+| `apps/web/src/app/(forum)/forum/[category]/page.tsx` | 分类主题列表与 404 |
+| `apps/web/src/app/(forum)/forum/topic/[id]/page.tsx` | 帖子正文、回复、相关主题 |
+| `apps/web/src/app/(account)/account/page.tsx` | 用户中心模拟资料与活动 |
+| `apps/web/src/app/(admin)/admin/page.tsx` | 管理运营面板与锚点区块 |
+| `apps/web/src/app/(admin)/layout.tsx` | 演示数据标识，移除大面积开发警告 |
+| `apps/web/src/app/global-error.tsx` | 错误页措辞 |
+| `apps/web/src/app/not-found.tsx` | 404 措辞 |
+| `apps/web/src/app/sitemap.ts` | 加入 `/servers` |
+| `apps/web/src/components/layout/site-header.tsx` | 导航入口与“加入服务器”CTA |
+| `apps/web/src/components/layout/site-footer.tsx` | 服务器入口、模拟数据说明 |
+| `apps/web/src/lib/site-config.ts` | 导航增加服务器、站点描述更新 |
+| `apps/web/src/features/forum/components/forum-search-form.tsx` | 搜索框占位文案 |
+| `apps/web/src/features/admin/components/admin-nav.tsx` | 锚点导航，移除待实现 |
+| `apps/web/src/features/admin/components/system-status-card.tsx` | 平台服务文案 |
+| `apps/web/Dockerfile` | 复制 `public/` 静态地图资源 |
+| `README.md` | 主要页面、模拟数据说明、目录更新 |
+| `docs/ARCHITECTURE.md` | 服务器路由、模拟数据边界、未来 servers 模块 |
+| `docs/CHANGELOG.md` | 新增 Unreleased 内容汇总 |
+| `docs/DEVELOPMENT.md` | 新增本条记录 |
+| `services/api/src/modules/mod.rs` | 未来 `servers` 后端模块边界注释 |
+
+### 数据库与 API 变化
+
+- 数据库：无迁移、表结构、索引或数据变化。
+- API：无接口、请求/响应结构、错误码或权限变化。
+- `services/api/src/modules/mod.rs` 仅为未来 `servers` 模块的注释补充，不影响编译产物行为。
+- 前端页面中的服务器、论坛、用户中心和管理数据全部来自本地模拟数据；刷新后不持久化，也不请求真实服务器状态。
+
+### 测试与结果
+
+| 检查 | 命令/方式 | 结果 |
+| --- | --- | --- |
+| 全量静态检查 | `./scripts/check.sh` | 通过（Rust fmt、Clippy、16 个测试、TypeScript、ESLint、Prettier） |
+| Next.js 生产构建 | `API_INTERNAL_URL=... NEXT_PUBLIC_SITE_URL=... npm run build` | 通过；`/servers` 为静态路由，分类/帖子使用 SSG |
+| 服务器页卡片默认 | 无头 Chromium | `卡片` 按钮 `aria-pressed=true`，`列表=false` |
+| 显示模式切换 | 点击“列表”并刷新 | 切换成功，`localStorage["threi.servers.view"]="list"`，刷新后保持 |
+| 复制 IP:PORT | 点击复制并读取剪贴板 | 剪贴板为 `play.threi.example:25565`，按钮显示“已复制” |
+| 加入游戏弹窗 | 点击“加入游戏” | 原生 dialog 可见，可关闭 |
+| 页面状态 | `/`、`/servers`、`/forum`、`/forum/survival`、`/forum/topic/season-three-islands`、`/account`、`/admin` | 均返回 200 |
+| 非法路由 | `/forum/unknown-category`、`/forum/topic/unknown-topic` | 404 |
+| 地图资源 | 三张 `/images/servers/*.svg` | 200，`image/svg+xml` |
+| 搜索 | `/forum?q=建筑` | 返回 3 个模拟结果 |
+| 移动端 | 390×844 无头浏览器访问 `/servers` | 200，地址与操作按钮正常显示 |
+| 控制台 | 浏览器交互检查 | 无 console/page error |
+| API 连通性 | `/api/v1/system/info` 经 Next rewrite | 200 |
+
+**未执行：**
+
+- Docker 镜像构建与容器启动：当前环境没有 Docker daemon/CLI；本次改动只影响 Web 运行时和静态资源，但首次部署仍需实际构建验证。
+- Nginx 配置加载与 HTTPS 验证：与本次内容修改无关，仍受环境限制。
+- 未将无头浏览器检查固化为仓库内 E2E 测试；本次为临时脚本验证，截图在 `/tmp`，未提交。
+- 未测试真实游戏客户端连接：模拟地址使用保留域名，不连接真实服务器。
+
+### 已知限制
+
+- 模拟数据不会持久化；发帖、编辑资料、审核操作等写能力未实现。
+- 服务器状态、玩家列表、地图和人数为前端静态预览，不代表真实服务器。
+- 管理面板仍公开可见，认证和权限尚未接入；生产环境必须保护。
+- 加入游戏按钮提供连接说明和复制地址，不直接唤起游戏客户端（未确定游戏协议）。
+
+## 2026年10月23日 20时20分17秒 官网公开品牌名称调整为 ThRei
+
+### 背景
+
+用户确认官网对外名称为 **ThRei**，要求将当前展示的 `threi` 调整为 `ThRei`。本次只调整公开品牌名，保留仓库名、包名、Docker 服务名、镜像名、API 技术标识等仍需保持小写的技术标识，避免破坏已有命令、路径和部署配置。
+
+### 变更内容
+
+- 前端站点配置：`name` 改为 `ThRei`，标题改为 `ThRei 社区`，描述加入品牌名。
+- 品牌组件：导航和页脚展示 `ThRei`，Logo 方块字符由 `t` 改为 `T`，无障碍标签同步。
+- 页面 metadata：管理面板、用户中心、论坛首页、分类页、帖子详情页的描述改为 `ThRei`。
+- 官网首页文案、PWA manifest、全局错误页品牌文字、应用图标 `aria-label` 同步为 `ThRei`。
+- OpenAPI 标题改为 `ThRei API`，描述改为 `ThRei community API`；API 启动日志中的品牌名同步，但健康检查响应和 `system/info` 的 `threi-api` 服务标识保持不变。
+- README 与文档标题/说明中的产品展示名改为 `ThRei`；技术路径、镜像名、Compose 服务名、包名保持原样。
+- 重新构建并重启本地预览，使当前运行页面立即显示新名称。
+
+### 涉及文件
+
+| 文件 | 修改 |
+| --- | --- |
+| `apps/web/src/lib/site-config.ts` | 站点名称、标题、描述 |
+| `apps/web/src/components/layout/brand.tsx` | 导航品牌文字、Logo 字符、aria-label |
+| `apps/web/src/app/(site)/page.tsx` | 官网首页品牌文案 |
+| `apps/web/src/app/manifest.ts` | PWA 名称与短名称 |
+| `apps/web/src/app/icon.svg` | 图标 aria-label |
+| `apps/web/src/app/global-error.tsx` | 全局错误页品牌文字 |
+| `apps/web/src/app/(admin)/layout.tsx` | 管理面板 metadata 描述 |
+| `apps/web/src/app/(account)/account/page.tsx` | 用户中心 metadata 描述 |
+| `apps/web/src/app/(forum)/forum/page.tsx` | 论坛首页 metadata 描述 |
+| `apps/web/src/app/(forum)/forum/[category]/page.tsx` | 分类页 metadata 描述 |
+| `apps/web/src/app/(forum)/forum/topic/[id]/page.tsx` | 帖子详情 metadata 描述 |
+| `services/api/src/openapi.rs` | OpenAPI 标题与描述 |
+| `services/api/src/main.rs` | 启动日志品牌名 |
+| `README.md` | 项目标题与简介 |
+| `docs/ARCHITECTURE.md` | 文档标题与产品说明 |
+| `docs/API.md` | 文档标题 |
+| `docs/DEPLOYMENT.md` | 文档标题 |
+| `docs/DEVELOPMENT.md` | 新增本条开发记录 |
+
+### 数据库与 API 变化
+
+- 数据库：无。
+- API：仅 OpenAPI 文档标题/描述和启动日志中的展示名称变化；未新增、删除或修改接口，未改变请求/响应结构、错误码或权限。`/health/live`、`/health/ready`、`/api/v1/system/info` 的技术服务标识仍为 `threi-api`。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过（Rust fmt、Clippy、16 个测试、TypeScript、ESLint、Prettier）。
+- `cargo build --release --locked --bins`：通过。
+- `npm run build`：通过。
+- 本地预览已重新构建并重启：
+  - 页面标题为 `ThRei 社区`；
+  - 导航、页脚与首页显示 `ThRei`；
+  - OpenAPI 标题为 `ThRei API`；
+  - `/`、`/forum`、`/account`、`/admin` 均返回 200。
+- 未执行：Docker 镜像构建、容器启动、Nginx/HTTPS 验证（本机无 Docker；与本次品牌修改无关）。
+
 ## 2026年10月23日 19时47分47秒 项目架构初始化
 
 ### 背景

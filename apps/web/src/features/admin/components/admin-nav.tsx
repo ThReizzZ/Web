@@ -9,47 +9,31 @@ import {
   Users,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 const adminNav = [
-  { label: "概览", href: "/admin", icon: LayoutDashboard, available: true },
-  { label: "用户与角色", icon: Users, available: false },
-  { label: "论坛内容", icon: MessageSquareText, available: false },
-  { label: "内容审核", icon: ShieldCheck, available: false },
-  { label: "审计日志", icon: FileClock, available: false },
-  { label: "系统设置", icon: Settings2, available: false },
-  { label: "服务状态", icon: Activity, available: false },
+  { label: "概览", href: "/admin#overview", icon: LayoutDashboard },
+  { label: "用户与角色", href: "/admin#users", icon: Users },
+  { label: "论坛内容", href: "/admin#content", icon: MessageSquareText },
+  { label: "内容审核", href: "/admin#moderation", icon: ShieldCheck },
+  { label: "审计日志", href: "/admin#audit", icon: FileClock },
+  { label: "系统设置", href: "/admin#settings", icon: Settings2 },
+  { label: "服务状态", href: "/admin#status", icon: Activity },
 ] as const;
 
 export function AdminNav({ className }: { className?: string }) {
   return (
     <nav aria-label="管理面板导航" className={cn("space-y-1", className)}>
-      {adminNav.map((item) =>
-        item.available ? (
-          <Link
-            key={item.label}
-            href={item.href}
-            aria-current="page"
-            className="flex shrink-0 items-center gap-2.5 rounded-md bg-background px-3 py-2 text-sm font-medium shadow-sm ring-1 ring-border"
-          >
-            <item.icon className="size-4 text-primary" aria-hidden="true" />
-            {item.label}
-          </Link>
-        ) : (
-          <span
-            key={item.label}
-            aria-disabled="true"
-            className="flex shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-sm text-muted-foreground"
-          >
-            <item.icon className="size-4" aria-hidden="true" />
-            {item.label}
-            <Badge variant="muted" className="ml-auto">
-              待实现
-            </Badge>
-          </span>
-        ),
-      )}
+      {adminNav.map((item) => (
+        <Link
+          key={item.label}
+          href={item.href}
+          className="flex shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+        >
+          <item.icon className="size-4" aria-hidden="true" />
+          {item.label}
+        </Link>
+      ))}
     </nav>
   );
 }

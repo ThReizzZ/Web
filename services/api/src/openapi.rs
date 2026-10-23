@@ -15,9 +15,9 @@ use crate::{
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "threi API",
+        title = "ThRei API",
         version = env!("CARGO_PKG_VERSION"),
-        description = "threi community API. Business endpoints are versioned under /api/v1. Health endpoints are infrastructure-only and are not routed through the public Nginx entry point."
+        description = "ThRei community API. Business endpoints are versioned under /api/v1. Health endpoints are infrastructure-only and are not routed through the public Nginx entry point."
     ),
     paths(
         crate::routes::health::live,

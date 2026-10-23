@@ -13,6 +13,7 @@
 //!
 //! - `users` — accounts, profiles, credentials and sessions
 //! - `rbac` — roles, permissions and policy checks
+//! - `servers` — game server directory, status sync and online players
 //! - `forum` — categories, topics, replies and moderation state
 //! - `notifications` — in-app notifications and delivery preferences
 //! - `moderation` — reports, review queues and enforcement actions

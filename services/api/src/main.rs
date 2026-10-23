@@ -40,7 +40,7 @@ async fn run(settings: Settings) -> Result<(), Box<dyn Error + Send + Sync>> {
         host = %settings.http.host,
         port = settings.http.port,
         docs_enabled = settings.http.docs_enabled,
-        "starting threi API"
+        "starting ThRei API"
     );
 
     let db = database::connect(&settings.database).await?;

@@ -1,16 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowLeft, ShieldAlert } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
 import { AdminNav } from "@/features/admin/components/admin-nav";
 import { Brand } from "@/components/layout/brand";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
   title: "管理面板",
-  description: "threi 管理面板骨架。认证与授权尚未实现。",
+  description: "ThRei 社区运营管理面板。",
   robots: { index: false, follow: false },
 };
 
@@ -22,6 +21,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <div className="flex items-center gap-3">
             <Brand />
             <Badge variant="outline">管理面板</Badge>
+            <Badge variant="warning">演示数据</Badge>
           </div>
           <Button asChild variant="ghost" size="sm">
             <Link href="/">
@@ -43,14 +43,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </aside>
 
         <main id="main-content" className="min-w-0 flex-1 space-y-6">
-          <Alert variant="warning">
-            <ShieldAlert aria-hidden="true" />
-            <AlertTitle>管理面板尚未接入认证与权限</AlertTitle>
-            <AlertDescription>
-              当前仅为布局骨架，不包含任何管理数据或写操作。生产环境开放前必须完成登录、角色校验和审计，或在
-              Nginx 层临时限制访问。
-            </AlertDescription>
-          </Alert>
           {children}
         </main>
       </div>

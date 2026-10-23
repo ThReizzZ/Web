@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowUpRight } from "lucide-react";
+import { Gamepad2 } from "lucide-react";
 
 import { Brand } from "@/components/layout/brand";
 import { PageContainer } from "@/components/layout/page-container";
@@ -26,9 +26,9 @@ export function SiteHeader() {
           </ul>
         </nav>
         <Button asChild size="sm" variant="outline">
-          <Link href="/forum">
-            进入论坛
-            <ArrowUpRight aria-hidden="true" />
+          <Link href="/servers">
+            <Gamepad2 aria-hidden="true" />
+            加入服务器
           </Link>
         </Button>
       </PageContainer>
