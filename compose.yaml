@@ -110,6 +110,7 @@ services:
       WEB_URL: ${SITE_URL:?SITE_URL must be set}
       STEAM_RETURN_URL: ${SITE_URL:?SITE_URL must be set}/api/v1/auth/steam/callback
       STEAM_REALM: ${SITE_URL:?SITE_URL must be set}
+      STEAM_COMMUNITY_BASE_URL: ${STEAM_COMMUNITY_BASE_URL:-https://steamcommunity.com}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
       ADMIN_STEAM_IDS: ${ADMIN_STEAM_IDS:-}

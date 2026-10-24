@@ -51,6 +51,9 @@
 - 新增 `POST /api/v1/plugin/report` 与每服务器插件令牌；管理面板支持生成、读取、轮换和撤销令牌。
 - 管理面板服务器卡片新增 `pluginState`（`disabled` / `waiting` / `connected`）与最近上报时间，玩家列表显示 SteamID64。
 - 新增 90 秒未上报自动离线和在线名单清理任务。
+- 新增 `STEAM_COMMUNITY_BASE_URL`：API 主机的 Steam OpenID 校验与资料查询可走
+  Cloudflare Worker 中继；新增 `deploy/cloudflare/steam-relay-worker.js`。
+  浏览器登录跳转不受影响，仍需客户端能访问 Steam。
 
 ### Changed
 

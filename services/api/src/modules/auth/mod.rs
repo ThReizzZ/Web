@@ -172,8 +172,8 @@ async fn complete_steam_login(
         );
         steam_profile_fallback(&steam_id64)
     } else {
-        verify_openid_assertion(&params).await?;
-        fetch_steam_profile(&steam_id64).await
+        verify_openid_assertion(settings, &params).await?;
+        fetch_steam_profile(settings, &steam_id64).await
     };
     let role = if settings.admin_steam_ids.iter().any(|id| id == &steam_id64) {
         "admin"
@@ -236,7 +236,10 @@ async fn complete_steam_login(
     Ok((user, token))
 }
 
-async fn verify_openid_assertion(params: &HashMap<String, String>) -> Result<(), AppError> {
+async fn verify_openid_assertion(
+    settings: &AuthSettings,
+    params: &HashMap<String, String>,
+) -> Result<(), AppError> {
     let mut form = params
         .iter()
         .filter(|(key, _)| key.as_str() != "openid.mode")
@@ -252,8 +255,9 @@ async fn verify_openid_assertion(params: &HashMap<String, String>) -> Result<(),
             AppError::internal_message(format!("failed to create Steam HTTP client: {error}"))
         })?;
 
+    let endpoint = format!("{}/openid/login", settings.steam_community_base_url);
     let response = client
-        .post(STEAM_OPENID_ENDPOINT)
+        .post(endpoint)
         .form(&form)
         .send()
         .await
@@ -285,7 +289,10 @@ fn steam_profile_fallback(steam_id64: &str) -> (String, Option<String>) {
     (fallback_name, None)
 }
 
-async fn fetch_steam_profile(steam_id64: &str) -> (String, Option<String>) {
+async fn fetch_steam_profile(
+    settings: &AuthSettings,
+    steam_id64: &str,
+) -> (String, Option<String>) {
     let (fallback_name, _) = steam_profile_fallback(steam_id64);
     let Ok(client) = Client::builder()
         .timeout(Duration::from_secs(10))
@@ -296,7 +303,8 @@ async fn fetch_steam_profile(steam_id64: &str) -> (String, Option<String>) {
     };
     let Ok(response) = client
         .get(format!(
-            "https://steamcommunity.com/profiles/{steam_id64}?xml=1"
+            "{}/profiles/{steam_id64}?xml=1",
+            settings.steam_community_base_url
         ))
         .send()
         .await
@@ -482,6 +490,7 @@ mod tests {
             web_url: "https://example.com".to_owned(),
             steam_return_url: "https://example.com/api/v1/auth/steam/callback".to_owned(),
             steam_realm: "https://example.com".to_owned(),
+            steam_community_base_url: "https://steamcommunity.com".to_owned(),
             cookie_secure: true,
             session_ttl_days: 30,
             admin_steam_ids: Vec::new(),

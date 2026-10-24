@@ -243,6 +243,11 @@ pub struct AuthSettings {
     pub web_url: String,
     pub steam_return_url: String,
     pub steam_realm: String,
+    /// Base URL used for server-side Steam Community calls (OpenID
+    /// `check_authentication` and profile XML). Deployments whose API host
+    /// cannot reach `steamcommunity.com` can point this at a relay. The
+    /// browser login redirect is deliberately unaffected.
+    pub steam_community_base_url: String,
     pub cookie_secure: bool,
     pub session_ttl_days: i64,
     pub admin_steam_ids: Vec<String>,
@@ -272,6 +277,12 @@ impl AuthSettings {
 
         let steam_realm = optional(lookup, "STEAM_REALM").unwrap_or_else(|| web_url.clone());
         validate_http_url("STEAM_REALM", &steam_realm)?;
+
+        let steam_community_base_url = optional(lookup, "STEAM_COMMUNITY_BASE_URL")
+            .unwrap_or_else(|| "https://steamcommunity.com".to_owned())
+            .trim_end_matches('/')
+            .to_owned();
+        validate_http_url("STEAM_COMMUNITY_BASE_URL", &steam_community_base_url)?;
 
         let session_ttl_days = number(lookup, "SESSION_TTL_DAYS", 30_i64)?;
         if session_ttl_days <= 0 || session_ttl_days > 365 {
@@ -314,6 +325,7 @@ impl AuthSettings {
             web_url,
             steam_return_url,
             steam_realm,
+            steam_community_base_url,
             cookie_secure: optional_bool(lookup, "COOKIE_SECURE")?
                 .unwrap_or(environment.is_production()),
             session_ttl_days,
@@ -469,9 +481,28 @@ mod tests {
         assert_eq!(settings.http.port, 8080);
         assert_eq!(settings.http.cors_allowed_origins, Vec::<String>::new());
         assert_eq!(settings.auth.web_url, "http://localhost:3000");
+        assert_eq!(
+            settings.auth.steam_community_base_url,
+            "https://steamcommunity.com"
+        );
         assert_eq!(settings.auth.session_ttl_days, 30);
         assert!(!settings.auth.cookie_secure);
         assert!(!settings.auth.steam_skip_openid_verification);
+    }
+
+    #[test]
+    fn steam_community_base_url_can_be_relayed() {
+        let settings = load(&[
+            ("APP_ENV", "development"),
+            ("DATABASE_URL", DATABASE_URL),
+            ("STEAM_COMMUNITY_BASE_URL", "https://steam.example/"),
+        ])
+        .expect("relay settings should be valid");
+
+        assert_eq!(
+            settings.auth.steam_community_base_url,
+            "https://steam.example"
+        );
     }
 
     #[test]

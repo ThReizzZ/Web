@@ -251,6 +251,17 @@ location /admin {
 
 网络限制是额外防护，不能替代 Steam 登录和角色校验。
 
+### Steam 登录网络限制
+
+API 主机必须能访问 `steamcommunity.com` 才能完成 OpenID `check_authentication` 和资料 XML 查询。如果服务器所在网络无法直连 Steam（例如中国大陆主机），可以让服务端请求走 Cloudflare Worker 中继：
+
+1. 按 [deploy/cloudflare/README.md](../deploy/cloudflare/README.md) 部署 Worker 到
+   `steam.threi.online`；
+2. 在 `.env` 设置 `STEAM_COMMUNITY_BASE_URL=https://steam.threi.online`；
+3. `docker compose up -d --no-deps --force-recreate api`。
+
+Worker 只代理服务端校验，**不会**让浏览器登录页变得可访问。用户浏览器仍需能打开 `steamcommunity.com`（例如使用代理/VPN）；否则登录会在跳转 Steam 时失败。不要在生产环境使用 `STEAM_SKIP_OPENID_VERIFICATION`。
+
 ### 游戏服务器状态与玩家
 
 API 不再轮询 A2S/RCON。每个游戏服务器需要安装 `plugins/ThRei_Players/` 中的 SourceMod 插件：
