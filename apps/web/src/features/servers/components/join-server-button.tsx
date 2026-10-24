@@ -1,0 +1,144 @@
+"use client";
+
+import { Gamepad2, X } from "lucide-react";
+import { useRef } from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { CopyAddressButton } from "@/features/servers/components/copy-address-button";
+import { ServerStatusBadge } from "@/features/servers/components/server-status-badge";
+import { getServerAddress, type KzServer } from "@/features/servers/data/servers";
+
+export function JoinServerButton({
+  server,
+  className,
+  variant = "default",
+  size = "default",
+}: {
+  server: KzServer;
+  className?: string;
+  variant?: "default" | "outline";
+  size?: "sm" | "default";
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const address = getServerAddress(server);
+  const enabled = server.status === "online";
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant={variant}
+        size={size}
+        className={className}
+        disabled={!enabled}
+        onClick={() => dialogRef.current?.showModal()}
+      >
+        <Gamepad2 aria-hidden="true" />
+        {enabled ? "加入游戏" : server.status === "maintenance" ? "维护中" : "离线"}
+      </Button>
+
+      <dialog
+        ref={dialogRef}
+        aria-labelledby={`join-${server.id}-title`}
+        className="m-auto w-[min(92vw,34rem)] rounded-2xl border bg-background p-0 text-foreground shadow-2xl backdrop:bg-slate-950/70"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            event.currentTarget.close();
+          }
+        }}
+      >
+        <div className="relative">
+          <div className="relative h-36 overflow-hidden rounded-t-2xl">
+            {server.mapImage ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={server.mapImage}
+                alt={`${server.map} 地图`}
+                className="absolute inset-0 size-full object-cover"
+              />
+            ) : (
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(16,185,129,0.35),transparent_55%)]" />
+            )}
+            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 to-transparent" />
+            <div className="absolute inset-x-0 top-0 flex items-start justify-between p-4">
+              <ServerStatusBadge status={server.status} />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 text-white hover:bg-white/15 hover:text-white"
+                onClick={() => dialogRef.current?.close()}
+                aria-label="关闭加入游戏对话框"
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </div>
+            <div className="absolute inset-x-0 bottom-0 p-4 text-white">
+              <p className="font-mono text-xs text-white/70">{server.map}</p>
+              <h2 id={`join-${server.id}-title`} className="text-xl font-semibold">
+                {server.name}
+              </h2>
+            </div>
+          </div>
+
+          <div className="space-y-5 p-5">
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="secondary">CS:GO KZ</Badge>
+              <Badge variant="outline">{server.tickrate} tick</Badge>
+              <Badge variant="outline">{server.region}</Badge>
+              <Badge variant="outline">
+                {server.players.length}/{server.maxPlayers} 在线
+              </Badge>
+            </div>
+
+            <div className="rounded-xl border bg-muted/30 p-4">
+              <p className="text-xs text-muted-foreground">服务器地址（IP : PORT）</p>
+              <p className="mt-1 font-mono text-sm font-medium break-all">{address}</p>
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Button asChild>
+                  <a href={`steam://connect/${address}`}>
+                    <Gamepad2 aria-hidden="true" />
+                    启动 CS:GO
+                  </a>
+                </Button>
+                <CopyAddressButton address={address} label="复制服务器地址" className="w-full" />
+              </div>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                需要本机已安装 Steam 与 CS:GO；浏览器可能会询问是否打开 Steam。
+              </p>
+            </div>
+
+            <div>
+              <p className="text-sm font-medium">如何加入</p>
+              <ol className="mt-2 space-y-2 text-sm text-muted-foreground">
+                <li className="flex gap-2">
+                  <span className="font-mono text-xs text-primary">01</span>
+                  启动 Steam，选择 Counter-Strike: Global Offensive。
+                </li>
+                <li className="flex gap-2">
+                  <span className="font-mono text-xs text-primary">02</span>
+                  打开开发者控制台，输入{" "}
+                  <code className="rounded bg-muted px-1 font-mono text-xs text-foreground">
+                    connect {address}
+                  </code>
+                  。
+                </li>
+                <li className="flex gap-2">
+                  <span className="font-mono text-xs text-primary">03</span>
+                  或直接点击上方“启动 CS:GO”，由 Steam 连接服务器。
+                </li>
+              </ol>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              当前在线 {server.players.length} / {server.maxPlayers} 人 ·{" "}
+              {server.latencyMs === null ? "延迟未知" : `延迟约 ${server.latencyMs} ms`} · KZ
+              计时器与检查点由服务器插件提供。
+            </p>
+          </div>
+        </div>
+      </dialog>
+    </>
+  );
+}

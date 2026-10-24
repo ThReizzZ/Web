@@ -15,14 +15,26 @@ use crate::{
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "threi API",
+        title = "ThRei API",
         version = env!("CARGO_PKG_VERSION"),
-        description = "threi community API. Business endpoints are versioned under /api/v1. Health endpoints are infrastructure-only and are not routed through the public Nginx entry point."
+        description = "ThRei community API. Business endpoints are versioned under /api/v1. Health endpoints are infrastructure-only and are not routed through the public Nginx entry point."
     ),
     paths(
         crate::routes::health::live,
         crate::routes::health::ready,
-        crate::routes::system::info
+        crate::routes::system::info,
+        crate::modules::auth::steam_login,
+        crate::modules::auth::steam_callback,
+        crate::modules::auth::me,
+        crate::modules::auth::logout,
+        crate::modules::servers::list_servers,
+        crate::modules::forum::list_categories,
+        crate::modules::forum::list_topics,
+        crate::modules::forum::get_topic,
+        crate::modules::forum::list_active_users,
+        crate::modules::community::overview,
+        crate::modules::account::account_overview,
+        crate::modules::admin::overview
     ),
     components(schemas(
         LivenessResponse,
@@ -36,7 +48,13 @@ use crate::{
     )),
     tags(
         (name = "health", description = "Liveness and readiness probes"),
-        (name = "system", description = "Public service metadata")
+        (name = "system", description = "Public service metadata"),
+        (name = "auth", description = "Steam OpenID login and cookie sessions"),
+        (name = "servers", description = "KZ server directory and live players"),
+        (name = "forum", description = "Forum categories, topics and replies"),
+        (name = "community", description = "Community-wide statistics"),
+        (name = "account", description = "Authenticated user account"),
+        (name = "admin", description = "Admin-only operational data")
     )
 )]
 pub struct ApiDoc;

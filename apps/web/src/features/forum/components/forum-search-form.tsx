@@ -52,7 +52,7 @@ export function ForumSearchForm({ defaultQuery = "" }: { defaultQuery?: string }
           <Input
             id="forum-search"
             type="search"
-            placeholder="输入标题关键词"
+            placeholder="搜索主题、标签或作者"
             className="pl-9"
             aria-invalid={errors.q ? true : undefined}
             aria-describedby={errors.q ? "forum-search-error" : undefined}

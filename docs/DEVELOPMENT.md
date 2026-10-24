@@ -17,6 +17,1173 @@
 
 ---
 
+## 2026年10月24日 00时43分30秒 管理列表恢复列表式并修复玩家名称截断
+
+### 背景
+
+上一版将管理员、封禁和白名单授权改成了双列卡片。用户反馈卡片式不好看，仍然偏好上一版的列表式布局，但必须解决玩家内容挤在一起、玩家名称显示不全和需要横向滚动的问题。
+
+本次以 00:27:42 的卡片布局为被取代设计；旧记录保留用于追溯。
+
+### 变更内容
+
+#### 1. 恢复列表式布局
+
+- 管理员列表恢复为单列 `divide-y` 列表，不再使用双列卡片。
+- 封禁记录恢复为单列列表，每条记录占满整行。
+- 白名单“已授权名单”恢复为单列列表。
+- 最近注册成员恢复为单列列表。
+- 保留表单、待审核申请和服务器白名单设置的现有结构。
+
+#### 2. 解决挤在一起和名称显示不全
+
+- 玩家名称不再使用 `truncate`，改为 `break-words`，长名称完整换行显示。
+- SteamID64 使用 `break-all`，长数字不会撑破容器。
+- 管理员列表把状态、SteamID64、最近登录、加入时间分到不同行/区块，不再和名称、操作按钮挤在同一行。
+- 管理员操作按钮放在独立区域，窄屏自动移动到下一行。
+- 封禁列表的玩家信息、封禁原因、期限/解封信息分块展示。
+- 白名单授权列表的玩家信息、服务器、授权时间、添加者和移除按钮分行展示。
+- 列表项保留清楚的间距和分隔线，避免内容拥挤。
+- 移动端管理导航改为自动换行，避免“白名单审核”等入口被裁切或需要横向滚动。
+
+#### 3. 补充玩家头像
+
+- 封禁 API 返回 `avatarUrl`，封禁列表显示玩家头像或首字回退头像。
+- 白名单申请与授权记录 API 返回 `avatarUrl`，列表使用真实 Steam 头像或回退头像。
+- 管理员列表继续显示真实 Steam 头像。
+
+#### 4. 保留此前的功能
+
+- 管理员新增仍支持 SteamID64 查询下拉框，显示头像、昵称、SteamID64 后选择再添加。
+- 服务状态入口和独立区块保持删除状态。
+- 管理面板导航保持：概览、管理员、封禁管理、白名单审核。
+
+### 涉及文件
+
+- `apps/web/src/features/admin/components/admin-accounts-manager.tsx`
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `apps/web/src/features/admin/components/whitelist-manager.tsx`
+- `apps/web/src/app/(admin)/admin/page.tsx`
+- `apps/web/src/features/admin/types.ts`
+- `services/api/src/modules/bans.rs`
+- `services/api/src/modules/whitelist.rs`
+- `docs/DEVELOPMENT.md`
+
+### 数据库与 API 变化
+
+- 无数据库迁移变化。
+- `GET /api/v1/admin/bans`、创建封禁响应增加 `avatarUrl`。
+- `GET /api/v1/admin/whitelist` 的申请与授权记录增加 `avatarUrl`。
+- 管理列表不再有宽表格，不需要横向滚动。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 11 项、HTTP 合约测试 14 项，共 25 项通过；
+  - TypeScript、ESLint、Prettier、Clippy、rustfmt 通过。
+- `npm run build`：通过。
+- Playwright 使用临时长昵称数据验证：
+  - 1440 宽度下管理员、封禁、白名单长名称完整显示，无页面横向滚动；
+  - 390 宽度下列表自动改为单列，名称自动换行，操作按钮移动到底部，无页面横向滚动；管理导航自动换行显示完整入口；
+  - 管理员页、封禁页、白名单页、概览均无 console/pageerror。
+- 临时管理员、测试用户、测试服务器、测试封禁、白名单申请/授权和临时会话均已清理。
+- 当前数据库：1 位真实管理员、1 篇官方指南、0 个服务器、0 条封禁、0 条白名单申请/授权。
+
+
+---
+
+## 2026年10月24日 00时27分42秒 管理面板去重复、管理员查询与卡片化布局
+
+### 背景
+
+用户反馈：
+
+1. 运营概览和“服务状态”功能重复，要求删除服务状态，服务状态已由概览覆盖；
+2. 管理员、封禁管理、白名单审核页面中部分信息需要向右滚动才能看全；
+3. 新增管理员输入 SteamID64 后，需要出现包含玩家头像、昵称和 SteamID64 的下拉框，选择后再点击“添加管理员”；
+4. 封禁与白名单页面同样不能出现需要横向滚动才能看全的信息；
+5. 继续改善管理页面布局和美观度。
+
+### 变更内容
+
+#### 1. 删除重复的“服务状态”
+
+- 管理侧边栏移除“服务状态”项。
+- 运营概览移除独立的 `id="status"` 区块、`SystemStatusCard` 和服务器节点卡片。
+- 删除未再使用的前端文件：
+  - `features/admin/components/system-status-card.tsx`
+  - `hooks/use-system-status.ts`
+  - `services/system.ts`
+- 删除 `types/api.ts` 中的 `SystemInfo` 类型。
+- 后端 `/api/v1/system/info` 保留为基础设施接口，但管理面板不再调用；服务器统计继续显示在概览卡片和快捷入口中。
+
+#### 2. 新增管理员查询下拉框
+
+- 新增管理员 API：`GET /api/v1/admin/users/lookup?steamId64=...`
+  - 仅管理员可调用；
+  - 返回玩家的 SteamID64、昵称、头像、角色、禁用状态；
+  - 未找到返回 `{ "user": null }`。
+- 管理员页面输入 17 位 SteamID64 后进行 280ms 防抖查询，出现下拉框：
+  - 显示头像、昵称、SteamID64；
+  - 显示“成员 / 已是管理员 / 已禁用”状态；
+  - 点击选择后，在表单中显示已选玩家确认卡片；
+  - 点击“添加管理员”才真正提交。
+- 未找到已登录玩家时，下拉框提供“选择该 SteamID 创建占位管理员”的选项，保留为未登录用户预建管理员的能力。
+- 已是管理员的玩家不能被重复添加；已禁用玩家选中后仍可通过添加/启用流程处理。
+
+#### 3. 列表改为响应式卡片
+
+- 管理员列表从宽表格改为卡片行：
+  - 头像、昵称、SteamID64、状态、禁用原因、最近登录、加入时间、操作按钮；
+  - 所有信息在卡片内换行展示，不再需要横向滚动。
+- 封禁记录从宽表格改为卡片：
+  - 玩家、SteamID64、原因、封禁类型、期限、操作者、解封信息和解封按钮；
+  - 右侧操作按钮在窄屏自动换行到卡片底部。
+- 白名单“已授权名单”从表格改为卡片行：
+  - 玩家、SteamID64、服务器、添加时间、添加者、移除按钮；
+  - 窄屏自动纵向排列。
+- 运营概览“最近注册”也从宽表格改为成员卡片，移除管理面板最后一处需要横向滚动的表格。
+- 管理页继续保持“列表优先、表单在下方/右侧”的结构；1440 宽度下列表完整显示，1536 以上表单在右侧。
+- 管理主内容增加 `overflow-x-hidden` 和 `min-w-0`，修复移动端页面横向溢出；内部表格不再作为主展示方式。
+
+### 涉及文件
+
+- `apps/web/src/app/(admin)/admin/page.tsx`
+- `apps/web/src/app/(admin)/layout.tsx`
+- `apps/web/src/features/admin/components/admin-nav.tsx`
+- `apps/web/src/features/admin/components/admin-accounts-manager.tsx`
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `apps/web/src/features/admin/components/whitelist-manager.tsx`
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/services/content.ts`
+- `apps/web/src/types/api.ts`
+- 删除 `apps/web/src/features/admin/components/system-status-card.tsx`
+- 删除 `apps/web/src/hooks/use-system-status.ts`
+- 删除 `apps/web/src/services/system.ts`
+- `services/api/src/modules/admin_users.rs`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `README.md`
+
+### 数据库与 API 变化
+
+- 无数据库迁移变化。
+- 新增 `GET /api/v1/admin/users/lookup`。
+- 管理面板不再调用 `/api/v1/system/info`；后端接口保留。
+- 管理员、封禁、白名单 API 契约保持不变。
+- 当前数据库仍为：1 位真实管理员、1 篇官方指南、0 个服务器、0 条封禁、0 条白名单申请/授权；临时测试数据已清理。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 11 项、HTTP 合约测试 14 项，共 25 项通过；
+  - TypeScript、ESLint、Prettier、Clippy、rustfmt 通过。
+- `npm run build`：通过；管理面板路由为 `/admin`、`/admin/admins`、`/admin/bans`、`/admin/whitelist`。
+- API 实测：
+  - `/admin/users/lookup` 对存在的玩家返回头像信息，对未知 SteamID64 返回 `user:null`；
+  - 匿名管理员接口仍返回 401。
+- Playwright 实测：
+  - 概览和侧边栏不再出现“服务状态”；
+  - 输入临时玩家 SteamID64 后出现含昵称/SteamID64 的下拉项，选择后添加管理员成功；
+  - 管理员列表、封禁记录、白名单授权均以卡片完整展示，1440 和 390 宽度无页面横向滚动；
+  - 管理页面无 console/pageerror。
+- 临时管理员、测试服务器、临时封禁、白名单申请、临时会话均已清理；未执行真实游戏服务器插件、Docker、HTTPS 验证。
+
+
+---
+
+## 2026年10月24日 00时03分08秒 管理面板：管理员、封禁与白名单功能
+
+### 背景
+
+用户要求：
+
+1. 将 SteamID64 `76561198298405388` 设为管理员；
+2. 删除运营概览里的“真实数据 / 页面数据来自 PostgreSQL / 管理员由 ADMIN_STEAM_IDS 配置”提示；
+3. 管理面板新增管理员管理，支持新增、删除（取消管理员）、禁用/启用，生产环境不能只有一位管理员；
+4. 新增封禁管理，对违规玩家封禁、解封；
+5. 新增白名单审核，管理需要白名单的服务器、审核申请、授权/移除玩家；
+6. 合理规划布局并改善页面美观度。
+
+### 变更内容
+
+#### 1. 管理员与权限
+
+- 本地数据库已将 `76561198298405388` 的 `users.role` 更新为 `admin`；本地 `services/api/.env` 的 `ADMIN_STEAM_IDS` 已包含该 ID（文件被 Git 忽略，不提交）。
+- `ADMIN_STEAM_IDS` 现在只用于首次创建/引导管理员。登录 upsert 改为保留数据库中的角色，不会在每次登录时覆盖管理面板修改。
+- 新增 `users.is_disabled`、`disabled_at`、`disabled_reason`：
+  - 禁用管理员后立即删除其所有会话；
+  - 禁用用户不能登录；
+  - 启用只恢复登录资格，不自动创建会话。
+- 管理员不能取消/禁用自己；最后一位可用管理员不能被取消或禁用。
+- 管理面板 `/admin` 布局在服务端再次校验收会话与角色；匿名重定向 `/account`，普通成员重定向首页。
+- 顶部导航仍只对管理员显示“管理面板”。
+
+#### 2. 管理员管理页面
+
+新增 `/admin/admins`：
+
+- 列表显示头像、昵称、SteamID64、状态、最近登录、加入时间；
+- 新增管理员：输入 SteamID64，支持尚未登录的用户（创建占位账号，首次登录保留管理员角色）；
+- 取消管理员：降级为成员并撤销会话；
+- 禁用/启用账号；
+- 当前账号操作按钮禁用，后端再次保护；
+- 页面说明生产环境至少保留两位管理员。
+
+#### 3. 封禁管理
+
+新增 `/admin/bans`：
+
+- 新增 `bans` 表：SteamID64、玩家昵称、原因、到期时间、操作者、解封者、解封原因。
+- 创建临时（24h/7d/30d）或永久封禁；
+- 封禁后立即撤销目标网站会话；
+- 登录与 `/auth/me` 查询会拒绝生效封禁；
+- 列表区分生效/已结束，支持解封并保留历史；
+- 管理员账号不能直接封禁，必须先在管理员页取消权限。
+
+#### 4. 白名单审核
+
+新增 `/admin/whitelist`、`server_whitelist`、`whitelist_applications`、`servers.requires_whitelist`：
+
+- 管理服务器是否开启白名单；
+- 查看待审核申请，填写审核备注后通过/拒绝；
+- 通过申请自动写入 `server_whitelist`；
+- 手动按 SteamID64 添加白名单；
+- 移除已授权玩家；
+- 显示服务器授权数、待审核数；
+- 用户中心新增“白名单申请”卡片：仅当存在开启白名单的服务器时显示，登录玩家可选择服务器并提交说明；
+- 服务器 API 和卡片增加 `requiresWhitelist` 字段/标识；
+- 未授权玩家、白名单数据的游戏内拦截仍需要服务器插件读取数据库。
+
+#### 5. 布局与视觉
+
+- 管理侧边栏改为真实路由导航：概览、管理员、封禁管理、白名单审核、服务状态，支持当前页高亮。
+- 管理页面统一“列表优先、表单在下方/右侧”的布局；宽屏使用表格，窄屏内部横向滚动，页面本身不横向溢出。
+- 表单在 1440 宽度下使用紧凑多列布局，避免整页被长表单拉长。
+- 运营概览新增“管理员管理 / 封禁管理 / 白名单审核”快捷入口和待审/生效封禁统计。
+- 删除运营概览的“真实数据”提示卡片及相关文案。
+- 管理页头显示当前管理员头像/昵称。
+- 修复管理表格在 1440 下右侧操作列被截断、手机端页面横向溢出 19px 的问题。
+
+### 涉及文件
+
+- `services/api/migrations/20261023235000_admin_moderation_whitelist.sql`（新增）
+- `services/api/src/modules/admin_users.rs`（新增）
+- `services/api/src/modules/bans.rs`（新增）
+- `services/api/src/modules/whitelist.rs`（新增）
+- `services/api/src/modules/auth/mod.rs`
+- `services/api/src/modules/admin.rs`
+- `services/api/src/modules/servers.rs`
+- `services/api/src/modules/mod.rs`
+- `services/api/src/routes/mod.rs`
+- `apps/web/src/app/(admin)/layout.tsx`
+- `apps/web/src/app/(admin)/admin/page.tsx`
+- `apps/web/src/app/(admin)/admin/admins/page.tsx`（新增）
+- `apps/web/src/app/(admin)/admin/bans/page.tsx`（新增）
+- `apps/web/src/app/(admin)/admin/whitelist/page.tsx`（新增）
+- `apps/web/src/features/admin/components/admin-nav.tsx`
+- `apps/web/src/features/admin/components/admin-accounts-manager.tsx`（新增）
+- `apps/web/src/features/admin/components/bans-manager.tsx`（新增）
+- `apps/web/src/features/admin/components/whitelist-manager.tsx`（新增）
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/features/account/components/whitelist-apply-card.tsx`（新增）
+- `apps/web/src/app/(account)/account/page.tsx`
+- `apps/web/src/app/(servers)/servers/page.tsx`（仅沿用现有；服务器 API 类型更新）
+- `apps/web/src/features/servers/data/servers.ts`
+- `apps/web/src/features/servers/components/server-card.tsx`
+- `apps/web/src/features/servers/components/server-list-row.tsx`
+- `apps/web/src/services/content.ts`
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/API.md`
+- `docs/CHANGELOG.md`
+- `docs/DEPLOYMENT.md`
+
+### 数据库与 API 变化
+
+新增迁移 `20261023235000_admin_moderation_whitelist.sql`：
+
+- `users.is_disabled`、`disabled_at`、`disabled_reason`
+- `servers.requires_whitelist`
+- `bans`
+- `whitelist_applications`
+- `server_whitelist`
+
+新增管理 API：
+
+- `GET/POST /api/v1/admin/admins`
+- `DELETE /api/v1/admin/admins/{steam_id64}`
+- `POST /api/v1/admin/admins/{steam_id64}/disable`
+- `POST /api/v1/admin/admins/{steam_id64}/enable`
+- `GET/POST /api/v1/admin/bans`
+- `POST /api/v1/admin/bans/{id}/lift`
+- `GET/POST /api/v1/admin/whitelist`
+- `POST /api/v1/admin/whitelist/applications/{id}/approve`
+- `POST /api/v1/admin/whitelist/applications/{id}/reject`
+- `DELETE /api/v1/admin/whitelist/{server_id}/{steam_id64}`
+- `PATCH /api/v1/admin/servers/{id}/whitelist`
+- `POST /api/v1/whitelist/applications`（登录玩家提交）
+
+认证变化：
+
+- 登录 upsert 保留现有数据库角色；
+- 禁用用户/生效封禁用户在登录和会话查询时被拒绝；
+- 禁用管理员、封禁玩家时删除其现有会话。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 11 项、HTTP 合约测试 14 项，共 25 项通过；
+  - Clippy、rustfmt、TypeScript、ESLint、Prettier 全部通过。
+- `npm run build`：通过，包含 `/admin/admins`、`/admin/bans`、`/admin/whitelist` 新路由。
+- 数据库迁移已应用；测试数据随后清理。
+- API 实测：
+  - 匿名访问管理员接口返回 401；
+  - 新增临时管理员、取消管理员；
+  - 禁用/启用临时管理员；
+  - 自身禁用返回 400；
+  - 创建临时封禁、解封；
+  - 被禁用户即使有会话，`/auth/me` 返回 `user:null`；
+  - 通过白名单申请、生成授权记录；
+  - 开关服务器白名单；
+  - 登录玩家提交白名单申请。
+- Playwright 实测：
+  - 管理员概览不再包含“真实数据/页面数据来自 PostgreSQL”提示；
+  - 快捷入口、管理员列表、封禁列表、白名单列表在 1440 宽度下无截断；
+  - 通过 UI 新增管理员、创建/解封封禁、通过白名单申请；
+  - 用户中心提交白名单申请；
+  - 匿名/普通成员无法看到或进入管理面板；管理员可进入；
+  - 1440、1024、390 宽度下管理页面无页面级横向溢出；390 下修复了 19px 溢出；
+  - 无 console/pageerror。
+- 临时测试用户、服务器、封禁、白名单和会话已清理。当前数据库：1 位真实成员（管理员）、1 篇官方指南、0 个服务器、0 条封禁、0 条白名单申请/授权；系统账号不计入成员。
+- 未执行：游戏服务器插件白名单/封禁拦截、Docker 镜像构建、`nginx -t`、HTTPS 验证。
+
+### 待办与风险
+
+- 游戏内封禁和白名单拦截需要服务器插件在连接前读取 `bans` / `server_whitelist` / `servers.requires_whitelist`；当前 Web 只完成管理和审核。
+- 白名单申请审核结果不会自动通知玩家（通知系统未实现）。
+- 管理员操作审计、登录限流和 CSRF 仍未实现。
+- 生产环境需要通过 `ADMIN_STEAM_IDS` 引导至少一位管理员，之后在管理面板添加更多管理员；建议保留至少两位。
+- 服务器记录新增/管理接口仍未实现，白名单设置只对已存在的服务器生效。
+
+
+---
+
+## 2026年10月23日 23时21分00秒 管理员导航、新手指南与 Steam 回调地址修正
+
+### 背景
+
+用户提出三项修改：
+
+1. 顶部导航中的“管理面板”只允许管理员 Steam 用户看到和进入；
+2. 论坛“新手指南”卡片的按钮“查看服务器状态”改为“查看教学”，跳转到详细说明进入服务器、被拦截时如何申请白名单的教学帖；
+3. 本地 Steam 登录回调返回 `http://127.0.0.1:3100/...` 时浏览器提示“127.0.0.1 拒绝了我们的连接请求”。
+
+### 变更内容
+
+#### 1. 管理面板入口按角色显示
+
+- `siteConfig.nav` 移除固定的“管理面板”项。
+- `SiteHeader` 在 `/auth/me` 返回 `role=admin` 时才追加“管理面板”导航项；匿名用户和普通成员不渲染该入口。
+- 页脚移除“管理面板”链接，避免非管理员从其他入口看到管理入口。
+- `(admin)/layout.tsx` 在服务端读取 `/auth/me`：匿名访问 `/admin` 重定向到 `/account`，普通成员重定向到 `/`，只有管理员进入面板。
+- `/api/v1/admin/overview` 继续在 API 层校验角色；不依赖前端隐藏。
+
+#### 2. 官方新手指南
+
+新增迁移 `services/api/migrations/20261023233000_seed_new_player_guide.sql`：
+
+- `users` 增加 `is_system boolean NOT NULL DEFAULT false`；
+- 预置 `ThRei 系统` 账号（`is_system=true`，`role=admin`），只用于官方指南作者；
+- 预置主题 `new-player-guide`：
+  - 分类：技巧与教学；
+  - 标题：新手指南：进入 KZ 服务器与白名单申请；
+  - 置顶；
+  - 内容覆盖：进入服务器步骤、常见拦截原因、白名单申请所需信息、提交方式、常见问题、VAC/封禁/满员说明；
+- 系统账号不计入成员数、角色分布、最近注册、最近活跃和社区活跃人数统计。
+
+论坛“新手指南”卡片的按钮改为“查看教学”，指向 `/forum/topic/new-player-guide`。主题正文使用 `whitespace-pre-line` 保留单换行，让编号步骤分行显示。
+
+论坛作者角色统一显示中文（管理员/版主/成员），不再直接显示数据库中的 `admin`/`member`。
+
+#### 3. Steam 回调地址修正
+
+- 开发环境站点 origin 从 `http://127.0.0.1:3100` 改为开发机局域网地址 `http://192.168.0.101:3100`。
+- `services/api/.env` 中 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM` 同步改为该局域网地址；CORS 同时允许 `127.0.0.1`、`localhost` 与 `192.168.0.101`。
+- `apps/web/.env.local` 的 `NEXT_PUBLIC_SITE_URL` 同步改为局域网地址，并以该地址重新构建 Web。
+- 将回调中出现的真实 SteamID64 写入本地被 Git 忽略的 `ADMIN_STEAM_IDS`，并把已登录用户角色更新为 `admin`。不把该值写入仓库。
+- Steam 头像实际返回 `avatars.fastly.steamstatic.com`，补充 Next Image 远程域名白名单；已通过真实 Steam 头像验证加载。
+
+#### 4. 回调报错原因
+
+浏览器返回的 `openid.return_to` 是 `http://127.0.0.1:3100/api/v1/auth/steam/callback`。如果浏览器不在开发服务器本机，`127.0.0.1` 会指向浏览器自己的机器，而不是开发机，因此出现连接拒绝。
+
+服务端本身在 3100 端口正常监听。使用用户提供的回调参数在本机验证时，Steam OpenID 校验成功、会话可以写入，说明登录回调代码本身可用；该验证会话随后已通过 `/auth/logout` 删除。旧回调中的 nonce 已使用，用户需要从新 origin 重新点击“使用Steam登录”。
+
+修正后，浏览器应访问：
+
+```text
+http://192.168.0.101:3100
+```
+
+Steam 回调会指向同一 origin。若以后通过域名或端口转发访问，必须同步修改开发环境 `.env` 的 `WEB_URL`/`STEAM_RETURN_URL`/`STEAM_REALM` 与 Web 的 `NEXT_PUBLIC_SITE_URL`，不能把 `127.0.0.1` 写死给远程浏览器。
+
+### 涉及文件
+
+- `apps/web/src/lib/site-config.ts`
+- `apps/web/src/components/layout/site-header.tsx`
+- `apps/web/src/components/layout/site-footer.tsx`
+- `apps/web/src/app/(forum)/forum/page.tsx`
+- `apps/web/src/app/(forum)/forum/topic/[id]/page.tsx`
+- `apps/web/src/features/forum/components/topic-row.tsx`
+- `apps/web/src/lib/roles.ts`（新增）
+- `apps/web/src/lib/format.ts`（仅此前时间格式；本次未改）
+- `apps/web/src/app/(account)/account/page.tsx`
+- `apps/web/src/app/(admin)/admin/page.tsx`
+- `apps/web/next.config.ts`
+- `apps/web/.env.local`（Git 忽略）
+- `services/api/.env`（Git 忽略）
+- `services/api/migrations/20261023233000_seed_new_player_guide.sql`（新增）
+- `services/api/src/modules/community.rs`
+- `services/api/src/modules/admin.rs`
+- `services/api/src/modules/forum.rs`
+- `docs/DEVELOPMENT.md`
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `docs/DEPLOYMENT.md`
+
+### 数据库与 API 变化
+
+- 新迁移：`users.is_system`、系统账号 1 个、官方指南主题 1 篇。
+- 没有新增 API 路径；以下查询增加系统账号过滤：
+  - 社区成员数与本周活跃人数；
+  - 管理员成员数、今日登录、角色分布、最近注册和 7 天新成员；
+  - 论坛最近活跃作者。
+- 论坛主题/分类计数包含官方指南；成员统计不包含系统账号。
+- 当前数据库真实成员 1 人，主题 1 篇（官方指南），服务器 0 个，在线玩家 0 人；没有模拟服务器或模拟玩家。
+- API 回调与登录路由未变；OpenID 校验逻辑未变，只修正了开发环境回调 origin。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过，Rust 单元测试 11 项、HTTP 合约测试 13 项，共 24 项；TypeScript、ESLint、Prettier 通过。
+- `npm run build`：通过，Web 以 `NEXT_PUBLIC_SITE_URL=http://192.168.0.101:3100` 构建。
+- 数据库：
+  - 新迁移执行成功；
+  - 社区接口返回成员 1、主题 1、活跃成员 0（系统账号被排除）；
+  - 论坛主题列表包含 `new-player-guide`，作者为“ThRei 系统”，角色显示“管理员”；
+  - `/api/v1/community/overview` 不再把系统账号计入成员。
+- Playwright（以 `http://192.168.0.101:3100` 访问）：
+  - 匿名用户顶部导航不包含“管理面板”；
+  - 临时管理员会话顶部导航包含“管理面板”，真实 Steam 头像加载成功（184×184，fastly 域名）；
+  - 临时普通成员会话顶部导航不包含“管理面板”；
+  - 管理员会话访问 `/admin` 显示运营概览；
+  - 普通成员直接访问 `/admin` 服务端重定向到 `/`，匿名访问重定向到 `/account`；
+  - 论坛“查看教学”按钮存在，href 为 `/forum/topic/new-player-guide`；
+  - 点击后进入教学帖，正文包含“进入服务器”“白名单申请”“SteamID64”“帮助与反馈”“VAC”等段落；
+  - 作者角色显示中文“管理员”，教程编号步骤保留换行；
+  - `/admin` 管理员页面可访问。
+- 真实回调：
+  - 使用用户提供的 Steam 断言参数在本机回调，Steam OpenID `check_authentication` 通过，服务端成功创建会话并设置 Cookie；
+  - 随后删除该会话，避免留下测试登录；
+  - 浏览器端需要从 `http://192.168.0.101:3100` 重新发起一次登录，旧 nonce 已消耗。
+- 未执行：从新 origin 重新完成一次浏览器 Steam 授权、Docker 镜像构建/启动、`nginx -t`、HTTPS 验证。
+
+### 待办与风险
+
+- 若开发机 IP 变化，必须同步更新开发 `.env` 和 Web 的 `NEXT_PUBLIC_SITE_URL`。
+- 如果用户从另一台机器访问，应使用开发机局域网 IP，而不是浏览器自己的 `127.0.0.1`。
+- 论坛发帖/回复写接口仍未开放；指南中的白名单申请暂时按“联系服务器内管理员”执行。
+- `ADMIN_STEAM_IDS` 只保存在本地 `.env`；生产部署需要在 Compose `.env` 中配置。
+- 官方指南使用独立系统账号，已从成员/活跃统计中排除；后续新增官方内容应继续使用 `is_system=true`。
+
+
+---
+
+## 2026年10月23日 22时57分47秒 Steam 登录、真实数据与局域网数据库接入
+
+### 背景
+
+用户要求：
+
+1. 顶部导航的“加入服务器”改为“使用Steam登录”，点击后跳转 Steam 登录，并将 Steam 作为网站唯一登录方式；
+2. 删除前端模拟数据，网站全部改为真实数据；
+3. 开发环境连接局域网 PostgreSQL `192.168.0.62`（用户 `test`、库 `test`）与 Redis `192.168.0.62`（带密码），生产环境后续使用 Docker Compose 拉起的 PostgreSQL/Redis。
+
+本次没有创建 Git commit，也没有 push；所有改动保留在工作区。
+
+### 变更内容
+
+#### 1. Steam OpenID 登录
+
+- 新增 `GET /api/v1/auth/steam/login`：构造 Steam OpenID 2.0 `checkid_setup` 请求并返回 307。
+- 新增 `GET /api/v1/auth/steam/callback`：
+  - 校验 `openid.mode=id_res` 与 `openid.return_to`；
+  - 将断言以 `check_authentication` POST 回 Steam，只有响应包含 `is_valid:true` 才信任；
+  - 从 `openid.claimed_id` 提取 17 位 SteamID64；
+  - 读取公开 Steam profile XML 的昵称与头像，失败时回退到 `Steam 用户 <ID 后 6 位>`；
+  - 按 `steam_id64` upsert `users`；
+  - 生成随机会话令牌，数据库保存 SHA-256 哈希；
+  - 设置 `threi_session` HttpOnly Cookie 并跳转 `/account`。
+- 新增 `GET /api/v1/auth/me`、`POST /api/v1/auth/logout`。
+- Cookie 参数：`Path=/`、`HttpOnly`、`SameSite=Lax`，生产环境可配置 `Secure`；默认 30 天过期。
+- 顶部导航未登录显示“使用Steam登录”，登录后显示 Steam 用户头像与名称；用户中心未登录显示登录卡片。
+- `ADMIN_STEAM_IDS` 中的 SteamID64 在登录时获得 `admin` 角色；`/admin` 与服务端 API 均校验，不再公开。
+- Steam 回调地址、realm、Web origin 全部通过环境变量配置；生产 `WEB_URL` 必填。
+
+#### 2. 真实数据库与 API
+
+新增迁移 `services/api/migrations/20261023230000_real_content_and_steam_auth.sql`，建立：
+
+- `users`、`sessions`
+- `servers`、`server_players`
+- `categories`、`topics`、`replies`
+- `favorites`
+
+迁移只预置 5 个论坛分类作为结构配置，不写入任何服务器、用户、主题、回复或模拟统计。
+
+新增只读业务 API：
+
+- `GET /api/v1/servers`
+- `GET /api/v1/forum/categories`
+- `GET /api/v1/forum/topics`
+- `GET /api/v1/forum/topics/{slug}`
+- `GET /api/v1/forum/active-users`
+- `GET /api/v1/community/overview`
+- `GET /api/v1/account`（登录）
+- `GET /api/v1/admin/overview`（管理员）
+- auth 路由 4 个（见上）
+
+API 查询全部绑定参数，不拼接用户输入；论坛搜索限制 `q` 最长 120 字符、分类最长 64 字符、列表最多 50 条。
+
+#### 3. 前端删除模拟数据
+
+删除：
+
+- `features/forum/data/forum.ts`
+- `features/account/data/account.ts`
+- `features/admin/data/dashboard.ts`
+- 12 张 `public/images/servers/kz-*.svg`
+- 模拟服务器、玩家昵称/头像、主题、回复、通知、徽章、审核队列、审计日志和系统设置。
+
+保留：
+
+- `features/servers/data/servers.ts`：仅 `KzServer` / `KzPlayer` 类型、地址、搜索与统计工具，不再包含数据；
+- `public/.gitkeep`：保持 Dockerfile 的 `public/` 复制路径有效。
+
+首页、服务器页、论坛页、分类页、主题详情、用户中心和管理面板改为 Server Components 调用 `services/content.ts`，即 API/PostgreSQL 数据。空库时显示空状态，不回退到模拟内容。
+
+服务器地图图片改由数据库 `servers.map_image` 提供；卡片使用普通 `<img>` 以支持任意真实图片地址，Steam 头像仍通过 Next Image 与远程域名白名单加载。
+
+#### 4. 开发环境外部数据库
+
+本地被 Git 忽略的 `services/api/.env` 已切换为：
+
+- PostgreSQL：局域网 `192.168.0.62:5432`，用户/库按用户提供；
+- Redis：局域网 `192.168.0.62:6379`，使用用户提供的密码；
+- 开发环境 `REDIS_REQUIRED=false`，Redis 仅用于就绪检查/后续缓存；
+- `WEB_URL` 与 Steam 回调指向本地预览 `http://127.0.0.1:3100`。
+
+真实密码没有写入 README、`.env.example`、代码或 Git；生产环境仍使用 Compose 内 PostgreSQL/Redis。Compose 增加 auth 环境变量，并由 `SITE_URL` 派生 Steam 回调与 realm。
+
+### 涉及文件
+
+- `services/api/migrations/20261023230000_real_content_and_steam_auth.sql`（新增）
+- `services/api/src/modules/auth/mod.rs`（新增）
+- `services/api/src/modules/servers.rs`（新增）
+- `services/api/src/modules/forum.rs`（新增）
+- `services/api/src/modules/community.rs`（新增）
+- `services/api/src/modules/account.rs`（新增）
+- `services/api/src/modules/admin.rs`（新增）
+- `services/api/src/modules/mod.rs`
+- `services/api/src/routes/mod.rs`
+- `services/api/src/app.rs`
+- `services/api/src/config/mod.rs`
+- `services/api/src/errors/mod.rs`
+- `services/api/src/openapi.rs`
+- `services/api/Cargo.toml`、`Cargo.lock`
+- `services/api/tests/http_contract.rs`
+- `apps/web/src/components/layout/site-header.tsx`
+- `apps/web/src/components/shared/user-avatar.tsx`
+- `apps/web/src/services/content.ts`（新增）
+- `apps/web/src/lib/format.ts`（新增）
+- `apps/web/src/features/forum/types.ts`、`features/account/types.ts`、`features/admin/types.ts`（新增）
+- `apps/web/src/features/servers/data/servers.ts`（改为纯类型/工具）
+- `apps/web/src/features/servers/components/*`（真实头像、空地图兜底、状态）
+- `apps/web/src/app/(site)/page.tsx`
+- `apps/web/src/app/(servers)/servers/page.tsx`
+- `apps/web/src/app/(forum)/forum/page.tsx`
+- `apps/web/src/app/(forum)/forum/[category]/page.tsx`
+- `apps/web/src/app/(forum)/forum/topic/[id]/page.tsx`
+- `apps/web/src/app/(account)/account/page.tsx`
+- `apps/web/src/features/account/components/logout-button.tsx`（新增）
+- `apps/web/src/app/(admin)/admin/page.tsx`
+- `apps/web/src/app/(admin)/layout.tsx`（服务端权限重定向）
+- `apps/web/src/features/admin/components/admin-nav.tsx`
+- 删除 `features/forum/data/forum.ts`
+- 删除 `features/account/data/account.ts`
+- 删除 `features/admin/data/dashboard.ts`
+- 删除 `apps/web/public/images/servers/*.svg`
+- `apps/web/public/.gitkeep`（新增）
+- `apps/web/next.config.ts`（Steam 头像远程域名）
+- `.env.example`、`services/api/.env.example`、`compose.yaml`
+- `README.md`、`docs/ARCHITECTURE.md`、`docs/API.md`、`docs/CHANGELOG.md`、`docs/DEPLOYMENT.md`
+
+### 数据库与 API 变化
+
+- 数据库迁移：新增 8 张业务表；`categories` 预置 5 行；其余表为空。
+- 已对局域网测试库执行迁移，并重复执行确认幂等。
+- 新增 12 个业务 API 路径（4 个 auth、5 个内容读取、1 个 community、1 个 account、1 个 admin，另有 OpenAPI 文档路由既有）。
+- 会话存储：`sessions.token_hash` 为主键，原始令牌不落库。
+- 删除前端所有模拟数据；页面在没有数据库记录时展示空状态。
+- 未新增写操作接口，因此暂未实现 CSRF；后续发帖/回复、服务器管理写接口必须先补 CSRF 与限流。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 11 项、HTTP 合约测试 13 项，共 24 项通过；
+  - `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；
+  - TypeScript、ESLint、Prettier 全部通过。
+- `npm run build`：通过，13 个页面/路由；`/`、`/servers`、`/forum`、`/forum/[category]`、`/forum/topic/[id]`、`/account`、`/admin` 为动态渲染。
+- 局域网数据库：
+  - 迁移成功，`/health/ready` 返回 `database=ok`、`redis=ok`；
+  - 重复执行 `migrate` 成功；
+  - 清理测试数据后：成员 0、主题 0、回复 0、服务器 0、在线玩家 0；分类 5。
+- HTTP 验证：
+  - `/api/v1/auth/steam/login` 返回 307，Location 指向 `https://steamcommunity.com/openid/login`；
+  - 通过 Web 代理访问同一路径仍返回 307；
+  - 无效回调 `openid.mode=cancel` 返回 303 到 `/account?steam_error=steam_login_failed`；
+  - 匿名 `/api/v1/auth/me` 返回 `{user:null}`；
+  - 未登录 `/api/v1/account` 与 `/api/v1/admin/overview` 返回 401；
+  - 临时成员会话访问 `/api/v1/account` 返回 200，访问 `/api/v1/admin/overview` 返回 403；测试用户随后删除；
+  - 配置测试覆盖生产环境缺少 `WEB_URL` 与非法 `ADMIN_STEAM_IDS`；
+  - OpenAPI JSON 包含 auth、servers、forum、community、account、admin 路径。
+- Playwright 无头 Chromium：
+  - 1920/1440/1024/768/390 宽度访问 `/`、`/servers`、`/forum`、`/account`、`/admin`，均返回 200，无横向溢出，无 console/pageerror；
+  - 空库状态：首页无模拟内容，服务器页显示“暂时还没有服务器记录”，论坛显示分类与空主题，用户中心/管理面板显示 Steam 登录/权限提示；
+  - 临时插入测试用户与会话（仅用于验证，随后删除）：
+    - 导航显示 Steam 用户头像/名称；
+    - 用户中心显示真实资料、统计、活动与收藏；
+    - `/admin` 显示真实统计与角色分布；
+    - 登出后导航恢复“使用Steam登录”，会话删除；
+  - 账号页用户名不再被深色封面遮挡。
+- Compose：使用 `/tmp/docker-compose --env-file .env.example config` 验证配置可解析；未执行镜像构建/容器启动。
+- 未执行：真实 Steam 账号浏览器授权、Docker 镜像构建与启动、`nginx -t`、HTTPS 验证、真实游戏服务器插件上报。
+
+### 待办与风险
+
+- `ADMIN_STEAM_IDS` 默认为空，首次登录后需要从用户中心取得 SteamID64，加入配置并重新登录；否则 `/admin` 无管理员可用。
+- 生产必须配置 HTTPS，并把 `SITE_URL`/回调地址设为公开 origin；本地 `127.0.0.1` 回调仅用于开发。
+- 当前没有论坛发帖、回复、资料编辑、收藏管理和服务器管理写接口；数据库记录需后续管理接口或受控数据库运维写入。
+- `server_players` 需要游戏服务器插件上报；未接入前在线玩家为空。
+- 未实现登录限流、CSRF、细粒度 RBAC、审核与审计。
+
+
+---
+
+## 2026年10月23日 22时14分11秒 服务器卡片改为三列错落卡片墙
+
+### 背景
+
+用户认为上一版的双列卡片“特别丑、比例不好”，要求重新设计；随后确认单列横向展示卡“不叫卡片排列，叫做列表排列”，需要继续改回真正的卡片排列。
+
+上一记录 `2026年10月23日 21时57分29秒 服务器玩家头像展示与 hero 文案调整` 中“服务器目录取消三列卡片、统一两列”的布局描述，已被本次三列卡片墙取代；旧记录保留用于追溯。
+
+### 变更内容
+
+#### 1. 卡片视图改为三列错落卡片墙
+
+- 服务器目录卡片视图从单列横向展示卡改为多列卡片墙：
+  - 1280px 及以上：3 列；
+  - 768–1279px：2 列；
+  - 手机：1 列。
+- 使用 `useSyncExternalStore` 订阅 `matchMedia`，在 1/2/3 列之间切换；服务端快照固定为 3 列，避免首屏布局不确定。
+- 卡片按列分配，而不是使用 CSS `columns` 的列优先顺序：每列独立纵向排列，首行按服务器顺序显示，避免出现首行跳号。
+- 卡片使用自然高度，不再为了同行等高而把玩家面板拉满；少人数服务器不会出现大面积空白。
+- 每张卡片内部的地图、玩家面板、地址和操作区保持完整结构；按钮仍在卡片底部对齐。
+
+#### 2. 卡片比例与玩家布局
+
+- `ServerCard` 地图头图从 `16:7` 调整为 `16:9`，让 3 列宽度下的卡片头部不再过扁。
+- 玩家头像列表固定两列，避免在 3 列卡片中因内部三列过窄导致昵称换行。
+- 所有在线玩家头像与昵称仍然完整展示，不省略、不使用“+N”。
+- 首页推荐服务器仍使用现有卡片网格；地图头图比例同步为 `16:9`。
+- 删除上一版临时使用的 `server-showcase-card.tsx`，卡片视图重新使用统一的 `ServerCard`。
+
+#### 3. 列表视图保持不变
+
+- 列表仍使用 `ServerListRow`，显示地图缩略图、描述、玩家头像与昵称、地址和操作按钮。
+- 卡片墙按内容高度排列，因此同行卡片底部不再强制对齐；这是为了避免少人数服务器出现大块空白。
+- 每张卡片内部的“复制地址/加入游戏”按钮仍保持同一行、同一高度。
+
+### 涉及文件
+
+- `apps/web/src/features/servers/components/server-directory.tsx`
+- `apps/web/src/features/servers/components/server-card.tsx`
+- `apps/web/src/features/servers/components/player-roster.tsx`
+- `apps/web/src/features/servers/components/server-showcase-card.tsx`（删除）
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `docs/DEVELOPMENT.md`（本记录）
+
+### 数据库与 API 变化
+
+- 无数据库迁移、Rust API 或 OpenAPI 契约变化。
+- 服务器、玩家头像、昵称和在线状态仍为前端模拟数据，刷新不会持久化，也不代表真实服务器或 Steam 账号。
+- 服务器地址继续使用保留域名 `*.threi.example`，不会连接真实 CS:GO 服务器。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 6 项、HTTP 契约测试 10 项，共 16 项通过；
+  - TypeScript、ESLint、Prettier 全部通过。
+- `npm run build`：通过，静态生成 24 个页面/路由。
+- Playwright 无头 Chromium 验证：
+  - 1920 / 1440 / 1280 宽度下为 3 列，卡片宽度均为约 352px；
+  - 1024 / 768 宽度下为 2 列，390 宽度下为 1 列；
+  - 首行卡片顶部坐标一致且列位置不同，第二张卡片从第一列继续纵向排列；
+  - 12 个服务器卡片均渲染，Beginner 显示 9 个玩家头像，Hardcore 显示 28 个；
+  - 抽查 Beginner / Hardcore 卡片，复制/加入按钮高度均为 36px，顶部坐标一致；
+  - 所有测试宽度无横向溢出；
+  - 列表视图仍显示 12 个服务器和 28 个 Hardcore 玩家头像；
+  - 首页玩家头像正常渲染；
+  - `/`、`/servers`、`/forum`、`/forum/maps`、`/forum/topic/season-three-rush`、`/account`、`/admin` 均返回 200；
+  - 复制地址和加入游戏弹窗验证通过，console/pageerror 无错误。
+- 未执行：Docker 镜像构建、容器启动、`nginx -t`、HTTPS 验证（本机无 Docker daemon）；未连接真实 CS:GO 服务器验证。
+
+
+---
+
+## 2026年10月23日 21时57分29秒 服务器玩家头像展示与 hero 文案调整
+
+### 背景
+
+用户认为首页标题“在 ThRei 的 KZ 世界里，和朋友们一起起跳、连跳、刷新记录。”和服务器页标题“找到你的 KZ 服务器，从一次起跳开始。”语气过于中二、煽情，需要改成更平实的表述。
+
+同时，服务器目录目前只显示玩家昵称，用户希望在玩家名称旁同时显示头像，并要求重新规划玩家列表的布局；头像和名称先使用模拟数据。
+
+### 变更内容
+
+#### 1. 首页与服务器页文案收敛
+
+- 首页 hero 标题从“在 ThRei 的 KZ 世界里……刷新记录”改为：
+  - “一个专注 KZ 的社区，”
+  - “找服务器，记录成绩。”
+- 首页说明改为介绍服务器、地图和玩家记录，并提示可以到论坛交流路线与技巧。
+- 首页特色服务器在线栏从“正在热身”改为“当前有 N 位玩家在线”，并展示玩家头像。
+- 服务器页 hero 标题从“找到你的 KZ 服务器，从一次起跳开始。”改为：
+  - “KZ 服务器目录”
+  - “地图、玩家与地址。”
+- 服务器页说明改为介绍新手、连跳、长跳和进阶服务器，以及查看玩家、复制地址和启动 CS:GO 的操作。
+- 服务器页 metadata、目录区标题“选择 KZ 服务器”、统计文案“在线，分布在 12 个服务器”同步改为平实表述。
+- 首页服务器推荐区标题改为“推荐 KZ 服务器”。
+
+#### 2. 玩家模拟头像数据
+
+- 新增 `KzPlayer` 接口，包含 `name` 和 `avatar` 字段；`KzServer.players` 从 `string[]` 改为 `KzPlayer[]`。
+- 保留 40 个模拟玩家昵称，新增 20 组本地 Tailwind 渐变色板，按玩家顺序生成稳定的模拟字母头像。
+- 同一玩家在不同服务器中复用同一头像；不依赖外部图片服务，也不代表真实 Steam 头像。
+- 服务器搜索同步改为读取 `player.name`，仍可按玩家昵称查找服务器。
+
+#### 3. 玩家头像与昵称布局
+
+- 新增 `PlayerRoster` 组件，统一卡片、列表和首页在线栏的玩家展示。
+- 每个玩家条目包含：
+  - `UserAvatar` 小型渐变字母头像；
+  - 完整玩家昵称；
+  - `title` 提示和 `data-player-name` / `data-player-avatar` 属性，便于测试与后续替换。
+- 卡片视图使用两列或三列网格，根据卡片宽度切换；列表视图使用带边框的横向玩家标签。
+- 玩家昵称不截断、不使用“+N”隐藏，长昵称自动换行。
+- 首页特色服务器在线栏复用列表变体，头像与昵称一起展示。
+- 服务器卡片数量较多时，玩家面板继续使用 `flex-1` 填充并在底部显示剩余空位，保持“复制地址/加入游戏”按钮对齐。
+
+#### 4. 卡片宽度与响应式调整
+
+- 服务器目录取消 1920 宽度下的三列卡片，统一最多两列，避免玩家头像和昵称被压缩。
+- 首页特色服务器卡片在紧凑模式下使用两列玩家头像布局，避免三列卡片中的昵称换行过多。
+- 1920、1440、1024、768 和 390 宽度下验证无横向溢出，玩家名称完整显示，按钮仍对齐。
+
+### 涉及文件
+
+- `apps/web/src/components/shared/user-avatar.tsx`
+- `apps/web/src/features/servers/data/servers.ts`
+- `apps/web/src/features/servers/components/player-roster.tsx`（新增）
+- `apps/web/src/features/servers/components/server-card.tsx`
+- `apps/web/src/features/servers/components/server-list-row.tsx`
+- `apps/web/src/features/servers/components/server-directory.tsx`
+- `apps/web/src/app/(site)/page.tsx`
+- `apps/web/src/app/(servers)/servers/page.tsx`
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `docs/DEVELOPMENT.md`（本记录）
+
+### 数据库与 API 变化
+
+- 无数据库迁移、Rust API 或 OpenAPI 契约变化。
+- 玩家头像、昵称和在线状态仍为前端模拟数据，刷新不会持久化，也不代表真实服务器或 Steam 账号。
+- 服务器地址继续使用保留域名 `*.threi.example`，不会连接真实 CS:GO 服务器。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 6 项、HTTP 契约测试 10 项，共 16 项通过；
+  - TypeScript、ESLint、Prettier 全部通过。
+- `npm run build`：通过，静态生成 24 个页面/路由。
+- Playwright 无头 Chromium 验证：
+  - `/servers` 渲染 12 个服务器卡片；
+  - `KZ | Beginner` 显示 9 个玩家头像和昵称，`KZ | Hardcore` 显示 28 个，名称完整；
+  - 列表视图同样显示 9 / 28 个头像和昵称；
+  - 首页在线栏和特色服务器共渲染 48 个玩家头像条目；
+  - 搜索玩家 `n0va` 返回 2 个服务器，`LongJumpLarry` 也能命中；
+  - 1920、1440、1024、768 宽度下卡片底边和“复制地址/加入游戏”按钮坐标一致，按钮高度均为 36px，无横向溢出；
+  - 390 宽度下无横向溢出，玩家头像和昵称完整，按钮高度和顶部坐标一致；
+  - 所有检查页面返回 200，浏览器 console 与 pageerror 均无错误。
+- 未执行：Docker 镜像构建、容器启动、`nginx -t`、HTTPS 验证（本机无 Docker daemon）；未连接真实 CS:GO 服务器验证头像或玩家状态。
+
+
+---
+
+## 2026年10月23日 21时37分32秒 站点主题切换为 CS:GO KZ 与服务器目录扩展
+
+### 背景
+
+用户确认网站的设计与样式搭配可以保留，但内容主题错误：站点实际是 Minecraft 社区，需要整体改为 **CS:GO 的 KZ 模式**。同时提出两点界面要求：
+
+1. 服务器数量可能达到 10–30 个，服务器目录需要能承载这个规模，并且每个服务器的**全部在线玩家名称**都要显示；
+2. 修复服务器卡片中“复制地址”和“加入游戏”按钮与其他卡片未对齐的问题。
+
+上一记录 `2026年10月23日 20时52分04秒 服务器页面与全站模拟内容上线预览` 中关于 3 个 Minecraft 服务器、三张旧地图和 Minecraft Java 版加入步骤的描述，已被本记录中的 12 个 CS:GO KZ 服务器与 Steam/控制台连接方式取代；旧记录保留用于追溯。
+
+### 变更内容
+
+#### 1. 全站从 Minecraft 切换为 CS:GO KZ
+
+- 官网首页 hero、服务器推荐、论坛动态、社区数据与 CTA 改为 KZ 语境；
+- 论坛分类改为公告与活动、综合讨论、地图与记录、技巧与教学、帮助与反馈；
+- 8 个论坛主题、回复、作者角色与站内链接全部改为 KZ 地图、连跳、长跳、计时赛和新手绑定等主题；
+- 用户中心 bio、最近活动、通知、徽章、收藏服务器与 Steam 账号标签改为 KZ 内容；
+- 管理面板角色、审核队列、审计日志、最近主题和服务器节点说明改为 KZ 运营语境；
+- 站点描述、manifest、页脚、README、架构文档与 CHANGELOG 同步更新；
+- 删除旧 Minecraft 服务器地图 SVG 和无用的 `player-avatar.tsx`。
+
+#### 2. 服务器目录扩展到 12 个 KZ 服务器
+
+- 重写 `features/servers/data/servers.ts`，新增 `KzServer` 数据模型：服务器名、地图、描述、状态、IP、端口、区域、tickrate、人数上限、延迟、标签、完整在线玩家数组和地图预览图；
+- 新增 12 个 KZ 服务器，人数上限均为 32，在线玩家共 184 人；每个服务器提供独立的 IP:PORT 与地图；
+- 在线玩家使用 `string[]` 保存，卡片和列表都渲染全部名称，不使用省略号或“+N”隐藏；
+- 新增 12 张本地 KZ 地图预览 SVG，放在 `apps/web/public/images/servers/`；
+- 新增服务器搜索：可按服务器名、地图、地区、描述、标签或在线玩家昵称过滤；
+- 服务器卡片视图使用 `md:grid-cols-2 2xl:grid-cols-3`，列表视图纵向堆叠，适配 10–30 个服务器的规模；
+- 列表行展示缩略图、描述、tickrate、延迟、完整玩家标签、地址和操作按钮；
+- “加入游戏”弹窗改为 CS:GO：提供 `steam://connect/IP:PORT` 入口、控制台 `connect IP:PORT` 命令和三步加入说明；
+- 服务器页 hero 展示特色服务器背景、在线人数/容量/tickrate/服务器数统计，并保留三步进入指南与用户中心 CTA。
+
+#### 3. 修复卡片按钮对齐
+
+- 卡片使用 `flex h-full flex-col` 结构，操作区使用 `mt-auto` 固定在内容底部；
+- 地址框与两个按钮放在同一个底部操作区，按钮使用 `grid grid-cols-2 gap-2` 等宽排列；
+- “复制地址”和“加入游戏”统一为默认尺寸（36px 高），避免顶部对齐但底部错位；
+- 列表行操作列使用 `lg:justify-between`，地址在上、按钮在下；
+- 在线人数较少的卡片让玩家面板 `flex-1` 填充剩余高度，并在底部显示“还有 N 个空位 / 复制地址加入”，避免按钮对齐后留下无意义空白；
+- 在 1920、1440、1024、768 和 390 宽度下验证同行卡片底边、复制/加入按钮的 y 坐标与高度一致。
+
+#### 4. 响应式标题修正
+
+- 首页和服务器页 hero 标题改为显式分行，避免中文词在窄屏被拆开；
+- 首页标题字号调整为 `text-3xl sm:text-4xl md:text-5xl lg:text-6xl`，390px 宽度下不再出现“服务/器”或“起/跳”跨行断裂；
+- 服务器页标题缩短为“找到你的 KZ 服务器，从一次起跳开始。”。
+
+### 涉及文件
+
+- 服务器数据与组件：
+  - `apps/web/src/features/servers/data/servers.ts`
+  - `apps/web/src/features/servers/components/server-card.tsx`
+  - `apps/web/src/features/servers/components/server-list-row.tsx`
+  - `apps/web/src/features/servers/components/server-directory.tsx`
+  - `apps/web/src/features/servers/components/join-server-button.tsx`
+  - 删除 `apps/web/src/features/servers/components/player-avatar.tsx`
+- 服务器页面与素材：
+  - `apps/web/src/app/(servers)/servers/page.tsx`
+  - `apps/web/public/images/servers/kz-{beginner,bhop-city,longjump-lab,hardcore,climb-alpha,skyline,neon,frost,dune,void,marble,aztec}.svg`
+  - 删除 `elysium-valley.svg`、`aether-workshop.svg`、`ember-arena.svg`
+- 全站内容：
+  - `apps/web/src/app/(site)/page.tsx`
+  - `apps/web/src/app/(forum)/forum/page.tsx`
+  - `apps/web/src/features/forum/data/forum.ts`
+  - `apps/web/src/features/forum/components/forum-category-icon.tsx`
+  - `apps/web/src/features/account/data/account.ts`
+  - `apps/web/src/app/(account)/account/page.tsx`
+  - `apps/web/src/features/admin/data/dashboard.ts`
+  - `apps/web/src/app/(admin)/admin/page.tsx`
+  - `apps/web/src/lib/site-config.ts`
+  - `apps/web/src/app/manifest.ts`
+  - `apps/web/src/components/layout/site-footer.tsx`
+- 文档：
+  - `README.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/CHANGELOG.md`
+  - `docs/DEVELOPMENT.md`（本记录）
+
+### 数据库与 API 变化
+
+- 无数据库结构或迁移变更。
+- 无 Rust API 路由、请求/响应结构或 OpenAPI 契约变更。
+- 服务器目录、论坛、用户中心和管理面板仍使用前端静态预览数据；刷新不会保存修改，也不代表真实服务器状态。
+- 服务器地址继续使用保留域名 `*.threi.example`，不会连接真实 CS:GO 服务器。
+- `/admin` 仍未接入鉴权，生产环境不得公开。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 6 项、HTTP 契约测试 10 项，共 16 项通过；
+  - TypeScript `tsc --noEmit` 通过；
+  - ESLint `--max-warnings=0` 通过；
+  - Prettier `--check` 通过。
+- `npm run build`：通过，静态生成 24 个页面/路由；`/servers` 单页渲染 12 个服务器卡片，同时生成 5 个论坛分类页和 8 个论坛主题页。
+- Playwright 无头 Chromium 验证：
+  - `/servers` 默认卡片视图渲染 12 个服务器；
+  - `KZ | Beginner` 显示 9 个玩家，`KZ | Hardcore` 显示 28 个玩家，未隐藏任何名称；
+  - 搜索 `kz_hardcore` 返回 1 个结果，清空后恢复 12 个；列表视图显示 12 个服务器和 28 个 Hardcore 玩家；
+  - 视图切换后刷新页面仍保持列表模式，`localStorage` 值为 `list`；
+  - 复制结果为 `kz01.threi.example:27015`；
+  - 加入弹窗可见，Steam 链接为 `steam://connect/kz01.threi.example:27015`；
+  - 1920、1440、1024、768 宽度下，同行卡片底边一致，复制/加入按钮 y 坐标一致且高度均为 36px；
+  - 390 宽度下无横向溢出，玩家列表完整，复制/加入按钮高度均为 36px 且顶部对齐；
+  - `/`、`/forum`、`/forum/maps`、`/forum/topic/season-three-rush`、`/forum?q=长跳`、`/account`、`/admin` 均返回 200；
+  - 浏览器 console 与 pageerror 均无错误。
+- 未执行：Docker 镜像构建、容器启动、`nginx -t`、HTTPS 与生产反向代理验证（本机无 Docker daemon）；未连接真实 CS:GO 服务器验证连接与 KZ 插件行为。
+
+
+---
+
+## 2026年10月23日 20时52分04秒 服务器页面与全站模拟内容上线预览
+
+### 背景
+
+用户希望在顶部导航增加服务器功能页，展示当前服务器人数、IP/PORT、地图与地图图片、在线玩家名称和人数上限；提供卡片/列表两种显示模式（默认卡片），并在合适位置提供复制 IP:PORT 和加入游戏按钮。同时，官网、论坛、用户中心和管理面板不应继续展示架构原则或“模块骨架”，而应替换为模拟开发环境数据，以便预览上线后的实际观感。
+
+本次全部为前端展示层和本地模拟数据，不接入真实服务器状态，也不改变数据库或 API 契约。页面中的服务器地址使用保留域名 `*.threi.example`，不会连接真实服务器。
+
+### 变更内容
+
+#### 1. 服务器模块与 `/servers`
+
+- 新增 `src/features/servers` 数据与组件：
+  - 3 个模拟服务器：Elysium Valley（长期生存）、Aether Workshop（自由创造）、Ember Arena（竞技与活动）；
+  - 每个服务器包含 IP、PORT、地图、版本、区域、延迟、在线人数、人数上限和在线玩家样例；
+  - 玩家列表显示头像色块、名称、角色，并标注“显示 N / 总在线人数”。
+- 新增三张本地地图预览 SVG：Elysium Valley、Aether Workshop、Ember Arena，放在 `public/images/servers/`。
+- 新增 `(servers)` route group 和 `/servers` 页面，顶部导航、页脚、sitemap 同步加入服务器入口。
+- 新增卡片/列表显示切换：
+  - 默认卡片模式；
+  - 使用 `useSyncExternalStore` 读取 `localStorage`，避免 effect 内同步 setState；
+  - 用户选择在下一次访问时保留。
+- 新增“复制地址”按钮：
+  - 复制完整 `IP:PORT`；
+  - 优先使用 `navigator.clipboard`，提供旧浏览器降级；
+  - 复制成功后显示“已复制”，并通过 `aria-live` 通知辅助技术。
+- 新增“加入游戏”按钮：
+  - 打开原生 `<dialog>`，展示服务器信息、完整地址、复制按钮和 Minecraft Java 版加入步骤；
+  - 支持关闭按钮、点击遮罩关闭和 Escape 关闭。
+- 服务器卡片和列表模式均完整展示 IP:PORT，不再截断；复制与加入按钮在卡片中并排展示。
+- 修正服务器卡片/列表的响应式布局，移动端 390px 宽度下地址和按钮仍可正常显示。
+
+#### 2. 官网首页
+
+- 移除架构原则、数据流、技术栈清单和安全规划说明。
+- 新首页包含：
+  - 服务器地图背景 Hero、第三赛季公告入口、在线玩家与社区统计；
+  - 三个服务器的快捷卡片（含地图、人数、地址、复制和加入按钮）；
+  - 最新论坛主题、公告与活动、社区数据；
+  - 服务器长期开放 CTA 和加入引导。
+- 页脚增加“预览环境：服务器状态、论坛内容与用户资料均为模拟数据”说明。
+
+#### 3. 论坛
+
+- 新增论坛模拟数据：5 个分类、8 个主题、作者/角色/标签/浏览数/回复和详细回复内容。
+- 论坛首页改为分类卡片、最新讨论、社区概览、最近活跃成员和新手指南侧栏。
+- 搜索支持按标题、摘要、标签、作者和分类名过滤本地模拟主题，并显示结果数量与空状态。
+- 分类页展示分类信息、主题列表、其他分类与服务器入口。
+- 帖子详情页展示完整正文、标签、作者、浏览/回复统计和逐条回复；未知分类/帖子返回真正 404。
+- 新增服务器状态卡片填充分类网格，更新搜索框占位文案。
+
+#### 4. 用户中心
+
+- 使用模拟用户“星野”替换骨架内容：头像、角色、简介、加入时间、地区、资料完整度。
+- 增加主题/回复/游戏时长/社区贡献统计，最近活动、我的主题、通知、徽章、账号安全和收藏服务器。
+- 修正横幅欢迎文字被头像遮挡的问题。
+
+#### 5. 管理面板
+
+- 移除“后续业务模块边界”和开发占位说明，替换为完整模拟运营面板：
+  - 注册成员、今日活跃、主题总数、待审核内容统计；
+  - 最近 7 天在线/新主题柱状图、角色分布；
+  - 最近注册用户、最近主题、审核队列、管理操作审计；
+  - 系统设置摘要、平台服务状态、服务器节点状态。
+- 管理侧边栏改为指向页面内各区块的锚点链接，移除“待实现”徽章。
+- 保留“演示数据”标识和未接入认证/权限的安全提示。
+- 平台服务卡片改为更产品化的“平台服务”文案，同时保留真实 API 连通性检查。
+- 修正 `CardHeader` 布局错位、设置卡片多余空白和移动端导航。
+
+#### 6. 文案与资源
+
+- 修正全局错误页、404 页中的开发期措辞。
+- 移除页面上残留的“骨架 / 尚未实现 / 待实现”展示文案（安全提示和模拟数据说明除外）。
+- Web Dockerfile 增加 `COPY public ./public`，确保地图图片进入生产运行镜像。
+- README 增加主要页面说明和模拟数据声明；ARCHITECTURE 增加服务器路由、模拟数据模块和未来 `servers` 后端模块边界；CHANGELOG 增加 Unreleased 汇总。
+
+### 涉及文件
+
+#### 新增
+
+| 文件 | 用途 |
+| --- | --- |
+| `apps/web/public/images/servers/elysium-valley.svg` | Elysium Valley 地图预览图 |
+| `apps/web/public/images/servers/aether-workshop.svg` | Aether Workshop 地图预览图 |
+| `apps/web/public/images/servers/ember-arena.svg` | Ember Arena 地图预览图 |
+| `apps/web/src/app/(servers)/layout.tsx` | 服务器页面布局边界 |
+| `apps/web/src/app/(servers)/servers/page.tsx` | `/servers` 页面、Hero、统计、加入步骤 |
+| `apps/web/src/features/servers/data/servers.ts` | 服务器/玩家模拟数据、地址工具函数 |
+| `apps/web/src/features/servers/components/server-directory.tsx` | 卡片/列表切换与 localStorage 偏好 |
+| `apps/web/src/features/servers/components/server-card.tsx` | 卡片模式服务器展示 |
+| `apps/web/src/features/servers/components/server-list-row.tsx` | 列表模式服务器展示 |
+| `apps/web/src/features/servers/components/server-status-badge.tsx` | 在线/维护状态徽章 |
+| `apps/web/src/features/servers/components/player-avatar.tsx` | 服务器玩家头像色块 |
+| `apps/web/src/features/servers/components/copy-address-button.tsx` | 复制 IP:PORT 按钮与状态反馈 |
+| `apps/web/src/features/servers/components/join-server-button.tsx` | 加入游戏说明对话框 |
+| `apps/web/src/components/shared/user-avatar.tsx` | 通用用户头像组件 |
+| `apps/web/src/features/forum/data/forum.ts` | 分类、主题、回复模拟数据与搜索 |
+| `apps/web/src/features/forum/components/category-card.tsx` | 论坛分类卡片 |
+| `apps/web/src/features/forum/components/forum-category-icon.tsx` | 分类图标与配色映射 |
+| `apps/web/src/features/forum/components/topic-row.tsx` | 主题列表行 |
+| `apps/web/src/features/account/data/account.ts` | 用户中心模拟资料、通知、活动 |
+| `apps/web/src/features/admin/data/dashboard.ts` | 管理面板统计、审核、审计数据 |
+
+#### 修改
+
+| 文件 | 修改 |
+| --- | --- |
+| `apps/web/src/app/(site)/page.tsx` | 官网首页重写为服务器/社区内容 |
+| `apps/web/src/app/(forum)/forum/page.tsx` | 分类、搜索、最新讨论和侧栏 |
+| `apps/web/src/app/(forum)/forum/[category]/page.tsx` | 分类主题列表与 404 |
+| `apps/web/src/app/(forum)/forum/topic/[id]/page.tsx` | 帖子正文、回复、相关主题 |
+| `apps/web/src/app/(account)/account/page.tsx` | 用户中心模拟资料与活动 |
+| `apps/web/src/app/(admin)/admin/page.tsx` | 管理运营面板与锚点区块 |
+| `apps/web/src/app/(admin)/layout.tsx` | 演示数据标识，移除大面积开发警告 |
+| `apps/web/src/app/global-error.tsx` | 错误页措辞 |
+| `apps/web/src/app/not-found.tsx` | 404 措辞 |
+| `apps/web/src/app/sitemap.ts` | 加入 `/servers` |
+| `apps/web/src/components/layout/site-header.tsx` | 导航入口与“加入服务器”CTA |
+| `apps/web/src/components/layout/site-footer.tsx` | 服务器入口、模拟数据说明 |
+| `apps/web/src/lib/site-config.ts` | 导航增加服务器、站点描述更新 |
+| `apps/web/src/features/forum/components/forum-search-form.tsx` | 搜索框占位文案 |
+| `apps/web/src/features/admin/components/admin-nav.tsx` | 锚点导航，移除待实现 |
+| `apps/web/src/features/admin/components/system-status-card.tsx` | 平台服务文案 |
+| `apps/web/Dockerfile` | 复制 `public/` 静态地图资源 |
+| `README.md` | 主要页面、模拟数据说明、目录更新 |
+| `docs/ARCHITECTURE.md` | 服务器路由、模拟数据边界、未来 servers 模块 |
+| `docs/CHANGELOG.md` | 新增 Unreleased 内容汇总 |
+| `docs/DEVELOPMENT.md` | 新增本条记录 |
+| `services/api/src/modules/mod.rs` | 未来 `servers` 后端模块边界注释 |
+
+### 数据库与 API 变化
+
+- 数据库：无迁移、表结构、索引或数据变化。
+- API：无接口、请求/响应结构、错误码或权限变化。
+- `services/api/src/modules/mod.rs` 仅为未来 `servers` 模块的注释补充，不影响编译产物行为。
+- 前端页面中的服务器、论坛、用户中心和管理数据全部来自本地模拟数据；刷新后不持久化，也不请求真实服务器状态。
+
+### 测试与结果
+
+| 检查 | 命令/方式 | 结果 |
+| --- | --- | --- |
+| 全量静态检查 | `./scripts/check.sh` | 通过（Rust fmt、Clippy、16 个测试、TypeScript、ESLint、Prettier） |
+| Next.js 生产构建 | `API_INTERNAL_URL=... NEXT_PUBLIC_SITE_URL=... npm run build` | 通过；`/servers` 为静态路由，分类/帖子使用 SSG |
+| 服务器页卡片默认 | 无头 Chromium | `卡片` 按钮 `aria-pressed=true`，`列表=false` |
+| 显示模式切换 | 点击“列表”并刷新 | 切换成功，`localStorage["threi.servers.view"]="list"`，刷新后保持 |
+| 复制 IP:PORT | 点击复制并读取剪贴板 | 剪贴板为 `play.threi.example:25565`，按钮显示“已复制” |
+| 加入游戏弹窗 | 点击“加入游戏” | 原生 dialog 可见，可关闭 |
+| 页面状态 | `/`、`/servers`、`/forum`、`/forum/survival`、`/forum/topic/season-three-islands`、`/account`、`/admin` | 均返回 200 |
+| 非法路由 | `/forum/unknown-category`、`/forum/topic/unknown-topic` | 404 |
+| 地图资源 | 三张 `/images/servers/*.svg` | 200，`image/svg+xml` |
+| 搜索 | `/forum?q=建筑` | 返回 3 个模拟结果 |
+| 移动端 | 390×844 无头浏览器访问 `/servers` | 200，地址与操作按钮正常显示 |
+| 控制台 | 浏览器交互检查 | 无 console/page error |
+| API 连通性 | `/api/v1/system/info` 经 Next rewrite | 200 |
+
+**未执行：**
+
+- Docker 镜像构建与容器启动：当前环境没有 Docker daemon/CLI；本次改动只影响 Web 运行时和静态资源，但首次部署仍需实际构建验证。
+- Nginx 配置加载与 HTTPS 验证：与本次内容修改无关，仍受环境限制。
+- 未将无头浏览器检查固化为仓库内 E2E 测试；本次为临时脚本验证，截图在 `/tmp`，未提交。
+- 未测试真实游戏客户端连接：模拟地址使用保留域名，不连接真实服务器。
+
+### 已知限制
+
+- 模拟数据不会持久化；发帖、编辑资料、审核操作等写能力未实现。
+- 服务器状态、玩家列表、地图和人数为前端静态预览，不代表真实服务器。
+- 管理面板仍公开可见，认证和权限尚未接入；生产环境必须保护。
+- 加入游戏按钮提供连接说明和复制地址，不直接唤起游戏客户端（未确定游戏协议）。
+
+## 2026年10月23日 20时20分17秒 官网公开品牌名称调整为 ThRei
+
+### 背景
+
+用户确认官网对外名称为 **ThRei**，要求将当前展示的 `threi` 调整为 `ThRei`。本次只调整公开品牌名，保留仓库名、包名、Docker 服务名、镜像名、API 技术标识等仍需保持小写的技术标识，避免破坏已有命令、路径和部署配置。
+
+### 变更内容
+
+- 前端站点配置：`name` 改为 `ThRei`，标题改为 `ThRei 社区`，描述加入品牌名。
+- 品牌组件：导航和页脚展示 `ThRei`，Logo 方块字符由 `t` 改为 `T`，无障碍标签同步。
+- 页面 metadata：管理面板、用户中心、论坛首页、分类页、帖子详情页的描述改为 `ThRei`。
+- 官网首页文案、PWA manifest、全局错误页品牌文字、应用图标 `aria-label` 同步为 `ThRei`。
+- OpenAPI 标题改为 `ThRei API`，描述改为 `ThRei community API`；API 启动日志中的品牌名同步，但健康检查响应和 `system/info` 的 `threi-api` 服务标识保持不变。
+- README 与文档标题/说明中的产品展示名改为 `ThRei`；技术路径、镜像名、Compose 服务名、包名保持原样。
+- 重新构建并重启本地预览，使当前运行页面立即显示新名称。
+
+### 涉及文件
+
+| 文件 | 修改 |
+| --- | --- |
+| `apps/web/src/lib/site-config.ts` | 站点名称、标题、描述 |
+| `apps/web/src/components/layout/brand.tsx` | 导航品牌文字、Logo 字符、aria-label |
+| `apps/web/src/app/(site)/page.tsx` | 官网首页品牌文案 |
+| `apps/web/src/app/manifest.ts` | PWA 名称与短名称 |
+| `apps/web/src/app/icon.svg` | 图标 aria-label |
+| `apps/web/src/app/global-error.tsx` | 全局错误页品牌文字 |
+| `apps/web/src/app/(admin)/layout.tsx` | 管理面板 metadata 描述 |
+| `apps/web/src/app/(account)/account/page.tsx` | 用户中心 metadata 描述 |
+| `apps/web/src/app/(forum)/forum/page.tsx` | 论坛首页 metadata 描述 |
+| `apps/web/src/app/(forum)/forum/[category]/page.tsx` | 分类页 metadata 描述 |
+| `apps/web/src/app/(forum)/forum/topic/[id]/page.tsx` | 帖子详情 metadata 描述 |
+| `services/api/src/openapi.rs` | OpenAPI 标题与描述 |
+| `services/api/src/main.rs` | 启动日志品牌名 |
+| `README.md` | 项目标题与简介 |
+| `docs/ARCHITECTURE.md` | 文档标题与产品说明 |
+| `docs/API.md` | 文档标题 |
+| `docs/DEPLOYMENT.md` | 文档标题 |
+| `docs/DEVELOPMENT.md` | 新增本条开发记录 |
+
+### 数据库与 API 变化
+
+- 数据库：无。
+- API：仅 OpenAPI 文档标题/描述和启动日志中的展示名称变化；未新增、删除或修改接口，未改变请求/响应结构、错误码或权限。`/health/live`、`/health/ready`、`/api/v1/system/info` 的技术服务标识仍为 `threi-api`。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过（Rust fmt、Clippy、16 个测试、TypeScript、ESLint、Prettier）。
+- `cargo build --release --locked --bins`：通过。
+- `npm run build`：通过。
+- 本地预览已重新构建并重启：
+  - 页面标题为 `ThRei 社区`；
+  - 导航、页脚与首页显示 `ThRei`；
+  - OpenAPI 标题为 `ThRei API`；
+  - `/`、`/forum`、`/account`、`/admin` 均返回 200。
+- 未执行：Docker 镜像构建、容器启动、Nginx/HTTPS 验证（本机无 Docker；与本次品牌修改无关）。
+
 ## 2026年10月23日 19时47分47秒 项目架构初始化
 
 ### 背景

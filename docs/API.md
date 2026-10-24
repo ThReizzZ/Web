@@ -1,7 +1,7 @@
-# threi API 约定
+# ThRei API 约定
 
-> 当前版本：`v1`（架构初始化阶段）。
-> 本文区分**已实现**与**设计约定/待实现**。未实现的接口不得被前端或第三方当作可用能力。
+> 当前版本：`v1`（Steam 登录与真实数据阶段）。
+> 本文区分**已实现**与**规划**能力。规划中的接口不得被前端或第三方当作可用能力。
 
 ## 1. 基础约定
 
@@ -10,70 +10,90 @@
 | 业务 API 前缀 | `/api/v1` |
 | 传输 | HTTPS（生产，经 Nginx 终止 TLS）；HTTP 仅本地开发 |
 | 请求/响应格式 | `application/json; charset=utf-8` |
-| 字段命名 | `snake_case` |
-| 时间格式 | 未来统一使用 RFC 3339 / UTC（ISO 8601），当前无业务时间字段 |
-| 认证 | 规划为服务端 Cookie 会话（尚未实现） |
+| 字段命名 | 健康/系统接口保持既有 `snake_case`；业务接口使用 `camelCase` |
+| 时间格式 | RFC 3339 / UTC |
+| 认证 | Steam OpenID 登录 + `threi_session` HttpOnly Cookie |
 | 请求追踪 | 响应头 `x-request-id` |
 | 健康检查 | 根路径 `/health/live`、`/health/ready`，不属于业务 API |
 | OpenAPI | `/api/v1/openapi.json`、`/api/v1/docs`（受 `API_DOCS_ENABLED` 控制） |
 
 生产环境中，浏览器与 API 同源：Nginx 将 `/api/` 直接转发到 API。开发环境可使用 Next.js rewrite 或 `NEXT_PUBLIC_API_BASE_URL` 指向 `http://127.0.0.1:8080`。
 
-## 2. 已实现接口
+## 2. 认证
 
-### 2.1 `GET /health/live`
+### 2.1 登录流程
 
-进程存活检查。不访问数据库或 Redis。
+1. 浏览器访问 `GET /api/v1/auth/steam/login`。
+2. API 返回 `307`，跳转到 `https://steamcommunity.com/openid/login`，携带 `return_to` 和 `realm`。
+3. Steam 授权后跳回 `GET /api/v1/auth/steam/callback`。
+4. API 向 Steam 发送 `openid.mode=check_authentication`；只有返回 `is_valid:true` 才接受断言。
+5. API 按 `steam_id64` 创建/更新用户，写入会话并返回 `303` 到 `/account`。
+6. 浏览器收到 `Set-Cookie`：
+
+```text
+threi_session=<opaque-token>; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000
+```
+
+生产环境使用 HTTPS 时追加 `Secure`。数据库只保存令牌的 SHA-256 哈希，不保存原始令牌。
+
+Steam 是唯一登录方式；没有密码、邮箱注册或其他登录入口。
+
+### 2.2 会话接口
+
+| 方法 | 路径 | 认证 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/auth/me` | 可选 | 返回 `{ "user": ... }`；未登录为 `{ "user": null }` |
+| POST | `/api/v1/auth/logout` | 需要 | 删除当前会话并清除 Cookie，返回 `204` |
+
+`user` 示例：
 
 ```json
 {
-  "status": "ok",
-  "service": "threi-api",
-  "version": "0.1.0"
+  "user": {
+    "steamId64": "76561198000000000",
+    "name": "Steam 昵称",
+    "avatarUrl": "https://avatars.akamai.steamstatic.com/...",
+    "role": "member",
+    "bio": "",
+    "location": "",
+    "joinedAt": "2026-10-23T14:43:25Z",
+    "lastLoginAt": "2026-10-23T14:43:25Z"
+  }
 }
 ```
 
-- 状态码：`200`
-- 公开性：仅容器/编排内部使用；Nginx 对该路径返回 404。
-- 不包含依赖状态或敏感配置。
+### 2.3 角色与权限
 
-### 2.2 `GET /health/ready`
+- `role`：`member` / `moderator` / `admin`。
+- `ADMIN_STEAM_IDS` 用于首次创建/引导管理员；已有用户的数据库角色不会被登录覆盖，之后通过管理面板维护。
+- `/api/v1/account` 需要登录；`/api/v1/admin/overview` 需要管理员。
+- 管理页面 `/admin` 在 Web 服务端检查会话与角色，API 仍会再次检查。
+- 公开读取接口不需要登录。
 
-依赖就绪检查。并行探测 PostgreSQL（2 秒超时）与 Redis（2 秒超时）。
+### 2.4 尚未实现
+
+- 登录/回调限流
+- CSRF 双提交令牌（当前没有写业务接口；登出 POST 不携带 CSRF 令牌）
+- RBAC 细粒度权限、会话设备管理、强制下线
+- 审核/审计接口
+
+## 3. 健康与系统
+
+### 3.1 `GET /health/live`
+
+进程存活检查，不访问依赖。
 
 ```json
-{
-  "status": "ok",
-  "checks": {
-    "database": "ok",
-    "redis": "ok"
-  },
-  "version": "0.1.0",
-  "uptime_seconds": 42
-}
+{ "status": "ok", "service": "threi-api", "version": "0.1.0" }
 ```
 
-- `200`：`status` 为 `ok` 或 `degraded`。
-- `503`：`status=unavailable`（数据库不可用，或 Redis 为必需但不可用）。
-- `checks.database`：`ok` / `unavailable`。
-- `checks.redis`：`ok` / `unavailable` / `disabled`。
-- 不返回连接地址、账号、密码、驱动错误或内部路径。
-- 公开性：仅容器/编排内部使用；Nginx 对该路径返回 404。
+### 3.2 `GET /health/ready`
 
-Redis 不可用且 `REDIS_REQUIRED=false` 时示例：
+并行探测 PostgreSQL 与 Redis（各 2 秒超时）。数据库失败或 Redis 必需但不可用时返回 `503`；Redis 非必需且不可用时返回 `200` + `degraded`。不返回连接串或驱动错误。
 
-```json
-{
-  "status": "degraded",
-  "checks": { "database": "ok", "redis": "unavailable" },
-  "version": "0.1.0",
-  "uptime_seconds": 120
-}
-```
+### 3.3 `GET /api/v1/system/info`
 
-### 2.3 `GET /api/v1/system/info`
-
-非敏感服务元信息，用于前端验证 API 连通性。**不需要认证**。
+非敏感服务元信息，不需要认证：
 
 ```json
 {
@@ -84,12 +104,161 @@ Redis 不可用且 `REDIS_REQUIRED=false` 时示例：
 }
 ```
 
-- 状态码：`200`
-- 不包含数据库/Redis 地址、密钥、构建路径或主机信息。
+## 4. 服务器
 
-## 3. 错误结构
+### `GET /api/v1/servers`
 
-业务 API 的 HTTP 错误使用同一结构（健康检查的 503 返回其专用 `ReadinessResponse`，见 2.2）：
+返回 `is_active=true` 的服务器，按推荐与名称排序。在线玩家取 `server_players.last_seen_at` 最近 5 分钟的记录。数据库为空时返回 `[]`。
+
+```json
+[
+  {
+    "id": "kz-beginner",
+    "name": "KZ | Beginner",
+    "map": "kz_beginner",
+    "description": "新手路线",
+    "status": "online",
+    "ip": "kz01.example.com",
+    "port": 27015,
+    "region": "华东",
+    "tickrate": 128,
+    "maxPlayers": 32,
+    "latencyMs": 12,
+    "tags": ["新手", "教学"],
+    "mapImage": "https://cdn.example.com/kz_beginner.jpg",
+    "featured": true,
+    "requiresWhitelist": false,
+    "players": [
+      {
+        "name": "Steam 昵称",
+        "avatarUrl": "https://avatars.akamai.steamstatic.com/...",
+        "connectedAt": "2026-10-23T14:43:25Z"
+      }
+    ]
+  }
+]
+```
+
+- `status`：`online` / `maintenance` / `offline`。
+- `latencyMs` 可为 `null`；`mapImage` 可为空字符串。
+- 当前没有游戏服务器插件写入 `server_players`，在线玩家可能为空。
+
+## 5. 论坛
+
+### 5.1 `GET /api/v1/forum/categories`
+
+分类来自 `categories` 表；主题/回复计数与最近活动由真实表聚合。
+
+```json
+[
+  {
+    "slug": "announcements",
+    "name": "公告与活动",
+    "description": "服务器维护、赛季更新、计时赛和社区活动。",
+    "icon": "megaphone",
+    "topicCount": 0,
+    "postCount": 0,
+    "lastActivityAt": null
+  }
+]
+```
+
+### 5.2 `GET /api/v1/forum/topics`
+
+Query：
+
+| 参数 | 说明 |
+| --- | --- |
+| `limit` | 1–50，默认 20 |
+| `category` | 分类 slug |
+| `q` | 搜索标题、摘要、标签、作者、分类名，最长由前端限制 120 字符 |
+| `author` | 作者 UUID（内部/账号接口使用） |
+
+返回 `ForumTopic[]`，包含 `slug`、`title`、`excerpt`、`categorySlug`、`categoryName`、`categoryIcon`、`author`、`tags`、`createdAt`、`lastActivityAt`、`views`、`pinned`、`hot`、`replyCount`。没有主题时返回 `[]`。
+
+### 5.3 `GET /api/v1/forum/topics/{slug}`
+
+返回主题详情与回复；不存在或已软删除返回 `404 not_found`。
+
+```json
+{
+  "slug": "topic-slug",
+  "title": "主题标题",
+  "content": "正文，段落以换行分隔",
+  "replies": [
+    {
+      "id": "uuid",
+      "content": "回复内容",
+      "likes": 0,
+      "createdAt": "2026-10-23T14:43:25Z",
+      "author": { "name": "作者", "role": "member", "avatarUrl": null }
+    }
+  ]
+}
+```
+
+### 5.4 `GET /api/v1/forum/active-users?limit=8`
+
+返回最近发帖或回复的作者，按最近活动时间倒序，`limit` 范围 1–30。
+
+## 6. 社区、用户中心与管理
+
+### 6.1 `GET /api/v1/community/overview`
+
+```json
+{
+  "members": 0,
+  "topics": 0,
+  "replies": 0,
+  "onlinePlayers": 0,
+  "servers": 0,
+  "newTopicsWeek": 0,
+  "activeMembersWeek": 0
+}
+```
+
+全部来自数据库；空库返回 0。`members` 与 `activeMembersWeek` 不包含 `is_system=true` 的官方系统账号。
+
+### 6.2 `GET /api/v1/account`
+
+需要登录，返回当前用户资料、统计、最近主题、收藏和最近活动。未登录返回 `401 unauthorized`。用户不存在或会话过期同样返回 401。
+
+### 6.3 `GET /api/v1/admin/overview`
+
+需要 `admin` 角色，返回统计、角色分布、最近注册用户、最近主题和最近 7 天活动。非管理员返回 `403 forbidden`，未登录返回 `401 unauthorized`。
+
+### 6.4 管理员管理
+
+- `GET /admin/admins` 返回所有管理员（含禁用状态）。
+- `GET /admin/users/lookup?steamId64=765...`：查询玩家昵称、头像、角色与禁用状态；未找到返回 `{ "user": null }`。
+- `POST /admin/admins` body `{ "steamId64": "765..." }`：按 SteamID64 新增管理员；用户尚未登录时创建占位账号，首次登录保留管理员角色。
+- `DELETE /admin/admins/{steam_id64}`：取消管理员权限，并撤销其会话。
+- `POST /admin/admins/{steam_id64}/disable` body `{ "reason": "..." }`：禁用账号并撤销会话；禁用账号无法登录。
+- `POST /admin/admins/{steam_id64}/enable`：重新启用。
+- 管理员不能取消/禁用自己；系统拒绝取消或禁用最后一位可用管理员。
+- `ADMIN_STEAM_IDS` 只用于首次创建/引导管理员；登录不会覆盖数据库中已由管理面板修改的角色。
+
+### 6.5 封禁管理
+
+- `GET /admin/bans` 返回生效和历史封禁记录。
+- `POST /admin/bans` body `{ "steamId64": "...", "reason": "...", "expiresInHours": 24 }`；`expiresInHours` 缺省/`null` 为永久。
+- `POST /admin/bans/{id}/lift` body `{ "reason": "..." }` 解封。
+- 管理员账号不能直接被封禁，需先取消管理员权限。
+- 封禁会撤销目标网站会话；后续登录和会话读取都会被拒绝，直到解封或到期。
+
+### 6.6 白名单
+
+- `GET /admin/whitelist` 返回申请、已授权名单和服务器白名单设置。
+- `POST /admin/whitelist` body `{ "serverId": "...", "steamId64": "...", "playerName": "..." }` 手动授权。
+- `POST /admin/whitelist/applications/{id}/approve` / `reject` body `{ "note": "..." }` 审核申请；通过时会写入 `server_whitelist`。
+- `DELETE /admin/whitelist/{server_id}/{steam_id64}` 移除授权。
+- `PATCH /admin/servers/{id}/whitelist` body `{ "requiresWhitelist": true }` 开关服务器要求。
+- `POST /whitelist/applications` body `{ "serverId": "...", "message": "..." }` 当前登录玩家提交申请；同一服务器已有待审申请或已在白名单时返回 409。
+- 当前没有游戏服务器插件自动读取白名单；实际进服拦截需要插件从 `server_whitelist` / `bans` 表同步或在连接前查询。
+
+## 7. 错误结构
+
+业务 API 的错误使用统一结构（健康检查 503 返回专用就绪状态）：
 
 ```json
 {
@@ -101,107 +270,55 @@ Redis 不可用且 `REDIS_REQUIRED=false` 时示例：
 }
 ```
 
-- `details` 可选，省略时为 `null` 或在 JSON 中不出现。
-- 业务错误响应带 `Cache-Control: no-store`。
-- 业务错误响应带 `x-request-id`；请在后端日志、前端错误提示或问题报告中引用。健康检查响应也带 `x-request-id`，但其 503 body 是就绪状态而非错误信封。
-- 内部错误只记录服务端日志，客户端仅收到通用消息。
-
-### 错误码
+- 错误响应带 `Cache-Control: no-store` 与 `x-request-id`。
+- 内部错误只记录服务端日志；客户端收到通用消息。
 
 | HTTP | `code` | 含义 |
 | --- | --- | --- |
-| 400 | `bad_request` | 请求无法处理（格式/参数错误） |
-| 401 | `unauthorized` | 需要认证（预留，当前无认证接口） |
-| 403 | `forbidden` | 已认证但无权限（预留） |
+| 400 | `bad_request` | 请求无法处理（如 Steam 断言参数错误） |
+| 401 | `unauthorized` | 需要登录或会话失效 |
+| 403 | `forbidden` | 已登录但不是管理员 |
 | 404 | `not_found` | 资源或路由不存在 |
 | 405 | `method_not_allowed` | 路径存在但方法不允许 |
 | 409 | `conflict` | 与当前资源状态冲突（预留） |
 | 422 | `validation_error` | 字段校验失败（预留） |
-| 429 | `too_many_requests` | 触发限流（预留） |
-| 504 | `request_timeout` | 请求处理超时 |
+| 429 | `too_many_requests` | 限流（预留，尚未实现） |
 | 503 | `service_unavailable` | 服务暂时不可用（预留） |
+| 504 | `request_timeout` | 请求处理超时 |
 | 500 | `internal_error` | 未预期内部错误 |
 
-> 401/403/409/422/429/503 的响应类型已存在，但当前没有触发它们的业务接口。
-
-## 4. 请求追踪
+## 8. 请求追踪
 
 - 每个响应包含 `x-request-id`。
-- Nginx 使用 `$request_id` 注入；API 仅接受长度 1–128、字符集为 ASCII 字母/数字/`-`/`_` 的值，否则生成 UUID。
-- JSON/结构化日志中的 `http_request` span 包含 `request_id`。
-- 前端 `ApiClient` 会将 `x-request-id` 暴露为 `ApiError.requestId`。
+- Nginx 使用 `$request_id` 注入；API 只接受长度 1–128、ASCII 字母/数字/`-`/`_` 的值，否则生成 UUID。
+- 前端 `ApiClient` 将 `x-request-id` 暴露为 `ApiError.requestId`。
 
-## 5. 认证与授权（设计约定，未实现）
+## 9. 分页、排序与过滤
 
-规划方案：
+当前只实现 `limit` 上限 50 的简单截断，没有游标分页；论坛主题按置顶、最近活动排序。后续大量数据需要游标分页时再引入 `items/next_cursor` 结构，不能直接暴露数据库自增 ID。
 
-- 登录成功后由 API 设置 `HttpOnly; Secure; SameSite=Lax` 会话 Cookie；前端不把会话令牌写入 `localStorage`。
-- 服务端会话令牌为不透明随机值，数据库只保存哈希；支持过期、撤销和设备级会话管理。
-- 写请求携带 CSRF 令牌（双提交 Cookie + `x-csrf-token`），API 强制校验。
-- 权限由后端 RBAC 检查，前端隐藏按钮仅为体验优化。
-- 登录失败与频率限制返回统一错误，不泄露账号是否存在。
-- 管理接口要求显式权限；审计记录操作者、目标、动作、结果和请求 ID。
-
-**当前没有任何登录、注册、会话、CSRF 或 RBAC 接口。** `/admin` 页面不是受保护资源。
-
-## 6. 分页、排序与过滤（设计约定，未实现）
-
-论坛等列表接口计划采用游标分页：
-
-```json
-{
-  "items": [],
-  "next_cursor": null
-}
-```
-
-- Query：`limit`（默认 20，最大 100）、`cursor`（不透明字符串）。
-- 不对客户端暴露数据库自增 ID 作为游标。
-- 排序方式由端点固定或通过白名单参数选择，禁止直接拼接 SQL 排序字段。
-- 过滤参数必须显式定义和校验；未知参数忽略或返回 400（由端点契约决定）。
-- 具体实现前，本节不构成可用接口。
-
-## 7. 版本与兼容性
-
-- 业务接口全部位于 `/api/v1`。
-- 允许的兼容变更：新增可选字段、新增端点、新增响应头、放宽校验。
-- 破坏性变更：删除/重命名字段、改变类型/语义、收紧必填、改变错误码含义。
-- 破坏性变更必须引入新版本前缀（如 `/api/v2`），保留过渡期，并更新 API 文档、OpenAPI、前端调用和 CHANGELOG。
-- OpenAPI 是接口契约的机器可读来源；`docs/API.md` 解释约定与状态。
-
-## 8. OpenAPI 与文档
+## 10. OpenAPI
 
 开发环境（`API_DOCS_ENABLED=true`）：
 
 - JSON：`GET /api/v1/openapi.json`
-- Swagger UI：`GET /api/v1/docs`（会 303 跳转到 `/api/v1/docs/`）
+- Swagger UI：`GET /api/v1/docs`
 
-生产环境默认 `API_DOCS_ENABLED=false`，两个路由都返回统一的 404 错误。
+生产环境默认关闭，两个路由返回统一 404。
 
-新增/修改端点时：
+新增/修改端点时必须补充 `#[utoipa::path]`、将 path 加入 `ApiDoc`、更新本文并添加测试。当前业务响应的详细 schema 尚未全部加入 OpenAPI，前端类型仍以 `apps/web/src/types` 和 feature types 为准。
 
-1. 添加 `#[utoipa::path]` 和 schema；
-2. 将 path 加入 `ApiDoc` 的 `paths(...)`；
-3. 更新本文的“已实现接口”；
-4. 添加/更新集成测试；
-5. 在 `docs/DEVELOPMENT.md` 记录 API 变化。
-
-前端类型生成尚未接入。后续可在 CI 中基于 OpenAPI 生成类型，但生成结果需要代码审查，不能未经检查直接覆盖手写类型。
-
-## 9. CORS
+## 11. CORS
 
 - 允许来源由 `CORS_ALLOWED_ORIGINS`（逗号分隔）控制，默认空。
-- 允许凭据（Cookie）；因此禁止使用通配符 `*`。
-- 暴露 `x-request-id`，允许请求头包括 `accept`、`authorization`、`content-type`、`x-request-id`、`x-csrf-token`。
-- 生产同源部署不需要 CORS；跨域仅用于本地开发或明确的独立客户端。
+- 允许凭据（Cookie）；生产同源部署不需要 CORS。
+- 暴露 `x-request-id`，允许 `accept`、`authorization`、`content-type`、`x-request-id`、`x-csrf-token`。
 
-## 10. 限流与滥用防护（待实现）
+## 12. 限流与滥用防护（规划）
 
-规划：
+- 登录、回调、发帖/回复、资料修改按 IP + 用户 + 动作维度限流。
+- 使用 Redis 计数/滑动窗口；当前 Redis 只做就绪检查，不承载业务限流。
+- 触发时返回 `429 too_many_requests`，带 `Retry-After`。
+- 管理操作应有审计记录。
 
-- 登录、注册、密码重置、发帖/回复等写操作单独限流；
-- 以 IP + 用户 + 动作维度在 Redis 计数；
-- 触发时返回 `429 too_many_requests`，带 `Retry-After`；
-- 管理操作与审核操作保留审计记录。
-
-当前 API 没有任何业务限流，仅由 Nginx 请求体大小和 API 超时提供基础保护。
+当前没有业务限流，只有 Nginx 请求体限制与 API 超时。

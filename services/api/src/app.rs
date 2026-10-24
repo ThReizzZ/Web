@@ -41,7 +41,8 @@ pub fn build_router(state: AppState, settings: &Settings) -> Router {
         .nest("/api/v1", routes::api_v1())
         .fallback(routes::fallback::not_found)
         .method_not_allowed_fallback(routes::fallback::method_not_allowed)
-        .with_state(state);
+        .with_state(state)
+        .layer(axum::Extension(settings.auth.clone()));
 
     if settings.http.docs_enabled {
         router = router.merge(openapi::docs_router());

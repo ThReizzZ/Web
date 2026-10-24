@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "threi 社区",
-    short_name: "threi",
-    description: "面向长期运营的社区系统。",
+    name: "ThRei 社区",
+    short_name: "ThRei",
+    description: "ThRei CS:GO KZ 攀爬与跳跃社区。",
     start_url: "/",
     display: "standalone",
     background_color: "#fbfbfd",

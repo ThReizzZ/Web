@@ -11,6 +11,91 @@
 
 ---
 
+## [Unreleased]
+
+**状态：** 本地开发与真实数据接入，尚未创建 Git tag 或正式发布。
+
+### Added
+
+- 新增 Steam OpenID 登录：`/api/v1/auth/steam/login`、`/callback`、`/me`、`/logout`。
+- 新增数据库会话：随机令牌、SHA-256 哈希存储、`threi_session` HttpOnly Cookie、过期时间与登出撤销。
+- 新增真实业务表：`users`、`sessions`、`servers`、`server_players`、`categories`、`topics`、`replies`、`favorites`。
+- 新增真实数据 API：服务器目录、论坛分类/主题/详情/活跃用户、社区统计、用户中心、管理员概览。
+- 新增管理员角色：`ADMIN_STEAM_IDS` 配置；`/admin` 与 `/api/v1/admin/overview` 双重校验。
+- 新增管理员管理：按 SteamID64 添加管理员、取消管理员、禁用/启用账号，并保护最后一位可用管理员。
+- 新增管理员输入查询：输入 17 位 SteamID64 后显示玩家头像、昵称和 ID 下拉框，选择后再添加。
+- 管理员、封禁、白名单授权和最近注册恢复为单列列表；玩家名称完整换行显示，状态、SteamID64、时间和操作分区展示，不需要横向滚动。
+- 新增封禁管理：临时/永久封禁、封禁记录、解封；封禁立即撤销网站会话并阻止登录。
+- 新增白名单审核：服务器白名单开关、玩家申请、通过/拒绝、手动授权、移除授权；用户中心提供白名单申请表单。
+- 服务器 API 与卡片新增 `requiresWhitelist` 标记。
+- 顶部导航改为“使用Steam登录”，登录后显示当前 Steam 用户。
+- 顶部导航的“管理面板”入口只对 `admin` 角色显示；匿名用户与普通成员不可见。
+- `/admin` 布局在服务端再次校验：匿名访问重定向到 `/account`，普通成员重定向到首页；管理员 API 仍返回 401/403。
+- 管理面板导航改为“概览 / 管理员 / 封禁管理 / 白名单审核”，并增加当前管理员信息；删除重复的“服务状态”入口。
+- 删除运营概览中的独立服务状态区块与前端系统状态组件，统计信息保留在运营概览。
+- 服务器卡片/列表、论坛、用户中心与管理面板改为读取 API/PostgreSQL 数据；空库显示空状态。
+- 新增 `apps/web/src/services/content.ts` 类型化内容 API 客户端。
+- 新增 OpenAPI 路径：auth、servers、forum、community、account、admin。
+- 新增 HTTP 合约测试：Steam 登录重定向、匿名 `/auth/me`、未登录 `/account` 返回 401。
+- 新增官方新手指南主题，说明进入 KZ 服务器、常见拦截原因、白名单申请模板与审核说明。
+- 论坛“新手指南”卡片的按钮改为“查看教学”，跳转 `/forum/topic/new-player-guide`。
+- 新增 `users.is_system`，官方系统账号不参与成员数、角色分布、最近注册与活跃统计。
+- 新增开发环境外部 PostgreSQL/Redis 配置说明；生产仍使用 Compose 内 PostgreSQL/Redis。
+
+### Changed
+
+- 前端删除所有模拟数据模块：`features/forum/data`、`features/account/data`、`features/admin/data`。
+- 删除 12 个模拟服务器、模拟玩家头像/昵称、模拟主题/回复、模拟运营指标和未鉴权管理面板内容。
+- 删除 12 张不再使用的 KZ 地图 SVG；服务器地图图片改由数据库 `servers.map_image` 提供。
+- 用户中心重写为当前 Steam 用户资料、真实主题/回复/收藏统计与最近活动。
+- 管理面板重写为真实统计、角色分布、最近会员、最近主题、7 天活动和服务器节点。
+- 首页/服务器页/论坛页/分类页/主题详情页改为动态读取 API。
+- 登录 CTA 与首页/用户中心/管理面板的登录入口统一使用 Steam OpenID。
+- Compose 增加 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM`、`COOKIE_SECURE`、`SESSION_TTL_DAYS`、`ADMIN_STEAM_IDS`。
+- `WEB_URL` 在生产环境必填，避免回调错误指向 localhost。
+- `ADMIN_STEAM_IDS` 只用于首次创建/引导管理员；登录不会覆盖管理面板中已修改的数据库角色。
+- 开发环境 Steam 回调 origin 改为浏览器实际访问的局域网地址；`127.0.0.1` 只适用于浏览器与开发服务器在同一台机器的情况。
+- Steam 头像远程域名新增 `avatars.fastly.steamstatic.com`。
+
+### Removed
+
+- 移除前端模拟数据与“预览数据”声明。
+- 移除未使用的 `apps/web/public/images/servers/*.svg`。
+- 移除模拟通知、徽章、审核队列、审计日志、系统设置等未接入真实数据的管理面板模块。
+
+### Fixed
+
+- 修复用户中心横幅中用户名与封面重叠、被深色背景遮挡的问题。
+- 修复服务器卡片在无地图图片时的空白封面。
+- 修复服务器延迟未知时的显示。
+- 修复论坛作者角色显示英文 `admin` / `member` 的问题，统一显示中文角色名。
+- 修复教程正文单换行被折叠成一段的问题，保留步骤换行。
+- 移除运营概览中的“真实数据 / 页面数据来自 PostgreSQL”提示卡片。
+- 修复管理面板宽表格在 1440 和移动端被截断/页面横向溢出的问题，表单在窄屏改为紧凑网格布局。
+- 管理员/封禁/白名单列表在 390px 宽度下改为单列换行，不再出现页面级横向滚动或名称截断。
+
+### Security
+
+- Steam 断言必须经过 Steam OpenID `check_authentication` 验证后才会被信任。
+- 会话令牌只保存哈希；Cookie 为 HttpOnly、SameSite=Lax，生产环境使用 Secure。
+- 会话 Cookie 有效期可配置；登出删除数据库会话并清除 Cookie。
+- `/account` 需要登录，管理员 API 需要 `admin` 角色。
+- 尚未实现登录限流、CSRF、细粒度 RBAC、审核与审计；当前没有写业务接口。
+- 生产环境仍需 HTTPS；回调地址必须与公开 origin 一致。
+
+### Compatibility / Upgrade Notes
+
+- 新增迁移 `20261023230000_real_content_and_steam_auth.sql`、`20261023233000_seed_new_player_guide.sql` 与 `20261023235000_admin_moderation_whitelist.sql`，部署时必须先运行 `migrate`。
+- 新迁移新增 `users.is_system`、`users.is_disabled`、`servers.requires_whitelist`、`bans`、`whitelist_applications`、`server_whitelist`；不会创建模拟服务器或模拟玩家。
+- 数据库预置 5 个论坛分类、1 个系统账号和 1 篇官方新手指南；不会创建模拟服务器、模拟玩家或模拟讨论。
+- 需要在环境变量中设置 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM`；生产必须 HTTPS。
+- 首次登录后从用户中心获取 SteamID64，再加入 `ADMIN_STEAM_IDS` 并重新登录以获得管理员角色。
+- 开发环境可使用局域网 PostgreSQL/Redis；连接信息仅保存在本地 `.env`，不得提交。
+- 如果浏览器从另一台机器访问，必须使用开发机的局域网 IP（当前为 `192.168.0.101:3100`）并让 `WEB_URL` / `STEAM_RETURN_URL` 使用同一 origin，否则 Steam 回调会指向浏览器自己的 `127.0.0.1`。
+- 真实 Steam 授权需要人工在浏览器完成；自动化只验证了重定向、回调和会话边界。
+
+---
+
 ## [0.1.0] — 架构初始化（未发布）
 
 **状态：** 本次任务交付，尚未创建 Git tag 或正式发布。
