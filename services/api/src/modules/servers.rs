@@ -22,6 +22,7 @@ pub struct ServerRow {
     pub map_image: String,
     pub featured: bool,
     pub requires_whitelist: bool,
+    pub player_count: Option<i32>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -58,6 +59,7 @@ pub struct Server {
     pub map_image: String,
     pub featured: bool,
     pub requires_whitelist: bool,
+    pub player_count: Option<i32>,
     pub players: Vec<ServerPlayer>,
 }
 
@@ -75,7 +77,8 @@ async fn list_servers(State(state): State<AppState>) -> Result<Json<Vec<Server>>
     let rows = sqlx::query_as::<_, ServerRow>(
         r"
         SELECT id, name, map, description, status, host, port, region, tickrate,
-               max_players, latency_ms, tags, map_image, featured, requires_whitelist
+               max_players, latency_ms, tags, map_image, featured, requires_whitelist,
+               player_count
         FROM servers
         WHERE is_active = true
         ORDER BY featured DESC, name
@@ -125,6 +128,7 @@ async fn list_servers(State(state): State<AppState>) -> Result<Json<Vec<Server>>
                 map_image: row.map_image,
                 featured: row.featured,
                 requires_whitelist: row.requires_whitelist,
+                player_count: row.player_count,
                 players: roster,
             }
         })

@@ -7,5 +7,6 @@ pub mod community;
 pub mod forum;
 pub mod forum_admin;
 pub mod server_admin;
+pub mod server_plugin;
 pub mod servers;
 pub mod whitelist;

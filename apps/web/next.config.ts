@@ -12,9 +12,22 @@ const securityHeaders = [
 
 const apiInternalUrl = (process.env.API_INTERNAL_URL ?? "").replace(/\/+$/, "");
 
+// Next.js blocks dev resources (notably /_next/hmr) when the page is opened
+// from a non-localhost host. Allow the LAN origin configured for this checkout
+// so client components hydrate when the browser is not on the dev machine.
+const devAllowedOrigins = (() => {
+  try {
+    const hostname = new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "").hostname;
+    return hostname && hostname !== "localhost" && hostname !== "127.0.0.1" ? [hostname] : [];
+  } catch {
+    return [];
+  }
+})();
+
 const nextConfig: NextConfig = {
   output: "standalone",
   reactStrictMode: true,
+  allowedDevOrigins: devAllowedOrigins,
   poweredByHeader: false,
   images: {
     remotePatterns: [

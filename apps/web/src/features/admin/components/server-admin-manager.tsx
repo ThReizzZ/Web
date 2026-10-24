@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Ban,
+  Check,
+  Copy,
   Gamepad2,
+  KeyRound,
   LoaderCircle,
   Plus,
   Server,
@@ -27,14 +30,18 @@ import { Tooltip } from "@/components/ui/tooltip";
 import type { AdminServer, ServerAdminOverview, ServerBan } from "@/features/admin/types";
 import { formatDate } from "@/lib/format";
 import { getBrowserApiClient } from "@/lib/api/browser";
+import { siteConfig } from "@/lib/site-config";
 import { useToast } from "@/components/ui/toast";
 import {
   banServerPlayer,
+  clearAdminServerPluginToken,
   createAdminServer,
   deleteAdminServer,
   fetchAdminServers,
+  fetchAdminServerPluginToken,
   kickServerPlayer,
   liftServerBan,
+  rotateAdminServerPluginToken,
   setAdminServerActive,
 } from "@/services/content";
 
@@ -43,7 +50,7 @@ const initialForm = {
   name: "",
   map: "",
   description: "",
-  status: "online",
+  status: "offline",
   host: "",
   port: "27015",
   region: "",
@@ -55,6 +62,16 @@ const initialForm = {
   requiresWhitelist: false,
 };
 
+function pluginStateLabel(state: AdminServer["pluginState"]): string {
+  if (state === "connected") {
+    return "插件已连接";
+  }
+  if (state === "waiting") {
+    return "等待插件上报";
+  }
+  return "未接入插件";
+}
+
 export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }) {
   const [servers, setServers] = useState(initial.servers);
   const [bans, setBans] = useState(initial.bans);
@@ -63,6 +80,12 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
   const [feedback, setFeedback] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AdminServer | null>(null);
+  const [pluginTarget, setPluginTarget] = useState<AdminServer | null>(null);
+  const [pluginToken, setPluginToken] = useState<string | null>(null);
+  const [pluginTokenLoading, setPluginTokenLoading] = useState(false);
+  const [pluginTokenError, setPluginTokenError] = useState<string | null>(null);
+  const [pluginApiUrl, setPluginApiUrl] = useState(`${siteConfig.url}/api/v1/plugin/report`);
+  const [configCopied, setConfigCopied] = useState(false);
 
   const { toast } = useToast();
 
@@ -70,6 +93,7 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
     const data = await fetchAdminServers(getBrowserApiClient());
     setServers(data.servers);
     setBans(data.bans);
+    return data;
   }
 
   async function handleAdd(event: React.FormEvent<HTMLFormElement>) {
@@ -89,12 +113,127 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
       });
       setForm(initialForm);
       setShowAdd(false);
-      setFeedback("服务器已添加。");
-      await reload();
+      setFeedback("服务器已添加。请打开“插件配置”生成令牌，并安装 ThRei_Players。");
+      try {
+        await reload();
+      } catch {
+        // The inventory refresh is best-effort; creation already succeeded.
+      }
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "添加服务器失败。");
     } finally {
       setBusy(null);
+    }
+  }
+
+  function openPluginDialog(server: AdminServer) {
+    setPluginTarget(server);
+    setPluginToken(null);
+    setPluginTokenError(null);
+    setConfigCopied(false);
+    setPluginApiUrl(`${siteConfig.url}/api/v1/plugin/report`);
+    void loadPluginToken(server.id);
+  }
+
+  function closePluginDialog() {
+    setPluginTarget(null);
+    setPluginToken(null);
+    setPluginTokenError(null);
+    setPluginTokenLoading(false);
+  }
+
+  async function loadPluginToken(serverId: string) {
+    setPluginTokenLoading(true);
+    setPluginTokenError(null);
+    try {
+      const token = await fetchAdminServerPluginToken(getBrowserApiClient(), serverId);
+      setPluginToken(token);
+    } catch (error) {
+      setPluginTokenError(error instanceof Error ? error.message : "读取插件令牌失败。");
+    } finally {
+      setPluginTokenLoading(false);
+    }
+  }
+
+  async function generatePluginToken() {
+    if (!pluginTarget) {
+      return;
+    }
+    const targetId = pluginTarget.id;
+    setBusy(`plugin-token-${targetId}`);
+    setFeedback(null);
+    try {
+      const token = await rotateAdminServerPluginToken(getBrowserApiClient(), targetId);
+      setPluginToken(token);
+      setPluginTokenError(null);
+      setConfigCopied(false);
+      setFeedback("插件令牌已生成。旧令牌立即失效，请更新服务器配置。");
+      try {
+        const data = await reload();
+        const updated = data.servers.find((server) => server.id === targetId);
+        if (updated) {
+          setPluginTarget(updated);
+        }
+      } catch {
+        // Token creation succeeded; the list will refresh on the next action.
+      }
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "生成插件令牌失败。");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function revokePluginToken() {
+    if (!pluginTarget) {
+      return;
+    }
+    const target = pluginTarget;
+    if (
+      !window.confirm(`撤销「${target.name}」的插件令牌？插件将立即无法上报，在线状态会变为离线。`)
+    ) {
+      return;
+    }
+    setBusy(`plugin-token-${target.id}`);
+    setFeedback(null);
+    try {
+      await clearAdminServerPluginToken(getBrowserApiClient(), target.id);
+      setPluginToken(null);
+      setPluginTokenError(null);
+      setConfigCopied(false);
+      setFeedback("插件令牌已撤销。");
+      try {
+        const data = await reload();
+        const updated = data.servers.find((server) => server.id === target.id);
+        if (updated) {
+          setPluginTarget(updated);
+        }
+      } catch {
+        // Revocation already succeeded.
+      }
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "撤销插件令牌失败。");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function copyPluginConfig() {
+    if (!pluginTarget || !pluginToken) {
+      return;
+    }
+    const config = [
+      `sm_threi_api_url "${pluginApiUrl.trim()}"`,
+      `sm_threi_server_id "${pluginTarget.id}"`,
+      `sm_threi_token "${pluginToken}"`,
+      `sm_threi_interval "30"`,
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(config);
+      setConfigCopied(true);
+      setFeedback("插件配置已复制。");
+    } catch {
+      setFeedback("复制失败，请手动选择配置文本。");
     }
   }
 
@@ -132,24 +271,18 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
   }
 
   async function kick(server: AdminServer, player: AdminServer["players"][number]) {
+    const steamId64 = player.steamId64;
     const reason = window.prompt(`踢出 ${player.name} 的原因`, "管理员操作");
     if (!reason) {
       return;
     }
-    setBusy(`kick-${server.id}-${player.steamId64}`);
+    setBusy(`kick-${server.id}-${steamId64}`);
     try {
-      await kickServerPlayer(getBrowserApiClient(), server.id, player.steamId64, reason);
-      setServers((current) =>
-        current.map((item) =>
-          item.id === server.id
-            ? {
-                ...item,
-                players: item.players.filter((p) => p.steamId64 !== player.steamId64),
-              }
-            : item,
-        ),
+      await kickServerPlayer(getBrowserApiClient(), server.id, steamId64, reason);
+      setFeedback(
+        `已记录踢出 ${player.name} 的指令；当前 ThRei_Players 只上报数据，游戏内执行尚未接入。`,
       );
-      setFeedback(`已提交踢出 ${player.name} 的指令。`);
+      await reload();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "踢出失败。");
     } finally {
@@ -158,6 +291,7 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
   }
 
   async function ban(server: AdminServer, player: AdminServer["players"][number]) {
+    const steamId64 = player.steamId64;
     const reason = window.prompt(`封禁 ${player.name} 的原因`, "违反服务器规则");
     if (!reason) {
       return;
@@ -165,24 +299,16 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
     if (!window.confirm(`确认在 ${server.name} 封禁 ${player.name}？`)) {
       return;
     }
-    setBusy(`ban-${server.id}-${player.steamId64}`);
+    setBusy(`ban-${server.id}-${steamId64}`);
     try {
-      await banServerPlayer(getBrowserApiClient(), server.id, player.steamId64, {
+      await banServerPlayer(getBrowserApiClient(), server.id, steamId64, {
         reason,
         playerName: player.name,
         expiresInHours: null,
       });
-      setServers((current) =>
-        current.map((item) =>
-          item.id === server.id
-            ? {
-                ...item,
-                players: item.players.filter((p) => p.steamId64 !== player.steamId64),
-              }
-            : item,
-        ),
+      setFeedback(
+        `已在 ${server.name} 记录封禁 ${player.name}；游戏内执行尚未接入 ThRei_Players。`,
       );
-      setFeedback(`已在 ${server.name} 封禁 ${player.name}。`);
       await reload();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "封禁失败。");
@@ -217,6 +343,16 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
     }
   }, [feedback, toast]);
 
+  const pluginConfig =
+    pluginTarget && pluginToken
+      ? [
+          `sm_threi_api_url "${pluginApiUrl.trim()}"`,
+          `sm_threi_server_id "${pluginTarget.id}"`,
+          `sm_threi_token "${pluginToken}"`,
+          `sm_threi_interval "30"`,
+        ].join("\n")
+      : "";
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -224,7 +360,7 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
           <p className="text-sm font-medium text-primary">服务器</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">服务器管理</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            添加或删除服务器、启用/停用节点、查看在线玩家，并提交踢出或服务器封禁指令。
+            添加或删除服务器、启用/停用节点、查看插件上报的在线玩家，并提交踢出或服务器封禁指令。
           </p>
         </div>
         <Button type="button" onClick={() => setShowAdd((value) => !value)}>
@@ -253,7 +389,8 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
         <form id="server-add-form" onSubmit={handleAdd} className="space-y-6">
           <Alert variant="info">
             <AlertDescription>
-              踢出/封禁指令需要游戏服务器插件消费；服务器在线玩家由插件上报。
+              服务器状态与在线玩家由游戏服务器插件 ThRei_Players 上报。添加后生成插件令牌、安装
+              SourceMod 插件，API 才会收到实时数据；当前不再使用 A2S / RCON 轮询。
             </AlertDescription>
           </Alert>
 
@@ -358,6 +495,10 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                 />
               </Field>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Host
+              与端口用于展示和玩家连接；在线状态、地图和人数由插件上报覆盖。维护中状态不会被插件覆盖。
+            </p>
           </section>
 
           <section className="space-y-3 border-t pt-5">
@@ -411,7 +552,7 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
               <Server className="size-4 text-primary" /> 服务器列表
             </h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              在线玩家来自服务器插件上报；踢出/封禁会写入待处理指令队列。
+              插件每 30 秒上报一次；超过 90 秒没有上报会自动标记离线并清空在线名单。
             </p>
           </div>
           <Badge variant="secondary">{servers.length} 个服务器</Badge>
@@ -428,6 +569,21 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium break-words">{server.name}</p>
+                        <Badge
+                          variant={
+                            server.status === "online"
+                              ? "success"
+                              : server.status === "maintenance"
+                                ? "warning"
+                                : "muted"
+                          }
+                        >
+                          {server.status === "online"
+                            ? "在线"
+                            : server.status === "maintenance"
+                              ? "维护中"
+                              : "离线"}
+                        </Badge>
                         <Badge variant={server.isActive ? "success" : "muted"}>
                           {server.isActive ? "启用" : "停用"}
                         </Badge>
@@ -438,17 +594,52 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                           </Tooltip>
                         ) : null}
                         {server.featured ? <Badge variant="secondary">推荐</Badge> : null}
+                        <Badge
+                          variant={
+                            server.pluginState === "connected"
+                              ? "success"
+                              : server.pluginState === "waiting"
+                                ? "warning"
+                                : "outline"
+                          }
+                        >
+                          {pluginStateLabel(server.pluginState)}
+                        </Badge>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {server.host}:{server.port} · {server.region || "未设置地区"} ·{" "}
-                        {server.tickrate} tick · {server.players.length}/{server.maxPlayers} 在线
+                        {server.tickrate} tick · {server.playerCount ?? server.players.length}/
+                        {server.maxPlayers} 在线
+                        {server.latencyMs === null ? "" : ` · ${server.latencyMs} ms`}
                       </p>
                       <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
                         {server.id}
+                        {server.lastReportedAt
+                          ? ` · 最近上报 ${formatDate(server.lastReportedAt)}`
+                          : " · 尚未收到插件上报"}
                       </p>
+                      {server.pluginState === "disabled" ? (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          点击“插件配置”生成令牌，并在游戏服务器安装 ThRei_Players。
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 lg:shrink-0">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={busy === `plugin-token-${server.id}`}
+                      onClick={() => openPluginDialog(server)}
+                    >
+                      {busy === `plugin-token-${server.id}` ? (
+                        <LoaderCircle className="animate-spin" />
+                      ) : (
+                        <KeyRound />
+                      )}
+                      插件配置
+                    </Button>
                     <Button
                       type="button"
                       size="sm"
@@ -476,7 +667,12 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
 
                 {server.players.length > 0 ? (
                   <div className="mt-3 rounded-lg border bg-muted/20 p-3">
-                    <p className="text-xs font-medium text-muted-foreground">在线玩家</p>
+                    <p className="text-xs font-medium text-muted-foreground">
+                      在线玩家 · {server.playerCount ?? server.players.length}
+                      <span className="ml-2 font-normal">
+                        踢出/封禁会写入待执行队列；游戏内执行尚未接入。
+                      </span>
+                    </p>
                     <div className="mt-2 divide-y">
                       {server.players.map((player) => (
                         <div
@@ -486,7 +682,10 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                           <div className="flex min-w-0 items-center gap-2">
                             <UserAvatar name={player.name} avatarUrl={player.avatarUrl} size="xs" />
                             <div className="min-w-0">
-                              <p className="text-sm break-words">{player.name}</p>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <p className="text-sm break-words">{player.name}</p>
+                                <Badge variant="outline">插件</Badge>
+                              </div>
                               <p className="font-mono text-[10px] break-all text-muted-foreground">
                                 {player.steamId64}
                               </p>
@@ -516,7 +715,13 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                       ))}
                     </div>
                   </div>
-                ) : null}
+                ) : (
+                  <p className="mt-3 rounded-lg border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+                    {server.pluginState === "disabled"
+                      ? "尚未接入插件，生成令牌并安装 ThRei_Players 后会显示在线玩家。"
+                      : "当前未检测到在线玩家；插件每 30 秒上报一次。"}
+                  </p>
+                )}
               </article>
             ))
           ) : (
@@ -588,6 +793,173 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
           )}
         </div>
       </section>
+
+      <Modal
+        open={pluginTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closePluginDialog();
+          }
+        }}
+        title={pluginTarget ? `ThRei_Players · ${pluginTarget.name}` : "ThRei_Players"}
+        description="生成服务器专用令牌，并在游戏服务器安装 SourceMod 插件。插件会上报地图、人数和已登录 Steam 的玩家名单。"
+        size="lg"
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" onClick={closePluginDialog}>
+              关闭
+            </Button>
+            {pluginToken ? (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={pluginTarget !== null && busy === `plugin-token-${pluginTarget.id}`}
+                onClick={() => void revokePluginToken()}
+              >
+                撤销令牌
+              </Button>
+            ) : null}
+            {pluginToken ? (
+              <Button
+                type="button"
+                disabled={pluginTarget !== null && busy === `plugin-token-${pluginTarget.id}`}
+                onClick={() => void generatePluginToken()}
+              >
+                {pluginTarget !== null && busy === `plugin-token-${pluginTarget.id}` ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <KeyRound />
+                )}
+                重新生成
+              </Button>
+            ) : pluginTokenLoading || pluginTokenError ? null : (
+              <Button
+                type="button"
+                disabled={pluginTarget !== null && busy === `plugin-token-${pluginTarget.id}`}
+                onClick={() => void generatePluginToken()}
+              >
+                {pluginTarget !== null && busy === `plugin-token-${pluginTarget.id}` ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <KeyRound />
+                )}
+                生成令牌
+              </Button>
+            )}
+          </div>
+        }
+      >
+        <div className="space-y-5">
+          <Alert variant="info">
+            <AlertDescription>
+              需要 SourceMod 1.11 或更高版本，以及 SteamWorks 扩展。插件通过 HTTP
+              上报；请使用游戏服务器可访问的 HTTPS 地址，令牌只应写入服务器配置文件。
+            </AlertDescription>
+          </Alert>
+
+          {pluginTarget ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">当前状态</span>
+              <Badge
+                variant={
+                  pluginTarget.pluginState === "connected"
+                    ? "success"
+                    : pluginTarget.pluginState === "waiting"
+                      ? "warning"
+                      : "outline"
+                }
+              >
+                {pluginStateLabel(pluginTarget.pluginState)}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                {pluginTarget.lastReportedAt
+                  ? `最近上报 ${formatDate(pluginTarget.lastReportedAt)}`
+                  : "尚未收到上报"}
+              </span>
+            </div>
+          ) : null}
+
+          {pluginTokenLoading ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <LoaderCircle className="size-4 animate-spin" /> 正在读取插件令牌…
+            </p>
+          ) : pluginTokenError ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                {pluginTokenError}
+                {pluginTarget ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="ml-3"
+                    onClick={() => void loadPluginToken(pluginTarget.id)}
+                  >
+                    重试
+                  </Button>
+                ) : null}
+              </AlertDescription>
+            </Alert>
+          ) : pluginToken ? (
+            <>
+              <Field label="上报地址" htmlFor="plugin-api-url">
+                <Input
+                  id="plugin-api-url"
+                  value={pluginApiUrl}
+                  onChange={(event) => {
+                    setPluginApiUrl(event.target.value);
+                    setConfigCopied(false);
+                  }}
+                  spellCheck={false}
+                />
+              </Field>
+              <Field label="插件令牌" htmlFor="plugin-token">
+                <Input
+                  id="plugin-token"
+                  className="font-mono text-xs"
+                  value={pluginToken}
+                  readOnly
+                  spellCheck={false}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+              </Field>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium">写入 cfg/sourcemod/threi_players.cfg</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void copyPluginConfig()}
+                  >
+                    {configCopied ? <Check /> : <Copy />}
+                    {configCopied ? "已复制" : "复制配置"}
+                  </Button>
+                </div>
+                <pre className="overflow-x-auto rounded-lg border bg-muted/30 p-3 font-mono text-xs leading-relaxed">
+                  {pluginConfig}
+                </pre>
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                将 <code className="font-mono">addons/sourcemod</code>{" "}
+                下的插件文件复制到游戏服务器，编辑配置后重启地图或执行
+                <code className="ml-1 font-mono">sm plugins reload ThRei_Players</code>
+                。游戏服务器必须能访问上报地址；生产环境建议使用 HTTPS，避免令牌以明文传输。
+              </p>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                该服务器还没有插件令牌。生成后请立即安装
+                ThRei_Players，并把令牌写入服务器配置；令牌只显示给管理员。
+              </p>
+              <p className="text-xs text-muted-foreground">
+                重新生成会使旧令牌立即失效；撤销令牌会同时清空在线名单并将服务器标记为离线（维护中状态保持不变）。
+              </p>
+            </div>
+          )}
+        </div>
+      </Modal>
 
       <ConfirmDialog
         open={deleteTarget !== null}

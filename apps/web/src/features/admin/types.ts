@@ -184,6 +184,9 @@ export interface AdminServer {
   featured: boolean;
   isActive: boolean;
   requiresWhitelist: boolean;
+  playerCount: number | null;
+  lastReportedAt: string | null;
+  pluginState: "disabled" | "waiting" | "connected";
   players: AdminServerPlayer[];
 }
 
@@ -193,6 +196,10 @@ export interface AdminServerPlayer {
   avatarUrl: string | null;
   connectedAt: string;
   lastSeenAt: string;
+}
+
+export interface PluginTokenResponse {
+  token: string | null;
 }
 
 export interface ServerBan {

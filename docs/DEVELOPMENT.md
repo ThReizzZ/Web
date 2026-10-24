@@ -17,6 +17,271 @@
 
 ---
 
+## 2026年10月25日 04时23分18秒 用 ThRei_Players 插件替代 A2S/RCON 轮询
+
+### 背景
+
+用户明确要求不再使用 A2S，改用游戏服务器插件上报 `server_players`，并把插件命名为 `ThRei_Players`。此前的 A2S/RCON 轮询要求 API 能访问游戏服务器的 UDP/TCP 端口，RCON 密码还需要明文存储在数据库中；在没有 RCON 时只能得到匿名玩家名，无法获得 SteamID64。
+
+本次改为由游戏服务器主动向 API 上报，API 不再连接游戏服务器。
+
+### 变更内容
+
+- 新增 SourceMod 1.11 插件 `plugins/ThRei_Players/`：
+  - 使用 SteamWorks 扩展发送 HTTP POST，不需要开放 A2S/RCON 端口；
+  - 每 30 秒（可配置）上报地图、最大人类玩家数、已通过 Steam 认证且非 bot/SourceTV/Replay 的 SteamID64、昵称和连接秒数；
+  - 地图开始、玩家认证进入、玩家断开和管理员执行 `sm_threi_report` 时也会触发上报；
+  - 配置项 `sm_threi_players_enabled`、`sm_threi_api_url`、`sm_threi_server_id`、`sm_threi_token`（`FCVAR_PROTECTED`）、`sm_threi_interval`（5–600 秒）；
+  - 自带 JSON 转义、请求超时、请求中防重入和失败日志；令牌不会输出到 `sm_threi_status` 或日志；
+  - 已提供源码、编译后的 `ThRei_Players.smx`、配置示例和中文安装文档。
+- 新增 API 插件上报模块 `server_plugin`：
+  - `POST /api/v1/plugin/report`，用每服务器令牌认证；
+  - 校验 `serverId`、地图、最大玩家数、玩家数量、17 位 SteamID64、昵称长度和连接秒数；
+  - 事务内更新服务器快照、删除本次未出现的玩家、upsert 当前玩家并保留已有 `connected_at`；
+  - `/api/v1/admin/servers/{id}/plugin-token` 支持读取、生成/轮换、撤销令牌；令牌由 UUID v4 生成 32 位十六进制字符串，列表和公开接口不返回；
+  - 后台任务每 30 秒清理超过 90 秒未上报的插件服务器：标记离线、人数清零、删除在线名单，`maintenance` 状态保持不变。
+- 管理面板服务器管理改为插件工作流：
+  - 移除“立即检测”和 RCON 密码弹窗；
+  - 新增插件状态（`disabled` / `waiting` / `connected`）、最近上报时间和“插件配置”弹窗；
+  - 弹窗可编辑上报地址、复制配置、生成/轮换/撤销令牌，并提示使用 HTTPS；
+  - 玩家列表显示 SteamID64；新建服务器默认离线，等待插件首次上报；
+  - 踢出/封禁仍只写入待执行队列，界面明确提示插件尚不执行游戏内操作。
+- 删除 A2S/RCON 客户端、后台轮询任务、`server_monitor` 配置和 Compose 中相关环境变量。
+- 更新 README、API、架构、部署、CHANGELOG、环境变量示例和本地开发说明。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/README.md`（新增）
+- `plugins/ThRei_Players/cfg/sourcemod/threi_players.cfg.example`（新增）
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`（新增）
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`（新增，已编译）
+- `services/api/migrations/20261025070000_server_plugin_reports.sql`（新增）
+- `services/api/src/modules/server_plugin.rs`（新增）
+- `services/api/src/modules/server_admin.rs`
+- `services/api/src/modules/servers.rs`（仅检查，查询无需改动）
+- `services/api/src/modules/mod.rs`
+- `services/api/src/routes/mod.rs`
+- `services/api/src/app.rs`
+- `services/api/src/main.rs`
+- `services/api/src/config/mod.rs`
+- `services/api/src/infrastructure/mod.rs`
+- `services/api/src/openapi.rs`
+- `services/api/Cargo.toml`（utoipa 启用 `chrono` feature）
+- `services/api/src/infrastructure/a2s.rs`（删除）
+- `services/api/src/infrastructure/rcon.rs`（删除）
+- `services/api/src/modules/server_monitor.rs`（删除）
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/services/content.ts`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `apps/web/src/features/servers/data/servers.ts`
+- `.env.example`、`compose.yaml`、`services/api/.env.example`
+- `README.md`、`docs/API.md`、`docs/ARCHITECTURE.md`、`docs/CHANGELOG.md`、`docs/DEPLOYMENT.md`、`docs/DEVELOPMENT.md`
+
+### 数据库与 API 变化
+
+- 迁移 `20261025070000_server_plugin_reports`：
+  - `servers.last_queried_at` 重命名为 `last_reported_at`；
+  - 新增 `servers.plugin_token`（可空、32–128 字符、非空时唯一）；
+  - 删除 `servers.rcon_password`、`servers.query_error`；
+  - 把旧轮询写入的服务器快照重置为离线（保留 `maintenance`），清空人数和最近上报时间；
+  - 删除旧 A2S/RCON 玩家记录，删除 `server_players.source`、`slot`、匿名槽位索引和来源约束，恢复 `steam_id64 NOT NULL`。
+- `POST /api/v1/plugin/report`：请求字段 `serverId`、`map`、`maxPlayers`、`players[].steamId64`、`name`、`connectedSeconds`；成功返回 `serverId`、`playerCount`、`skipped`、`reportedAt`。错误令牌/服务器统一 401，字段非法 422。
+- `GET /api/v1/admin/servers`：新增 `lastReportedAt`、`pluginState`，玩家返回 `steamId64`；移除 `lastQueriedAt`、`queryError`、`rconState`、`source`、`slot`。
+- `GET/POST/DELETE /api/v1/admin/servers/{id}/plugin-token`：读取（`Cache-Control: no-store`）、生成/轮换、撤销令牌；生成和撤销会清空在线快照并标记离线（`maintenance` 保留）。
+- 删除 `POST /api/v1/admin/servers/{id}/query`、`PUT /api/v1/admin/servers/{id}/rcon-password`；`POST /api/v1/admin/servers` 不再接受 `rconPassword`。
+- 移除环境变量 `SERVER_MONITOR_ENABLED`、`SERVER_POLL_INTERVAL_SECS`、`SERVER_QUERY_TIMEOUT_SECS`。
+- 升级影响：旧轮询快照已清空，现有服务器（当前为 `id=1`）在生成令牌并安装插件前保持离线；旧 A2S 匿名玩家不再展示。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - `cargo fmt --all -- --check` 通过；
+  - `cargo clippy --all-targets -- -D warnings` 通过；
+  - `cargo test`：18 个单元测试、14 个 HTTP 契约测试全部通过；
+  - `npm run typecheck`、`npm run lint`、`npm run format:check` 通过。
+- `npm run build`：通过，`/servers`、`/admin/servers` 等路由成功生成。
+- SourceMod 插件使用 `spcomp64`（SourcePawn Compiler 1.11.0.6970）编译通过，无 warning；产物 `ThRei_Players.smx` 已生成（Code 13092 bytes，Data 137656 bytes）。
+- 已执行 `cargo run --bin migrate`，迁移 `20261025070000` 落库；`servers`、`server_players` 新约束和索引已确认。
+- 使用临时服务器 `plugin-e2e-test` 和 curl 验证上报：
+  - 正确令牌上报 2 名玩家返回 200，数据库地图/人数/最近上报时间更新；
+  - 第二次只上报 1 名玩家后，旧玩家被删除，仍在线的玩家 `connected_at` 保持不变；
+  - 错误令牌返回统一 401；地图超过 128 字符返回 422；
+  - 上报 200 字中文昵称返回 200，数据库昵称被截断为 80 字符并以省略号结尾，满足 `server_players.display_name` 的 CHECK 约束。
+- 创建临时管理员会话验证管理 API：
+  - `GET /admin/servers` 返回 `pluginState=connected` 和玩家 SteamID64；
+  - `GET .../plugin-token` 返回令牌并带 `Cache-Control: no-store`；
+  - `POST .../plugin-token` 生成新令牌，服务器状态重置为 offline、名单清空；
+  - `DELETE .../plugin-token` 返回 204。
+- 清理验证：把 `last_reported_at` 改为 2 分钟前，后台清理任务将临时服务器标记为 `offline`、人数 0、名单 0；临时服务器和管理员会话已删除。
+- 重启 API 后 `/health/ready` 正常，`/api/v1/servers` 返回 200；`/servers` 页面 HTML 正常渲染，`/admin/servers` 在管理员会话下 HTML 包含“插件配置”和“未接入插件”。
+- 未执行：
+  - 没有真实的 Source 游戏服务器可安装 SourceMod/SteamWorks，因此未在真实服务器上加载 `ThRei_Players.smx` 或验证插件实际 HTTP 请求；
+  - 未在浏览器中完整点击“插件配置”弹窗的生成/复制/撤销流程（仅验证 SSR HTML 和对应管理 API）；
+  - 未执行 Docker Compose 构建/启动（本机无 Docker daemon）；
+  - 踢出/封禁的游戏内执行仍未实现，插件只上报状态和玩家。
+
+---
+
+## 2026年10月25日 03时56分15秒 接入 A2S/RCON 实时检测服务器状态与玩家
+
+### 背景
+
+用户反馈服务器目录和玩家列表没有实时数据。此前 `servers.status`、`servers.map`、`servers.player_count` 依赖人工维护，`server_players` 需要外部插件上报，项目中没有轮询游戏服务器的逻辑。
+
+参考 LumiAdmin 的实现方式阅读了 A2S/RCON 相关代码（仅阅读下载源码，未执行）：A2S_INFO/A2S_PLAYER 可在无凭据时取得在线状态、地图、玩家数与匿名玩家名；RCON `status` 可进一步取得 SteamID64。使用实际服务器 `124.223.209.55:10001` 验证 A2S 查询可用（地图 `kz_unmake`、1 名玩家）。
+
+### 变更内容
+
+- 新增 Source A2S UDP 客户端：处理 challenge、分片响应、A2S_INFO 与 A2S_PLAYER 解析；玩家查询失败时仍保留服务器信息。
+- 新增 Source RCON TCP 客户端：认证、执行 `status`、读取多包响应；解析 `STEAM_1:x:y`、`[U:1:x]` 与 17 位 SteamID64，跳过 Bot 与无法解析的记录。
+- 新增后台监控任务：启动时立即检测一次，之后按 `SERVER_POLL_INTERVAL_SECS`（默认 30 秒）轮询启用的服务器，最多 8 个并发；按服务器行锁串行化同一服务器的后台检测与手动检测。
+- A2S 优先提供状态/地图/人数/延迟；配置 RCON 密码时优先使用 `status` 的完整玩家名单与 SteamID64。无 RCON 时把匿名玩家写入 `server_players`（`source='a2s'`、`slot`、`steam_id64=NULL`），有 RCON 时写入 `source='rcon'`。
+- 公共 `/api/v1/servers` 增加 `playerCount`，在线人数优先取实时人数；前端首页、服务器目录、加入弹窗统一使用实时人数。
+- 管理面板服务器卡片显示实时人数、最近检测时间、查询错误与 `RCON 已配置`/`仅 A2S` 徽标；新增“立即检测”和“RCON”操作，RCON 弹窗可设置或清除密码；匿名玩家提示“配置 RCON 后可管理”，不显示无效的踢出/封禁入口。
+- 新增配置项 `SERVER_MONITOR_ENABLED`（默认 true）、`SERVER_POLL_INTERVAL_SECS`（10–3600，默认 30）、`SERVER_QUERY_TIMEOUT_SECS`（1–30，默认 3），并接入 Compose 环境变量。
+
+### 涉及文件
+
+- `services/api/migrations/20261025060000_server_live_polling.sql`（新增）
+- `services/api/src/infrastructure/a2s.rs`（新增）
+- `services/api/src/infrastructure/rcon.rs`（新增）
+- `services/api/src/infrastructure/mod.rs`
+- `services/api/src/modules/server_monitor.rs`（新增）
+- `services/api/src/modules/server_admin.rs`
+- `services/api/src/modules/servers.rs`
+- `services/api/src/modules/mod.rs`
+- `services/api/src/config/mod.rs`
+- `services/api/src/app.rs`
+- `services/api/src/main.rs`
+- `apps/web/src/features/servers/data/servers.ts`
+- `apps/web/src/features/servers/components/server-card.tsx`
+- `apps/web/src/features/servers/components/server-list-row.tsx`
+- `apps/web/src/features/servers/components/join-server-button.tsx`
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `apps/web/src/services/content.ts`
+- `.env.example`、`compose.yaml`、`services/api/.env.example`
+- `README.md`、`docs/API.md`、`docs/DEVELOPMENT.md`
+
+### 数据库与 API 变化
+
+- `servers` 新增 `rcon_password`、`player_count`、`last_queried_at`、`query_error`。
+- `server_players.steam_id64` 改为可空；新增 `source`（`report` / `rcon` / `a2s`）与 `slot`；新增 `(server_id, slot) WHERE steam_id64 IS NULL` 唯一索引和来源/身份一致性约束。
+- 公共 `GET /api/v1/servers` 返回新增 `playerCount`。
+- 管理 `GET /api/v1/admin/servers` 返回 `playerCount`、`lastQueriedAt`、`queryError`、`rconState`；玩家返回 `source`、`slot`，匿名玩家 `steamId64` 为 `null`。API 不返回 RCON 密码原文。
+- `POST /api/v1/admin/servers` 支持可选 `rconPassword`；新增 `PUT /api/v1/admin/servers/{id}/rcon-password` 与 `POST /api/v1/admin/servers/{id}/query`。
+- RCON 密码明文保存在数据库；踢出/封禁仍只写入管理表，不会通过 RCON 自动执行。
+
+### 测试与结果
+
+- `cargo fmt`：通过。
+- `cargo test`：23 个单元测试、14 个 HTTP 契约测试全部通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `npm run check`（`next typegen` + `tsc --noEmit` + ESLint + Prettier）：通过。
+- 已执行 `cargo run --bin migrate`，迁移版本 `20261025060000` 落库。
+- 重启 API 后轮询日志显示 `server monitor started`，首次探测 `source="a2s"`、`players=1`。
+- 实测 `124.223.209.55:10001`：`servers` 行为 `online`、地图 `kz_unmake`、`player_count=1`、`max_players=10`、`latency_ms=20`、`last_queried_at` 已更新；`server_players` 写入匿名玩家“冰板栗”（`source='a2s'`、`slot=0`、`steam_id64=NULL`）。
+- `GET /api/v1/servers` 返回 `playerCount: 1` 与“冰板栗”；`/servers` 页面 HTML 已渲染该玩家和实时人数。
+- 未执行：未配置真实 RCON 密码，因此 SteamID64 解析、管理面板“立即检测”鉴权后的 UI 操作、踢出/封禁未在真实服务器验收；`/admin/servers` 未登录访问按预期 307 跳转。
+
+---
+
+## 2026年10月25日 03时39分31秒 修复局域网访问时管理面板按钮无响应
+
+### 背景
+
+用户反馈在管理面板点击“添加服务器”没有反应。使用本机 Firefox + geckodriver 以 `http://192.168.1.128:3000` 访问并复现：
+
+- 页面 HTML 和样式正常渲染，但按钮 DOM 节点没有 React 内部属性，整个页面未完成 hydration；
+- 点击按钮不会打开 Modal，浏览器控制台没有报错；
+- Next.js 开发服务器日志出现 `Blocked cross-origin request to Next.js dev resource /_next/hmr from "192.168.1.128"`。
+
+原因是 Next.js 16 开发模式默认阻止非 localhost 来源访问开发资源（`/_next/hmr`），浏览器从局域网地址访问时 HMR/客户端初始化被拦截，导致页面看似正常但客户端组件全部不可交互。此前开发机使用 `192.168.0.101:3100` 时未记录该配置项。
+
+### 变更内容
+
+- `next.config.ts` 新增 `allowedDevOrigins`：从 `NEXT_PUBLIC_SITE_URL` 解析 hostname；当 hostname 不是 `localhost`/`127.0.0.1` 时加入允许列表。
+- 保持生产构建不受影响；该配置只在开发服务器生效。
+- 未修改任何组件、API 或数据库逻辑。
+
+### 涉及文件
+
+- `apps/web/next.config.ts`
+- `docs/DEVELOPMENT.md`
+
+### 数据库与 API 变化
+
+- 无。
+
+### 测试与结果
+
+- `npm run check`（`next typegen` + `tsc --noEmit` + ESLint + Prettier）：通过。
+- Firefox + geckodriver（headless，访问 `http://192.168.1.128:3000/admin/servers`）：
+  - 修复前：页面无 React root、按钮无 React 属性、点击无反应；
+  - 修复后：按钮带有 React 属性，点击“添加服务器”后 `<dialog>` 的 `open=true`、`display=block`，添加服务器弹窗正常显示；
+  - 截图确认弹窗包含基本信息、网络与运行状态、展示与访问等表单区块。
+- 未提交测试服务器：验证结束后关闭测试会话并撤销登录，未向数据库写入服务器记录。
+
+---
+
+## 2026年10月25日 03时20分15秒 开发环境 Steam 登录校验跳过与局域网回调修正
+
+### 背景
+
+用户反馈 Steam 登录显示“Steam 登录未完成”。排查发现两个独立问题：
+
+1. 开发配置仍使用 `http://localhost:3000` 作为站点 origin 和 Steam 回调地址，但浏览器不在 VM 本机；Steam 授权后回调指向浏览器自己的 `localhost`，无法到达 API，浏览器提示连接被拒绝。
+2. 将 origin 改为局域网地址后，回调已能到达 API，但 VM 网络无法访问 `steamcommunity.com`（所有解析 IP 的 80/443 均超时）；`check_authentication` 校验等待 10 秒后失败，API 重定向到 `/account?steam_error=steam_login_failed`。
+
+### 变更内容
+
+#### 1. 开发环境站点 origin 改为局域网地址
+
+- `services/api/.env` 的 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM` 改为 `http://192.168.1.128:3000`；`CORS_ALLOWED_ORIGINS` 同时允许 `localhost`、`127.0.0.1` 与该地址。
+- `apps/web/.env.local` 的 `NEXT_PUBLIC_SITE_URL` 同步修改。
+- 两个文件均被 Git 忽略，不提交。
+
+#### 2. 新增仅开发环境可用的 OpenID 校验跳过开关
+
+- `AuthSettings` 新增 `steam_skip_openid_verification`，读取 `STEAM_SKIP_OPENID_VERIFICATION`。
+- 该开关为 true 且 `APP_ENV` 不是 `development` 时，配置加载直接返回错误，API 拒绝启动。
+- 开关启用时：
+  - 回调不再请求 `steamcommunity.com/openid/login` 的 `check_authentication`；
+  - 每次回调输出 WARN 日志，包含 SteamID64；
+  - 昵称与头像使用本地回退值（`Steam 用户 <后6位>`、无头像），避免 profile 请求再次等待 10 秒超时。
+- `.env.example` 增加变量说明（默认 `false`）；README 本地开发章节补充使用说明和风险提示。
+
+### 涉及文件
+
+- `services/api/src/config/mod.rs`
+- `services/api/src/modules/auth/mod.rs`
+- `services/api/.env`（Git 忽略）
+- `apps/web/.env.local`（Git 忽略）
+- `.env.example`
+- `README.md`
+- `docs/DEVELOPMENT.md`
+
+### 数据库与 API 变化
+
+- 无新迁移。
+- API 路由与响应结构不变；仅回调在开关启用时改变校验行为。
+- 数据库新增管理员用户 `76561199125125759`（`role=admin`），由模拟回调创建；验证会话已通过 `/auth/logout` 撤销。
+
+### 测试与结果
+
+- `cargo fmt --all`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：单元测试 12 项、HTTP 合约测试 14 项，共 26 项，全部通过；新增开发环境跳过开关配置测试。
+- 端到端（开发环境、开关开启）：
+  - 通过 `http://192.168.1.128:3000/api/v1/auth/steam/callback` 模拟回调，返回 303 到 `/account` 并写入 `threi_session` Cookie；
+  - `/api/v1/auth/me` 返回 `role=admin`；
+  - `/api/v1/admin/overview` 返回 200；
+  - 日志出现跳过校验 WARN；
+  - `/auth/logout` 返回 204，之后 `/auth/me` 返回 `null`。
+- 开启开关后的真实浏览器 Steam 登录：未执行，需要人工点击“使用Steam登录”完成验收。
+
+---
+
 ## 2026年10月24日 22时42分06秒 弹窗内容重排与关闭按钮遮挡修复
 
 ### 背景

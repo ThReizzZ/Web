@@ -4,6 +4,10 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
     errors::{ErrorBody, ErrorResponse},
+    modules::{
+        server_admin::PluginTokenResponse,
+        server_plugin::{PluginPlayer, PluginReportRequest, PluginReportResponse},
+    },
     routes::{
         health::{
             ComponentState, LivenessResponse, ReadinessChecks, ReadinessResponse, ReadinessStatus,
@@ -28,6 +32,10 @@ use crate::{
         crate::modules::auth::me,
         crate::modules::auth::logout,
         crate::modules::servers::list_servers,
+        crate::modules::server_plugin::report,
+        crate::modules::server_admin::get_plugin_token,
+        crate::modules::server_admin::rotate_plugin_token,
+        crate::modules::server_admin::clear_plugin_token,
         crate::modules::forum::list_categories,
         crate::modules::forum::list_topics,
         crate::modules::forum::get_topic,
@@ -44,13 +52,18 @@ use crate::{
         ComponentState,
         SystemInfo,
         ErrorResponse,
-        ErrorBody
+        ErrorBody,
+        PluginReportRequest,
+        PluginPlayer,
+        PluginReportResponse,
+        PluginTokenResponse
     )),
     tags(
         (name = "health", description = "Liveness and readiness probes"),
         (name = "system", description = "Public service metadata"),
         (name = "auth", description = "Steam OpenID login and cookie sessions"),
         (name = "servers", description = "KZ server directory and live players"),
+        (name = "plugin", description = "Authenticated reports from ThRei_Players"),
         (name = "forum", description = "Forum categories, topics and replies"),
         (name = "community", description = "Community-wide statistics"),
         (name = "account", description = "Authenticated user account"),

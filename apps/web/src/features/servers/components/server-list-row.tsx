@@ -5,11 +5,11 @@ import { CopyAddressButton } from "./copy-address-button";
 import { JoinServerButton } from "./join-server-button";
 import { PlayerRoster } from "./player-roster";
 import { ServerStatusBadge } from "./server-status-badge";
-import { getServerAddress, type KzServer } from "../data/servers";
+import { getOnlinePlayerCount, getServerAddress, type KzServer } from "../data/servers";
 
 export function ServerListRow({ server }: { server: KzServer }) {
   const address = getServerAddress(server);
-  const playerCount = server.players.length;
+  const playerCount = getOnlinePlayerCount(server);
 
   return (
     <Card data-server-id={server.id} className="gap-0 overflow-hidden py-0">

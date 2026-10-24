@@ -246,6 +246,9 @@ pub struct AuthSettings {
     pub cookie_secure: bool,
     pub session_ttl_days: i64,
     pub admin_steam_ids: Vec<String>,
+    /// Development-only escape hatch for hosts that cannot reach
+    /// `steamcommunity.com`. Refused outside `APP_ENV=development`.
+    pub steam_skip_openid_verification: bool,
 }
 
 impl AuthSettings {
@@ -298,6 +301,15 @@ impl AuthSettings {
             ));
         }
 
+        let steam_skip_openid_verification =
+            optional_bool(lookup, "STEAM_SKIP_OPENID_VERIFICATION")?.unwrap_or(false);
+        if steam_skip_openid_verification && environment != Environment::Development {
+            return Err(ConfigError::Invalid(
+                "STEAM_SKIP_OPENID_VERIFICATION",
+                "only allowed when APP_ENV=development".to_owned(),
+            ));
+        }
+
         Ok(Self {
             web_url,
             steam_return_url,
@@ -306,6 +318,7 @@ impl AuthSettings {
                 .unwrap_or(environment.is_production()),
             session_ttl_days,
             admin_steam_ids,
+            steam_skip_openid_verification,
         })
     }
 }
@@ -458,6 +471,30 @@ mod tests {
         assert_eq!(settings.auth.web_url, "http://localhost:3000");
         assert_eq!(settings.auth.session_ttl_days, 30);
         assert!(!settings.auth.cookie_secure);
+        assert!(!settings.auth.steam_skip_openid_verification);
+    }
+
+    #[test]
+    fn steam_verification_bypass_is_development_only() {
+        let production = load(&[
+            ("APP_ENV", "production"),
+            ("DATABASE_URL", DATABASE_URL),
+            ("REDIS_URL", "redis://:secret@redis:6379/0"),
+            ("WEB_URL", "https://threi.example"),
+            ("STEAM_SKIP_OPENID_VERIFICATION", "true"),
+        ]);
+        assert!(matches!(
+            production,
+            Err(ConfigError::Invalid("STEAM_SKIP_OPENID_VERIFICATION", _))
+        ));
+
+        let development = load(&[
+            ("APP_ENV", "development"),
+            ("DATABASE_URL", DATABASE_URL),
+            ("STEAM_SKIP_OPENID_VERIFICATION", "true"),
+        ])
+        .expect("development bypass settings should be valid");
+        assert!(development.auth.steam_skip_openid_verification);
     }
 
     #[test]

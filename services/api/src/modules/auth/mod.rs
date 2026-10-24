@@ -165,8 +165,16 @@ async fn complete_steam_login(
     let steam_id64 = extract_steam_id(claimed_id)
         .ok_or_else(|| AppError::bad_request("Steam claimed ID is not a valid SteamID64"))?;
 
-    verify_openid_assertion(&params).await?;
-    let (persona_name, avatar_url) = fetch_steam_profile(&steam_id64).await;
+    let (persona_name, avatar_url) = if settings.steam_skip_openid_verification {
+        tracing::warn!(
+            steam_id64 = %steam_id64,
+            "STEAM_SKIP_OPENID_VERIFICATION is enabled; accepting an unverified Steam assertion (development only)"
+        );
+        steam_profile_fallback(&steam_id64)
+    } else {
+        verify_openid_assertion(&params).await?;
+        fetch_steam_profile(&steam_id64).await
+    };
     let role = if settings.admin_steam_ids.iter().any(|id| id == &steam_id64) {
         "admin"
     } else {
@@ -269,11 +277,16 @@ async fn verify_openid_assertion(params: &HashMap<String, String>) -> Result<(),
     Ok(())
 }
 
-async fn fetch_steam_profile(steam_id64: &str) -> (String, Option<String>) {
+fn steam_profile_fallback(steam_id64: &str) -> (String, Option<String>) {
     let fallback_name = format!(
         "Steam 用户 {}",
         &steam_id64[steam_id64.len().saturating_sub(6)..]
     );
+    (fallback_name, None)
+}
+
+async fn fetch_steam_profile(steam_id64: &str) -> (String, Option<String>) {
+    let (fallback_name, _) = steam_profile_fallback(steam_id64);
     let Ok(client) = Client::builder()
         .timeout(Duration::from_secs(10))
         .user_agent("ThRei/0.1 (+https://threi.example)")
@@ -472,6 +485,7 @@ mod tests {
             cookie_secure: true,
             session_ttl_days: 30,
             admin_steam_ids: Vec::new(),
+            steam_skip_openid_verification: false,
         };
         let cookie = session_cookie("secret", &settings);
         assert!(cookie.contains("HttpOnly"));

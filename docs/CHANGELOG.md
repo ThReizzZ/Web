@@ -47,6 +47,10 @@
 - 论坛“新手指南”卡片的按钮改为“查看教学”，跳转 `/forum/topic/new-player-guide`。
 - 新增 `users.is_system`，官方系统账号不参与成员数、角色分布、最近注册与活跃统计。
 - 新增开发环境外部 PostgreSQL/Redis 配置说明；生产仍使用 Compose 内 PostgreSQL/Redis。
+- 新增 `ThRei_Players` SourceMod 插件（源码、已编译 `smx`、配置示例与安装文档），主动上报地图、人数上限与 SteamID64 在线玩家。
+- 新增 `POST /api/v1/plugin/report` 与每服务器插件令牌；管理面板支持生成、读取、轮换和撤销令牌。
+- 管理面板服务器卡片新增 `pluginState`（`disabled` / `waiting` / `connected`）与最近上报时间，玩家列表显示 SteamID64。
+- 新增 90 秒未上报自动离线和在线名单清理任务。
 
 ### Changed
 
@@ -57,6 +61,10 @@
 - 管理面板重写为真实统计、角色分布、最近会员、最近主题、7 天活动和服务器节点。
 - 首页/服务器页/论坛页/分类页/主题详情页改为动态读取 API。
 - 登录 CTA 与首页/用户中心/管理面板的登录入口统一使用 Steam OpenID。
+- 服务器实时状态改为由游戏服务器插件上报；移除 API 的 A2S/RCON 轮询和 `SERVER_MONITOR_ENABLED`、`SERVER_POLL_INTERVAL_SECS`、`SERVER_QUERY_TIMEOUT_SECS`。
+- `servers.last_queried_at` 重命名为 `last_reported_at`；移除 `servers.rcon_password`、`servers.query_error`。
+- `server_players` 移除匿名槽位与来源列，`steam_id64` 恢复为非空；升级后旧轮询快照会被清空，服务器保持离线直到插件首次上报。
+- 新服务器默认状态改为离线，等待插件上报后转为在线；`maintenance` 状态不会被插件覆盖。
 - Compose 增加 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM`、`COOKIE_SECURE`、`SESSION_TTL_DAYS`、`ADMIN_STEAM_IDS`。
 - `WEB_URL` 在生产环境必填，避免回调错误指向 localhost。
 - `ADMIN_STEAM_IDS` 只用于首次创建/引导管理员；登录不会覆盖管理面板中已修改的数据库角色。
@@ -68,6 +76,7 @@
 - 移除前端模拟数据与“预览数据”声明。
 - 移除未使用的 `apps/web/public/images/servers/*.svg`。
 - 移除模拟通知、徽章、审核队列、审计日志、系统设置等未接入真实数据的管理面板模块。
+- 移除 A2S/RCON 客户端、后台轮询任务、`POST /admin/servers/{id}/query` 与 `PUT /admin/servers/{id}/rcon-password`。
 
 ### Fixed
 
@@ -87,6 +96,7 @@
 
 - Steam 断言必须经过 Steam OpenID `check_authentication` 验证后才会被信任。
 - 会话令牌只保存哈希；Cookie 为 HttpOnly、SameSite=Lax，生产环境使用 Secure。
+- 插件上报使用每服务器独立令牌；令牌不出现在服务器列表、公开接口和日志中，错误令牌统一返回 401。
 - 会话 Cookie 有效期可配置；登出删除数据库会话并清除 Cookie。
 - `/account` 需要登录，管理员 API 需要 `admin` 角色。
 - 尚未实现登录限流、CSRF、细粒度 RBAC、审核与审计；当前没有写业务接口。

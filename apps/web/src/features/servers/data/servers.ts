@@ -18,6 +18,8 @@ export interface KzServer {
   tickrate: number;
   maxPlayers: number;
   latencyMs: number | null;
+  /** Live player count reported by the ThRei_Players plugin; falls back to the roster length. */
+  playerCount?: number | null;
   tags: string[];
   players: KzPlayer[];
   mapImage: string;
@@ -29,8 +31,12 @@ export function getServerAddress(server: KzServer): string {
   return `${server.ip}:${server.port}`;
 }
 
+export function getOnlinePlayerCount(server: KzServer): number {
+  return server.playerCount ?? server.players.length;
+}
+
 export function getOnlinePlayerTotal(servers: KzServer[]): number {
-  return servers.reduce((total, server) => total + server.players.length, 0);
+  return servers.reduce((total, server) => total + getOnlinePlayerCount(server), 0);
 }
 
 export function getMaxPlayerTotal(servers: KzServer[]): number {

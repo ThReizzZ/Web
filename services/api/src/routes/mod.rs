@@ -12,6 +12,7 @@ pub fn api_v1() -> Router<AppState> {
         .merge(system::router())
         .merge(modules::auth::router())
         .merge(modules::servers::router())
+        .merge(modules::server_plugin::router())
         .merge(modules::server_admin::router())
         .merge(modules::forum::router())
         .merge(modules::forum_admin::router())

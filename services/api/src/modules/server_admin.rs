@@ -1,14 +1,20 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
+    response::IntoResponse,
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use utoipa::ToSchema;
 
-use crate::{errors::AppError, modules::auth::require_admin, state::AppState};
+use crate::{
+    errors::AppError,
+    modules::{auth::require_admin, server_plugin::STALE_AFTER_SECS},
+    state::AppState,
+};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +35,9 @@ pub struct AdminServer {
     pub featured: bool,
     pub is_active: bool,
     pub requires_whitelist: bool,
+    pub player_count: Option<i32>,
+    pub last_reported_at: Option<DateTime<Utc>>,
+    pub plugin_state: String,
     pub players: Vec<AdminPlayer>,
 }
 
@@ -85,6 +94,9 @@ struct ServerRow {
     featured: bool,
     is_active: bool,
     requires_whitelist: bool,
+    player_count: Option<i32>,
+    last_reported_at: Option<DateTime<Utc>>,
+    plugin_state: String,
 }
 
 #[derive(Debug, FromRow)]
@@ -117,6 +129,12 @@ pub struct CreateServerRequest {
     pub requires_whitelist: bool,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginTokenResponse {
+    pub token: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KickRequest {
@@ -146,6 +164,12 @@ pub fn router() -> Router<AppState> {
             "/admin/servers/{id}/players/{steam_id64}/ban",
             post(ban_player),
         )
+        .route(
+            "/admin/servers/{id}/plugin-token",
+            get(get_plugin_token)
+                .post(rotate_plugin_token)
+                .delete(clear_plugin_token),
+        )
         .route("/admin/server-bans/{id}/lift", post(lift_server_ban))
 }
 
@@ -157,11 +181,20 @@ async fn overview(
     let rows = sqlx::query_as::<_, ServerRow>(
         r"
         SELECT id, name, map, description, status, host, port, region, tickrate,
-               max_players, latency_ms, tags, map_image, featured, is_active, requires_whitelist
+               max_players, latency_ms, tags, map_image, featured, is_active, requires_whitelist,
+               player_count, last_reported_at,
+               CASE
+                   WHEN plugin_token IS NULL THEN 'disabled'
+                   WHEN last_reported_at IS NOT NULL
+                        AND last_reported_at > now() - make_interval(secs => $1::double precision)
+                       THEN 'connected'
+                   ELSE 'waiting'
+               END AS plugin_state
         FROM servers
         ORDER BY is_active DESC, name
         ",
     )
+    .bind(f64::from(STALE_AFTER_SECS))
     .fetch_all(&state.db)
     .await?;
 
@@ -170,7 +203,7 @@ async fn overview(
         SELECT server_id, steam_id64, display_name, avatar_url, connected_at, last_seen_at
         FROM server_players
         WHERE last_seen_at > now() - interval '5 minutes'
-        ORDER BY connected_at
+        ORDER BY connected_at, display_name
         ",
     )
     .fetch_all(&state.db)
@@ -207,6 +240,9 @@ async fn overview(
                 featured: row.featured,
                 is_active: row.is_active,
                 requires_whitelist: row.requires_whitelist,
+                player_count: row.player_count,
+                last_reported_at: row.last_reported_at,
+                plugin_state: row.plugin_state,
                 players,
             }
         })
@@ -275,6 +311,139 @@ async fn create_server(
     .bind(request.requires_whitelist)
     .execute(&state.db)
     .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/servers/{id}/plugin-token",
+    tag = "admin",
+    params(("id" = String, Path, description = "Server id")),
+    responses(
+        (status = 200, description = "Current plugin token or null", body = PluginTokenResponse),
+        (status = 401, description = "Authentication required", body = crate::errors::ErrorResponse),
+        (status = 403, description = "Administrator role required", body = crate::errors::ErrorResponse),
+        (status = 404, description = "Server not found", body = crate::errors::ErrorResponse)
+    )
+)]
+pub async fn get_plugin_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    require_admin(&state, &headers).await?;
+    let token =
+        sqlx::query_scalar::<_, Option<String>>("SELECT plugin_token FROM servers WHERE id = $1")
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(PluginTokenResponse { token }),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/servers/{id}/plugin-token",
+    tag = "admin",
+    params(("id" = String, Path, description = "Server id")),
+    responses(
+        (status = 200, description = "New plugin token", body = PluginTokenResponse),
+        (status = 401, description = "Authentication required", body = crate::errors::ErrorResponse),
+        (status = 403, description = "Administrator role required", body = crate::errors::ErrorResponse),
+        (status = 404, description = "Server not found", body = crate::errors::ErrorResponse)
+    )
+)]
+pub async fn rotate_plugin_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    require_admin(&state, &headers).await?;
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let mut transaction = state.db.begin().await?;
+    let result = sqlx::query(
+        r"
+        UPDATE servers
+        SET plugin_token = $2,
+            last_reported_at = NULL,
+            status = CASE
+                WHEN status = 'maintenance' THEN status
+                ELSE 'offline'
+            END,
+            player_count = 0,
+            latency_ms = NULL,
+            updated_at = now()
+        WHERE id = $1
+        ",
+    )
+    .bind(&id)
+    .bind(&token)
+    .execute(&mut *transaction)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    sqlx::query("DELETE FROM server_players WHERE server_id = $1")
+        .bind(&id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(PluginTokenResponse { token: Some(token) }),
+    ))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/admin/servers/{id}/plugin-token",
+    tag = "admin",
+    params(("id" = String, Path, description = "Server id")),
+    responses(
+        (status = 204, description = "Plugin token revoked and live snapshot cleared"),
+        (status = 401, description = "Authentication required", body = crate::errors::ErrorResponse),
+        (status = 403, description = "Administrator role required", body = crate::errors::ErrorResponse),
+        (status = 404, description = "Server not found", body = crate::errors::ErrorResponse)
+    )
+)]
+pub async fn clear_plugin_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    require_admin(&state, &headers).await?;
+    let mut transaction = state.db.begin().await?;
+    let result = sqlx::query(
+        r"
+        UPDATE servers
+        SET plugin_token = NULL,
+            last_reported_at = NULL,
+            status = CASE
+                WHEN status = 'maintenance' THEN status
+                ELSE 'offline'
+            END,
+            player_count = 0,
+            latency_ms = NULL,
+            updated_at = now()
+        WHERE id = $1
+        ",
+    )
+    .bind(&id)
+    .execute(&mut *transaction)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    sqlx::query("DELETE FROM server_players WHERE server_id = $1")
+        .bind(&id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

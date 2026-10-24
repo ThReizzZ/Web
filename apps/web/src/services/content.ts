@@ -5,11 +5,12 @@ import type {
   AdminForumTopic,
   AdminForumUser,
   AdminLookupResponse,
+  AdminOverview,
   Ban,
+  PluginTokenResponse,
   ServerAdminOverview,
   WhitelistOverview,
 } from "@/features/admin/types";
-import type { AdminOverview } from "@/features/admin/types";
 import type {
   ActiveUser,
   ForumCategory,
@@ -331,6 +332,34 @@ export async function createAdminServer(
   await client.request<void>("/api/v1/admin/servers", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export async function fetchAdminServerPluginToken(
+  client: ApiClient,
+  id: string,
+): Promise<string | null> {
+  const response = await client.get<PluginTokenResponse>(
+    `/api/v1/admin/servers/${encodeURIComponent(id)}/plugin-token`,
+    noStore,
+  );
+  return response.token;
+}
+
+export async function rotateAdminServerPluginToken(client: ApiClient, id: string): Promise<string> {
+  const response = await client.request<PluginTokenResponse>(
+    `/api/v1/admin/servers/${encodeURIComponent(id)}/plugin-token`,
+    { method: "POST" },
+  );
+  if (!response.token) {
+    throw new Error("服务器没有返回插件令牌。");
+  }
+  return response.token;
+}
+
+export async function clearAdminServerPluginToken(client: ApiClient, id: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/servers/${encodeURIComponent(id)}/plugin-token`, {
+    method: "DELETE",
   });
 }
 

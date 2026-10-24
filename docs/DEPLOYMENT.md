@@ -251,9 +251,30 @@ location /admin {
 
 网络限制是额外防护，不能替代 Steam 登录和角色校验。
 
+### 游戏服务器状态与玩家
+
+API 不再轮询 A2S/RCON。每个游戏服务器需要安装 `plugins/ThRei_Players/` 中的 SourceMod 插件：
+
+1. 游戏服务器安装 SourceMod 1.11+ 与 SteamWorks 扩展；
+2. 在管理面板添加服务器，打开「插件配置」生成令牌；
+3. 将 `addons/sourcemod/plugins/ThRei_Players.smx` 复制到游戏服务器，填写 `cfg/sourcemod/threi_players.cfg`：
+
+```cfg
+sm_threi_players_enabled "1"
+sm_threi_api_url "https://community.example.com/api/v1/plugin/report"
+sm_threi_server_id "kz-beginner"
+sm_threi_token "<管理面板生成的令牌>"
+sm_threi_interval "30"
+```
+
+4. 执行 `sm plugins load ThRei_Players`（或重载地图），然后用 `sm_threi_report` 立即上报；
+5. 管理面板应显示「插件已连接」，网站服务器目录出现在线玩家。
+
+游戏服务器必须能访问 `sm_threi_api_url`。生产环境应使用 HTTPS，因为令牌通过 HTTP 头传输。插件令牌按服务器隔离；重新生成或撤销后旧令牌立即失效。超过 90 秒没有上报会自动显示离线。完整说明见 [../plugins/ThRei_Players/README.md](../plugins/ThRei_Players/README.md)。
+
 ### 封禁与白名单
 
-管理面板已提供封禁/解封与白名单审核。封禁会阻止网站登录并撤销会话；白名单/封禁的**游戏内拦截**需要 CS:GO 服务器插件读取 `bans`、`server_whitelist` 和 `servers.requires_whitelist`，部署时需单独安装并配置插件。API 仅负责管理数据和审核流程。
+管理面板已提供封禁/解封与白名单审核。封禁会阻止网站登录并撤销会话。`ThRei_Players` 只上报状态和玩家，不执行踢出/封禁/白名单拦截；这些**游戏内操作**仍需后续插件消费 `server_actions`、`server_bans` 和 `server_whitelist`。API 仅负责管理数据和审核流程。
 
 ## 9. 备份与恢复
 
@@ -367,6 +388,7 @@ curl -fsS http://127.0.0.1/api/v1/system/info
 - [ ] `docker compose ps` 所有服务 healthy（`migrate` 为 exited 0）
 - [ ] API/Web 健康检查通过
 - [ ] `ADMIN_STEAM_IDS` 已配置，管理面板与管理员 API 验证通过
+- [ ] 每个游戏服务器已安装 `ThRei_Players`，后台显示「插件已连接」，令牌未写入 Git
 - [ ] HTTPS 证书有效，HSTS 仅在验证后启用
 - [ ] 日志中无密钥、Cookie 或连接串
 - [ ] 已阅读并遵守 `docs/DEVELOPMENT.md` 的日志规则

@@ -7,7 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CopyAddressButton } from "@/features/servers/components/copy-address-button";
 import { ServerStatusBadge } from "@/features/servers/components/server-status-badge";
-import { getServerAddress, type KzServer } from "@/features/servers/data/servers";
+import {
+  getOnlinePlayerCount,
+  getServerAddress,
+  type KzServer,
+} from "@/features/servers/data/servers";
 
 export function JoinServerButton({
   server,
@@ -22,6 +26,7 @@ export function JoinServerButton({
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const address = getServerAddress(server);
+  const playerCount = getOnlinePlayerCount(server);
   const enabled = server.status === "online";
 
   return (
@@ -88,7 +93,7 @@ export function JoinServerButton({
               <Badge variant="outline">{server.tickrate} tick</Badge>
               <Badge variant="outline">{server.region}</Badge>
               <Badge variant="outline">
-                {server.players.length}/{server.maxPlayers} 在线
+                {playerCount}/{server.maxPlayers} 在线
               </Badge>
             </div>
 
@@ -132,7 +137,7 @@ export function JoinServerButton({
             </div>
 
             <p className="text-xs text-muted-foreground">
-              当前在线 {server.players.length} / {server.maxPlayers} 人 ·{" "}
+              当前在线 {playerCount} / {server.maxPlayers} 人 ·{" "}
               {server.latencyMs === null ? "延迟未知" : `延迟约 ${server.latencyMs} ms`} · KZ
               计时器与检查点由服务器插件提供。
             </p>

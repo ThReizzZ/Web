@@ -12,7 +12,7 @@
 | 请求/响应格式 | `application/json; charset=utf-8` |
 | 字段命名 | 健康/系统接口保持既有 `snake_case`；业务接口使用 `camelCase` |
 | 时间格式 | RFC 3339 / UTC |
-| 认证 | Steam OpenID 登录 + `threi_session` HttpOnly Cookie |
+| 认证 | Steam OpenID 登录 + `threi_session` HttpOnly Cookie；插件上报使用每服务器令牌 |
 | 请求追踪 | 响应头 `x-request-id` |
 | 健康检查 | 根路径 `/health/live`、`/health/ready`，不属于业务 API |
 | OpenAPI | `/api/v1/openapi.json`、`/api/v1/docs`（受 `API_DOCS_ENABLED` 控制） |
@@ -128,6 +128,7 @@ Steam 是唯一登录方式；没有密码、邮箱注册或其他登录入口�
     "mapImage": "https://cdn.example.com/kz_beginner.jpg",
     "featured": true,
     "requiresWhitelist": false,
+    "playerCount": 1,
     "players": [
       {
         "name": "Steam 昵称",
@@ -140,8 +141,42 @@ Steam 是唯一登录方式；没有密码、邮箱注册或其他登录入口�
 ```
 
 - `status`：`online` / `maintenance` / `offline`。
-- `latencyMs` 可为 `null`；`mapImage` 可为空字符串。
-- 当前没有游戏服务器插件写入 `server_players`，在线玩家可能为空。
+- `latencyMs`、`playerCount` 可为 `null`；`mapImage` 可为空字符串。
+- 状态、地图、人数与在线玩家由游戏服务器上的 `ThRei_Players` 插件上报。API 不再使用 A2S/RCON 轮询；超过 90 秒没有收到上报时，后台任务会把服务器标记为 `offline`、人数清零并删除在线名单。`maintenance` 状态不会被上报或清理任务覆盖。
+- 在线名单只包含插件已通过 Steam 认证的玩家（SteamID64 非空）。插件安装与配置见 [../plugins/ThRei_Players/README.md](../plugins/ThRei_Players/README.md)。
+
+### `POST /api/v1/plugin/report`
+
+供 `ThRei_Players` 插件调用，不使用 Cookie 会话。请求头必须携带管理面板生成的服务器令牌：
+
+```http
+POST /api/v1/plugin/report
+Content-Type: application/json
+X-ThRei-Plugin-Token: <server plugin token>
+```
+
+```json
+{
+  "serverId": "kz-beginner",
+  "map": "kz_beginner",
+  "maxPlayers": 32,
+  "players": [
+    {
+      "steamId64": "76561199125125759",
+      "name": "玩家昵称",
+      "connectedSeconds": 120
+    }
+  ]
+}
+```
+
+- `serverId` 必须与令牌所属服务器一致；`map`、`maxPlayers` 可省略。
+- `players` 中无效或重复的 SteamID64 会被跳过，响应里的 `skipped` 表示跳过数量。
+- `connectedSeconds` 用于恢复 `connected_at`，超出 0–2592000 秒会被截断。
+- 成功返回 `{ "serverId": "...", "playerCount": 1, "skipped": 0, "reportedAt": "..." }`。
+- 令牌缺失、错误、服务器不存在或 `serverId` 不匹配统一返回 `401 unauthorized`，避免枚举服务器。
+- 字段超出限制或 JSON 非法返回 `422`。
+- 上报会在一个事务内替换该服务器的在线名单；本次未出现的玩家会被删除，持续在线的玩家保留原 `connected_at`。
 
 ## 5. 论坛
 
@@ -268,13 +303,16 @@ Query：
 
 ### 6.8 服务器管理
 
-- `GET /admin/servers`：服务器、在线玩家、服务器封禁记录。
-- `POST /admin/servers`：添加服务器；字段包括 `id`、`name`、`map`、`host`、`port`、`region`、`tickrate`、`maxPlayers`、`tags`、`mapImage`、`status`、`featured`、`requiresWhitelist`。
+- `GET /admin/servers`：服务器、在线玩家、服务器封禁记录。服务器包含 `playerCount`、`lastReportedAt`、`pluginState`（`disabled` / `waiting` / `connected`）；玩家包含 `steamId64`、`name`、`avatarUrl`、`connectedAt`、`lastSeenAt`。API 不返回插件令牌原文。
+- `POST /admin/servers`：添加服务器；字段包括 `id`、`name`、`map`、`host`、`port`、`region`、`tickrate`、`maxPlayers`、`tags`、`mapImage`、`status`、`featured`、`requiresWhitelist`。新服务器在插件首次上报前应保持 `offline`。
 - `PATCH /admin/servers/{id}` body `{ "isActive": false }` 启用/停用；`DELETE` 删除服务器。
-- `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions` 并移除当前在线记录。
+- `GET /admin/servers/{id}/plugin-token`：读取当前插件令牌或 `null`；仅管理员可见，响应带 `Cache-Control: no-store`。
+- `POST /admin/servers/{id}/plugin-token`：生成新令牌；旧令牌立即失效，同时清空在线名单并把状态重置为 `offline`（`maintenance` 保留）。
+- `DELETE /admin/servers/{id}/plugin-token`：撤销令牌，并执行同样的在线状态清理，返回 `204`。
+- `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions`。
 - `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "..." }`：写入 `server_bans` 与 `server_actions`。
 - `POST /admin/server-bans/{id}/lift` 解除服务器封禁。
-- 游戏内执行踢出/封禁需要服务器插件消费 `server_actions` 和读取 `server_bans`；Web API 只负责管理数据和写入待处理指令。
+- 踢出/封禁目前只落库；`ThRei_Players` 只负责状态与玩家上报，不执行管理指令。游戏内执行需要后续插件消费 `server_actions` 和读取 `server_bans`。
 
 ## 7. 错误结构
 

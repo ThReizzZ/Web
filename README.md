@@ -22,7 +22,7 @@ ThRei 是一个以 CS:GO KZ 攀爬、连跳和长跳玩法为核心的社区系�
 | 路径 | 内容 |
 | --- | --- |
 | `/` | 官网首页：真实服务器统计、最新主题、公告与社区计数 |
-| `/servers` | 服务器目录：数据库中的 KZ 服务器、地图、IP/PORT、真实在线玩家、人数上限；卡片墙/列表切换、搜索、复制地址与 Steam 加入流程 |
+| `/servers` | 服务器目录：数据库中的 KZ 服务器、`ThRei_Players` 上报的实时状态、地图、IP/PORT、在线玩家与人数上限；卡片墙/列表切换、搜索、复制地址与 Steam 加入流程 |
 | `/forum` | 论坛：数据库分类、主题列表、搜索与最近活跃成员 |
 | `/forum/[category]` | 分类主题列表 |
 | `/forum/topic/[id]` | 帖子详情与回复；包含官方新手指南与白名单说明 |
@@ -44,7 +44,8 @@ ThRei 是一个以 CS:GO KZ 攀爬、连跳和长跳玩法为核心的社区系�
 - 管理面板支持按 SteamID64 新增管理员、取消管理员、禁用/启用账号；不能操作自己，也不能移除最后一位可用管理员。
 - 封禁管理支持临时/永久封禁、解封；封禁会立即撤销目标网站会话并阻止再次登录。
 - 论坛管理支持编辑/删除/恢复主题和回复、置顶/热门/分类调整、论坛用户禁言和封禁。
-- 服务器管理支持添加/删除服务器、启用/停用、查看在线玩家、踢出或服务器封禁玩家；实际游戏内执行需要服务器插件消费 `server_actions`。
+- 服务器管理支持添加/删除服务器、启用/停用、生成/轮换/撤销插件令牌、查看在线玩家、踢出或服务器封禁玩家；实际游戏内执行需要服务器插件消费 `server_actions`。
+- 服务器状态由 SourceMod 插件 `ThRei_Players` 主动上报，API 不再使用 A2S/RCON 轮询。插件安装、配置和协议见 [plugins/ThRei_Players/README.md](plugins/ThRei_Players/README.md)。每个服务器使用独立令牌（`X-ThRei-Plugin-Token` 请求头）；超过 90 秒没有上报会自动标记离线并清空在线名单，`maintenance` 状态不会被覆盖。
 - 白名单审核支持申请审核、服务器白名单开关、手动授权与移除；玩家可在用户中心提交申请。游戏内拦截仍需服务器插件读取白名单数据。
 
 真实 Steam 登录需要浏览器完成 Steam 授权。自动化测试覆盖了登录重定向、回调和未登录访问，但未使用真实 Steam 账号完成最终授权。
@@ -74,6 +75,7 @@ threi/
 │   ├── Dockerfile
 │   └── Cargo.toml
 ├── deploy/nginx/              # Nginx 主配置、HTTP 模板、HTTPS 示例
+├── plugins/ThRei_Players/     # SourceMod 上报插件（源码、已编译 smx、配置示例）
 ├── docs/                      # 架构、开发日志、API、部署、CHANGELOG
 ├── scripts/                   # 本地检查与数据库备份
 ├── compose.yaml               # 生产导向服务编排
@@ -126,6 +128,8 @@ cp apps/web/.env.example apps/web/.env.local
 # 按本地预览地址填写 WEB_URL / STEAM_RETURN_URL / STEAM_REALM
 ```
 
+如果开发机无法访问 `steamcommunity.com`，Steam 回调会因 `check_authentication` 超时而失败（页面显示“Steam 登录未完成”）。可在 `services/api/.env` 临时设置 `STEAM_SKIP_OPENID_VERIFICATION=true`：该开关只在 `APP_ENV=development` 下生效，其他环境会拒绝启动；启用后跳过服务端 OpenID 校验，昵称和头像使用本地回退值。不要在生产环境使用。
+
 启动后端（终端 1）：
 
 ```bash
@@ -146,6 +150,8 @@ npm run dev
 - API：<http://127.0.0.1:8080>
 - Steam 回调：`http://localhost:3000/api/v1/auth/steam/callback`
 - OpenAPI UI：<http://127.0.0.1:8080/api/v1/docs>（`API_DOCS_ENABLED=true` 时）
+
+服务器状态不再由本机轮询。添加服务器后，在管理面板的「插件配置」中生成令牌，按 [plugins/ThRei_Players/README.md](plugins/ThRei_Players/README.md) 把插件安装到游戏服务器并填写上报地址。插件会主动访问 API；本机不需要能访问游戏服务器的 UDP/TCP 端口。
 
 本地浏览器通过 Next.js rewrite 走同源 `/api/v1`。如果从局域网其他设备访问，请把 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM` 和 `NEXT_PUBLIC_SITE_URL` 改成该设备访问的 origin；Steam 回调必须与浏览器访问的 origin 一致。
 
@@ -193,6 +199,8 @@ cd apps/web && npm run build
 | GET/PATCH/DELETE | `/api/v1/admin/forum/*` | 主题、回复、用户禁言管理 | 管理员 |
 | GET/POST | `/api/v1/admin/servers` | 服务器管理数据 / 添加服务器 | 管理员 |
 | PATCH/DELETE | `/api/v1/admin/servers/{id}` | 启用停用 / 删除服务器 | 管理员 |
+| GET/POST/DELETE | `/api/v1/admin/servers/{id}/plugin-token` | 读取 / 生成 / 撤销服务器插件令牌 | 管理员 |
+| POST | `/api/v1/plugin/report` | `ThRei_Players` 上报状态与在线玩家 | 插件令牌 |
 | POST | `/api/v1/admin/servers/{id}/players/{steam_id64}/kick`、`/ban` | 踢出 / 服务器封禁 | 管理员 |
 | DELETE | `/api/v1/admin/admins/{steam_id64}` | 取消管理员权限 | 管理员 |
 | POST | `/api/v1/admin/admins/{steam_id64}/disable`、`/enable` | 禁用 / 启用管理员 | 管理员 |
@@ -225,7 +233,7 @@ cd apps/web && npm run build
 - 登录限流、CSRF 令牌（当前已有管理员写接口，但尚未加 CSRF）
 - 论坛发帖/回复、资料编辑、收藏管理的写接口
 - 细粒度 RBAC、管理员操作审计
-- 游戏服务器插件到 `server_players` 的实时上报
+- 游戏服务器插件对 `server_actions`、`server_bans`、`server_whitelist` 的实时消费（`ThRei_Players` 已提供状态与玩家上报，尚不执行管理操作）
 - CSP、HTTPS 证书自动化、备份自动化
 - CI；当前只有本地检查脚本
 - 使用真实 Steam 账号完成一次完整的浏览器登录验收
@@ -236,9 +244,9 @@ cd apps/web && npm run build
 
 - 数据库预置了 5 个论坛分类和 1 篇官方新手指南，没有预置服务器、真实玩家或模拟讨论。
 - 新手指南会说明进入服务器和申请白名单的流程；登录玩家可在用户中心提交白名单申请，论坛发帖/回复写接口仍未开放。
-- 服务器“在线玩家”需要外部游戏服务器插件写入 `server_players`；当前没有该插件。
+- 在线状态、地图、人数和 SteamID64 玩家名单由游戏服务器上的 `ThRei_Players` 插件上报；未安装插件或超过 90 秒没有上报时显示离线。
 - 论坛发帖/回复写接口仍未开放；管理面板可以编辑、删除已有内容。
-- 白名单、封禁和踢出数据已落库，但游戏服务器插件尚未接入；未实现自动踢出/拦截，生产需要插件读取 `server_actions`、`server_bans` 和 `server_whitelist`。
+- 踢出/封禁数据已落库，但插件只上报状态，不执行管理指令；游戏内执行仍需后续插件消费 `server_actions`、`server_bans` 和 `server_whitelist`。
 - 服务器添加表单已提供，但尚未提供完整字段编辑表单；当前可启用/停用、删除和配置白名单。
 - 本机没有 Docker daemon，镜像构建、Compose 启动、`nginx -t` 与 HTTPS 未在本地执行。
 - 当前开发环境连接局域网 PostgreSQL/Redis；生产使用 Compose 内 PostgreSQL/Redis。

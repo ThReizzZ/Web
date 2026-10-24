@@ -1,0 +1,22 @@
+// ThRei_Players example configuration.
+//
+// Copy the values into cfg/sourcemod/threi_players.cfg on the game server.
+// The plugin creates that file automatically on first load; edit the values
+// generated there instead of replacing the whole file if you prefer.
+
+// Enable reporting to threi. 1 = enabled, 0 = disabled.
+sm_threi_players_enabled "1"
+
+// Full report endpoint, including /api/v1/plugin/report.
+// Use HTTPS in production so the plugin token is not sent in clear text.
+sm_threi_api_url "https://example.com/api/v1/plugin/report"
+
+// Server ID shown in the threi admin panel.
+sm_threi_server_id "kz-beginner"
+
+// Per-server token generated in the admin panel. Keep this secret.
+sm_threi_token "REPLACE_WITH_PLUGIN_TOKEN"
+
+// Seconds between reports, 5-600. Player joins, disconnects and map changes
+// also trigger reports.
+sm_threi_interval "30"

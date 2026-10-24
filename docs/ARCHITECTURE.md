@@ -15,9 +15,9 @@ ThRei 是一个长期运营的 CS:GO KZ 社区系统，统一承载官网、服�
 - 为后续用户、权限、论坛、通知、审核、审计和系统配置模块预留扩展点；
 - 不提前引入微服务、消息队列等尚无实际需求的基础设施。
 
-当前已实现 Steam OpenID 登录、数据库会话、真实业务表、服务器/论坛/社区/用户中心/管理统计的只读 API，以及管理面板的服务端角色校验。前端不再使用模拟数据。
+当前已实现 Steam OpenID 登录、数据库会话、真实业务表、服务器/论坛/社区/用户中心/管理统计的只读 API、管理面板的服务端角色校验，以及由 `ThRei_Players` SourceMod 插件主动上报的服务器状态与玩家名单。前端不再使用模拟数据。
 
-尚未实现：论坛发帖/回复、资料与收藏写接口、游戏服务器实时上报、审核/审计写流程、登录限流与 CSRF 令牌、CI 和自动化部署验证。相关能力在本文中明确标记为“规划”。
+尚未实现：论坛发帖/回复、资料与收藏写接口、插件对踢出/封禁/白名单指令的游戏内执行、审核/审计写流程、登录限流与 CSRF 令牌、CI 和自动化部署验证。相关能力在本文中明确标记为“规划”。
 
 ## 2. 技术选型
 
@@ -50,6 +50,10 @@ Nginx (only published service; default 127.0.0.1:80 -> 8080)
 
 Rust API ──► PostgreSQL 17 (internal network, persistent volume)
          └─► Redis 7.4       (internal network, cache/transient state)
+
+Game server (SourceMod + ThRei_Players)
+  │  HTTPS POST /api/v1/plugin/report + per-server token
+  └──────────────────────────────► Nginx ──► Rust API
 ```
 
 职责：
@@ -59,6 +63,7 @@ Rust API ──► PostgreSQL 17 (internal network, persistent volume)
 - **PostgreSQL**：权威数据源，只能由 API 访问。
 - **Redis**：缓存和临时状态（未来：限流、会话索引等），不是系统记录。
 - **Nginx**：公开入口、TLS 终止预留、路径转发、请求 ID 注入、隐藏内部健康检查。
+- **游戏服务器插件**：只主动上报状态与已认证玩家，不接收 API 的连接；令牌按服务器隔离。
 
 ## 4. Monorepo 结构
 
@@ -66,6 +71,7 @@ Rust API ──► PostgreSQL 17 (internal network, persistent volume)
 apps/web                 Next.js 应用（独立构建、独立镜像）
 services/api             Rust API 与 migrator（独立构建、独立镜像）
 deploy/nginx             Nginx 主配置、HTTP 模板、HTTPS 示例
+plugins/ThRei_Players    SourceMod 上报插件（源码、已编译 smx、配置示例）
 docs                     架构、开发日志、API、部署、CHANGELOG
 scripts                  检查与备份脚本
 compose.yaml             生产导向编排
@@ -159,7 +165,7 @@ Steam 是唯一登录方式：
 - 数据库为空时页面显示空状态，不回退到伪造内容。
 - 迁移预置 1 篇官方新手指南；作者为 `users.is_system=true` 的系统账号，不计入成员/活跃统计。论坛“新手指南”卡片通过“查看教学”跳转到该主题。
 
-服务器 `server_players` 表已就绪，但尚未接入游戏服务器插件实时上报；当前在线玩家以该表中的 `last_seen_at`（5 分钟窗口）为准。
+服务器状态与在线玩家由 `ThRei_Players` 上报写入 `servers` / `server_players`；公开目录和管理面板读取同一份快照。超过 90 秒未上报时，后台清理任务会把服务器标记离线并删除名单。
 
 ## 6. 后端架构
 
@@ -180,7 +186,7 @@ src/modules/                auth / servers / forum / community / account / admin
 src/bin/migrate.rs          独立迁移二进制
 ```
 
-已实现模块：`auth`（Steam OpenID、会话、用户）、`servers`（目录、在线玩家与白名单标记）、`server_admin`（服务器增删与玩家操作）、`forum`（分类/主题/回复读取）、`forum_admin`（内容编辑/删除/恢复与用户禁言）、`community`（统计）、`account`（当前用户概览）、`admin`（运营统计）、`admin_users`（管理员增删/禁用）、`bans`（封禁/解封）、`whitelist`（申请审核与服务器白名单）。每个模块目前按职责分文件；后续写接口继续沿用以下结构：
+已实现模块：`auth`（Steam OpenID、会话、用户）、`servers`（目录、在线玩家与白名单标记）、`server_plugin`（插件上报、令牌校验、在线名单替换与过期清理）、`server_admin`（服务器增删、插件令牌、玩家操作）、`forum`（分类/主题/回复读取）、`forum_admin`（内容编辑/删除/恢复与用户禁言）、`community`（统计）、`account`（当前用户概览）、`admin`（运营统计）、`admin_users`（管理员增删/禁用）、`bans`（封禁/解封）、`whitelist`（申请审核与服务器白名单）。每个模块目前按职责分文件；后续写接口继续沿用以下结构：
 
 ```text
 modules/<name>/
@@ -281,7 +287,18 @@ modules/<name>/
 - 响应只包含状态、版本、运行时长，不包含地址、账号、密码、驱动错误或内部路径。
 - 两个端点位于根路径，由 Nginx 返回 404，不暴露到公网。容器健康检查直接访问容器内端口。
 
-### 6.6 OpenAPI
+### 6.6 插件上报与在线状态
+
+- **上报方向**：游戏服务器上的 `ThRei_Players` 通过 SteamWorks 的 HTTP 客户端调用 `POST /api/v1/plugin/report`。API 不主动连接游戏服务器，不需要开放 A2S 端口或保存 RCON 密码。
+- **认证**：每个服务器有独立的 32 位十六进制令牌，保存在 `servers.plugin_token`，通过 `X-ThRei-Plugin-Token` 请求头提交。令牌只在管理员读取/生成接口中返回，不出现在服务器列表、公开接口或日志中。缺失、错误、服务器不存在或 `serverId` 不匹配统一返回 `401`。
+- **输入校验**：`serverId` 最多 80 字符；地图最多 128 字符；`maxPlayers` 为 1–1024；最多 1024 名玩家；SteamID64 必须是 17 位数字；昵称截断到 80 字符；连接秒数限制在 0–2592000。无效或重复玩家记入 `skipped`，不会让整次上报失败。
+- **写入**：在单个事务中更新服务器快照（状态、地图、人数上限、人数、`last_reported_at`），删除本次不再出现的 `server_players`，并 upsert 当前玩家；upsert 保留已有 `connected_at`。`maintenance` 状态不会被上报改为 `online`。
+- **过期清理**：后台任务每 30 秒扫描一次；插件管理的服务器超过 90 秒未上报时，状态改为 `offline`、人数清零、延迟清空、删除在线名单，`maintenance` 保持不变。
+- **管理状态**：`pluginState` 由 `plugin_token` 与 `last_reported_at` 派生：`disabled`（无令牌）、`waiting`（有令牌但没有最近上报）、`connected`（90 秒内有上报）。
+- **令牌生命周期**：生成/轮换会清空在线快照并标记离线；撤销令牌执行同样的清理。旧令牌立即失效。
+- **边界**：插件只上报状态和名单，不轮询踢出/封禁/白名单指令。`server_actions` 的游戏内执行仍未实现。
+
+### 6.7 OpenAPI
 
 - `utoipa` 从 handler 和 schema 生成 OpenAPI 3。
 - 默认开发环境开启 `/api/v1/openapi.json` 与 `/api/v1/docs`；生产默认关闭。
@@ -301,6 +318,8 @@ modules/<name>/
 - `users.is_system` 标记官方系统账号；成员数、角色分布、最近注册和活跃统计会排除这些账号。
 - `users.is_disabled` 禁用管理员账号；禁用会撤销会话并阻止登录。
 - `bans` 保存 SteamID64、原因、到期时间、操作者与解封记录；生效封禁阻止登录。
+- `servers.plugin_token` 保存每服务器插件令牌，唯一且可空；`servers.last_reported_at` 记录最近插件上报时间。
+- `server_players` 的 SteamID64 非空，插件上报时按 `(server_id, steam_id64)` upsert；不再保存 A2S 匿名槽位。
 - `server_whitelist`、`whitelist_applications` 管理服务器白名单与审核；`servers.requires_whitelist` 标记需要白名单的服务器。
 - `forum_mutes` 记录论坛禁言；`server_bans` 记录服务器级封禁；`server_actions` 保存待游戏服务器插件消费的踢出/封禁指令。
 - 迁移只新增，不修改已应用迁移。
@@ -337,6 +356,7 @@ modules/<name>/
 - **角色**：`member` / `moderator` / `admin`；`ADMIN_STEAM_IDS` 仅首次引导，之后由管理面板维护；管理页面和 API 均校验。
 - **登出**：删除数据库会话并返回过期 Cookie。
 - **权限**：`/api/v1/account` 需要登录；`/api/v1/admin/*` 需要管理员；公开读取接口不需要登录。管理员管理、封禁、白名单审核在 API 层再次校验。
+- **插件**：`/api/v1/plugin/report` 不使用 Cookie，只接受每服务器令牌；令牌仅由管理员生成、读取和撤销。
 
 尚未实现：
 
@@ -389,8 +409,9 @@ Compose 服务：
 **限制：**
 
 - 写接口、CSRF、登录限流、审核与审计尚未实现；论坛/服务器内容目前只能通过数据库或后续管理接口写入。
-- 游戏服务器插件到 `server_players` 的实时上报尚未实现，在线玩家可能为空。
-- 没有后台任务、邮件、通知投递和文件存储。
+- `ThRei_Players` 只上报状态与玩家，不执行踢出、封禁或白名单指令；在线名单依赖游戏服务器能访问 API。
+- 在线状态由 90 秒上报窗口判断，API 不保存历史在线曲线。
+- 没有邮件、通知投递和文件存储。
 - 没有 CI、指标、集中日志和自动备份。
 - Nginx 只配置了 HTTP；HTTPS 仅有示例。
 - 本机无 Docker，镜像构建、Compose 启动和 `nginx -t` 未实际执行。
@@ -403,7 +424,7 @@ Compose 服务：
 1. 在有 Docker 的主机完成镜像构建、Compose 启动和健康检查；
 2. 真实 Steam 账号登录验收 + 登录限流/CSRF；
 3. 论坛发帖/回复、资料编辑、收藏写接口；
-4. 游戏服务器在线玩家上报；
+4. 插件对踢出、封禁与白名单指令的游戏内执行；
 5. 管理审核与审计；
 6. CI、备份自动化、指标与 HTTPS 自动化。
 
