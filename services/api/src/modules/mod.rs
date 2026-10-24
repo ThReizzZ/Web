@@ -5,5 +5,7 @@ pub mod auth;
 pub mod bans;
 pub mod community;
 pub mod forum;
+pub mod forum_admin;
+pub mod server_admin;
 pub mod servers;
 pub mod whitelist;

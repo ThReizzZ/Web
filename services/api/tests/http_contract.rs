@@ -293,6 +293,8 @@ async fn admin_endpoints_require_authentication() {
     for path in [
         "/api/v1/admin/admins",
         "/api/v1/admin/users/lookup?steamId64=76561198000000000",
+        "/api/v1/admin/forum/topics",
+        "/api/v1/admin/servers",
         "/api/v1/admin/bans",
         "/api/v1/admin/whitelist",
     ] {

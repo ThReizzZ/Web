@@ -1,17 +1,21 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Ban as BanIcon, LoaderCircle, ShieldCheck, Undo2 } from "lucide-react";
+import { Ban as BanIcon, LoaderCircle, Plus, ShieldCheck, Undo2 } from "lucide-react";
 
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 import { Label } from "@/components/ui/label";
 import type { Ban } from "@/features/admin/types";
-import { formatDate, formatRelativeTime } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { getBrowserApiClient } from "@/lib/api/browser";
+import { useToast } from "@/components/ui/toast";
 import { createBan, liftBan } from "@/services/content";
 
 const durations = [
@@ -30,6 +34,8 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
   const [duration, setDuration] = useState<(typeof durations)[number]["value"]>("permanent");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [liftTarget, setLiftTarget] = useState<Ban | null>(null);
   const [, startTransition] = useTransition();
 
   const activeCount = bans.filter((ban) => ban.isActive).length;
@@ -37,6 +43,8 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
   function refresh() {
     startTransition(() => router.refresh());
   }
+
+  const { toast } = useToast();
 
   async function handleCreate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -63,6 +71,7 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
       setReason("");
       setDuration("permanent");
       setFeedback("封禁已创建，该玩家的现有会话已失效。");
+      setShowCreate(false);
       refresh();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "封禁失败，请稍后重试。");
@@ -72,14 +81,10 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
   }
 
   async function handleLift(ban: Ban) {
-    const reasonText = window.prompt(`解封 ${ban.playerName} 的原因（可选）`) ?? undefined;
-    if (reasonText === undefined) {
-      return;
-    }
     setBusy(ban.id);
     setFeedback(null);
     try {
-      await liftBan(getBrowserApiClient(), ban.id, reasonText);
+      await liftBan(getBrowserApiClient(), ban.id);
       setBans((current) =>
         current.map((item) =>
           item.id === ban.id
@@ -87,11 +92,12 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
                 ...item,
                 isActive: false,
                 liftedAt: new Date().toISOString(),
-                liftReason: reasonText || null,
+                liftReason: null,
               }
             : item,
         ),
       );
+      setLiftTarget(null);
       setFeedback("封禁已解除。");
       refresh();
     } catch (error) {
@@ -100,6 +106,13 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
       setBusy(null);
     }
   }
+
+  useEffect(() => {
+    if (feedback) {
+      const tone = /失败|错误|不能|请先|无效|不符合/.test(feedback) ? "error" : "success";
+      toast(feedback, tone);
+    }
+  }, [feedback, toast]);
 
   return (
     <div className="space-y-6">
@@ -111,15 +124,16 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
             对违规玩家执行临时或永久封禁。封禁会立即撤销该 Steam 账号的网站会话，登录也会被拒绝。
           </p>
         </div>
-        <Badge variant={activeCount > 0 ? "warning" : "success"}>{activeCount} 条生效封禁</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={activeCount > 0 ? "warning" : "success"}>{activeCount} 条生效封禁</Badge>
+          <Button type="button" size="sm" onClick={() => setShowCreate((value) => !value)}>
+            <Plus /> {showCreate ? "收起表单" : "新增封禁"}
+          </Button>
+        </div>
       </div>
 
-      {feedback ? (
-        <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">{feedback}</div>
-      ) : null}
-
-      <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="order-1 min-w-0 rounded-xl border bg-card 2xl:order-1">
+      <div className="space-y-6">
+        <div className="min-w-0 rounded-xl border bg-card">
           <div className="border-b px-5 py-4">
             <h2 className="font-semibold">封禁记录</h2>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -149,7 +163,7 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
                           </span>
                         </div>
                         <p className="mt-2 text-[11px] text-muted-foreground">
-                          {formatRelativeTime(ban.createdAt)}由 {ban.createdBy}创建
+                          {formatDate(ban.createdAt)}由 {ban.createdBy}创建
                         </p>
                       </div>
                     </div>
@@ -161,7 +175,7 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
                           size="sm"
                           variant="outline"
                           disabled={busy === ban.id}
-                          onClick={() => void handleLift(ban)}
+                          onClick={() => setLiftTarget(ban)}
                         >
                           {busy === ban.id ? (
                             <LoaderCircle className="animate-spin" />
@@ -221,12 +235,30 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
           </div>
         </div>
 
-        <div className="order-2 h-fit rounded-xl border bg-card p-5 shadow-sm 2xl:order-2">
-          <h2 className="font-semibold">新增封禁</h2>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            管理员账号不能直接被封禁；请先取消其管理员权限。
-          </p>
-          <form onSubmit={handleCreate} className="mt-4 grid gap-4 md:grid-cols-2 2xl:grid-cols-1">
+        <Modal
+          open={showCreate}
+          onOpenChange={setShowCreate}
+          title="新增封禁"
+          description="对违规玩家执行临时或永久封禁。"
+          size="lg"
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setShowCreate(false)}>
+                取消
+              </Button>
+              <Button type="submit" form="ban-create-form" disabled={busy === "create"}>
+                {busy === "create" ? <LoaderCircle className="animate-spin" /> : <BanIcon />}
+                创建封禁
+              </Button>
+            </div>
+          }
+        >
+          <form id="ban-create-form" onSubmit={handleCreate} className="grid gap-4 md:grid-cols-2">
+            <Alert variant="warning" className="md:col-span-2">
+              <AlertDescription>
+                管理员账号不能直接被封禁；请先在管理员页面取消其权限。封禁会撤销目标网站会话。
+              </AlertDescription>
+            </Alert>
             <div className="space-y-1.5">
               <Label htmlFor="ban-steam-id">SteamID64</Label>
               <Input
@@ -277,16 +309,22 @@ export function BansManager({ bans: initialBans }: { bans: Ban[] }) {
                 className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
-            <Button
-              type="submit"
-              className="w-full md:col-span-2 2xl:col-span-1"
-              disabled={busy === "create"}
-            >
-              {busy === "create" ? <LoaderCircle className="animate-spin" /> : <BanIcon />}
-              创建封禁
-            </Button>
           </form>
-        </div>
+        </Modal>
+
+        <ConfirmDialog
+          open={liftTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setLiftTarget(null);
+            }
+          }}
+          title={liftTarget ? `解封 ${liftTarget.playerName}` : "解除封禁"}
+          description="解封后该玩家可以重新登录网站；游戏服务器封禁不受影响。"
+          confirmLabel="解除封禁"
+          pending={liftTarget !== null && busy === liftTarget.id}
+          onConfirm={() => liftTarget && void handleLift(liftTarget)}
+        />
       </div>
     </div>
   );

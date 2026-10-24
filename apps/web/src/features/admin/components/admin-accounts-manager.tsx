@@ -5,14 +5,17 @@ import { useRouter } from "next/navigation";
 import { Check, LoaderCircle, Plus, ShieldCheck, ShieldOff, Trash2, UserCheck } from "lucide-react";
 
 import { UserAvatar } from "@/components/shared/user-avatar";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
+import { Modal } from "@/components/ui/modal";
 import { Label } from "@/components/ui/label";
 import type { AdminAccount, AdminLookupUser } from "@/features/admin/types";
-import { formatDate, formatRelativeTime } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { getBrowserApiClient } from "@/lib/api/browser";
+import { useToast } from "@/components/ui/toast";
 import {
   addAdminAccount,
   fetchAdminUserLookup,
@@ -37,6 +40,8 @@ export function AdminAccountsManager({
   const [lookupState, setLookupState] = useState<LookupState>("idle");
   const [selected, setSelected] = useState<SelectedAdmin | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<AdminAccount | null>(null);
   const [busySteamId, setBusySteamId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
@@ -77,6 +82,8 @@ export function AdminAccountsManager({
     setFeedback(error instanceof Error ? error.message : "操作失败，请稍后重试");
   }
 
+  const { toast } = useToast();
+
   async function handleAdd(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected) {
@@ -100,6 +107,7 @@ export function AdminAccountsManager({
       setLookup(null);
       setLookupState("idle");
       setFeedback(`${admin.name} 已添加为管理员。对方下次登录后即可看到管理面板。`);
+      setShowAdd(false);
       refresh();
     } catch (error) {
       showError(error);
@@ -109,14 +117,12 @@ export function AdminAccountsManager({
   }
 
   async function handleRemove(admin: AdminAccount) {
-    if (!window.confirm(`确定取消 ${admin.name} 的管理员权限吗？`)) {
-      return;
-    }
     setFeedback(null);
     setBusySteamId(admin.steamId64);
     try {
       await removeAdminAccount(getBrowserApiClient(), admin.steamId64);
       setAdmins((current) => current.filter((item) => item.steamId64 !== admin.steamId64));
+      setRemoveTarget(null);
       setFeedback("已取消管理员权限，并撤销该账号会话。");
       refresh();
     } catch (error) {
@@ -175,6 +181,13 @@ export function AdminAccountsManager({
     }
   }
 
+  useEffect(() => {
+    if (feedback) {
+      const tone = /失败|错误|不能|请先|无效|不符合/.test(feedback) ? "error" : "success";
+      toast(feedback, tone);
+    }
+  }, [feedback, toast]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -185,16 +198,15 @@ export function AdminAccountsManager({
             新增、取消权限或禁用管理员。被禁用账号的现有会话会立即失效。
           </p>
         </div>
-        <Badge variant="secondary">{admins.length} 位管理员</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="secondary">{admins.length} 位管理员</Badge>
+          <Button type="button" size="sm" onClick={() => setShowAdd((value) => !value)}>
+            <Plus /> {showAdd ? "收起表单" : "新增管理员"}
+          </Button>
+        </div>
       </div>
 
-      {feedback ? (
-        <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm text-foreground">
-          {feedback}
-        </div>
-      ) : null}
-
-      <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_24rem]">
+      <div className="space-y-6">
         <div className="min-w-0 rounded-xl border bg-card">
           <div className="border-b px-5 py-4">
             <h2 className="font-semibold">管理员列表</h2>
@@ -242,7 +254,7 @@ export function AdminAccountsManager({
                           </p>
                         ) : null}
                         <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-                          <span>最近登录 {formatRelativeTime(admin.lastLoginAt)}</span>
+                          <span>最近登录 {formatDate(admin.lastLoginAt)}</span>
                           <span>{formatDate(admin.createdAt)} 加入</span>
                         </div>
                       </div>
@@ -277,7 +289,7 @@ export function AdminAccountsManager({
                         size="sm"
                         variant="ghost"
                         disabled={self || busy}
-                        onClick={() => void handleRemove(admin)}
+                        onClick={() => setRemoveTarget(admin)}
                       >
                         <Trash2 aria-hidden="true" />
                         取消管理员
@@ -294,109 +306,20 @@ export function AdminAccountsManager({
           </div>
         </div>
 
-        <Card className="h-fit">
-          <CardContent className="space-y-4">
-            <div>
-              <h2 className="font-semibold">新增管理员</h2>
-              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                输入 SteamID64 后选择玩家，再添加为管理员。对方不需要立即在线。
-              </p>
-            </div>
-            <form onSubmit={handleAdd} className="space-y-4">
-              <div className="relative space-y-1.5">
-                <Label htmlFor="admin-steam-id">SteamID64</Label>
-                <Input
-                  id="admin-steam-id"
-                  autoComplete="off"
-                  inputMode="numeric"
-                  maxLength={17}
-                  placeholder="76561198000000000"
-                  value={steamId64}
-                  onChange={(event) => {
-                    const value = event.target.value.replace(/\D/g, "").slice(0, 17);
-                    setSteamId64(value);
-                    setSelected(null);
-                    setLookup(null);
-                    setLookupState(value.length === 17 ? "loading" : "idle");
-                  }}
-                />
-                {steamId64.length === 17 ? (
-                  <div className="absolute z-20 mt-2 w-full rounded-xl border bg-background p-2 shadow-lg">
-                    {lookupState === "loading" ? (
-                      <p className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
-                        <LoaderCircle className="size-4 animate-spin" />
-                        正在查询玩家…
-                      </p>
-                    ) : lookupState === "found" && lookup ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelected(lookup);
-                          setLookup(null);
-                        }}
-                        className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-accent"
-                      >
-                        <UserAvatar name={lookup.name} avatarUrl={lookup.avatarUrl} size="sm" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium">{lookup.name}</span>
-                          <span className="block font-mono text-[11px] text-muted-foreground">
-                            {lookup.steamId64}
-                          </span>
-                        </span>
-                        <span className="shrink-0">
-                          {lookup.role === "admin" ? (
-                            <Badge variant="success">已是管理员</Badge>
-                          ) : lookup.isDisabled ? (
-                            <Badge variant="destructive">已禁用</Badge>
-                          ) : (
-                            <Badge variant="muted">成员</Badge>
-                          )}
-                        </span>
-                      </button>
-                    ) : lookupState === "missing" ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelected({
-                            steamId64,
-                            name: `Steam 用户 ${steamId64.slice(-6)}`,
-                            avatarUrl: null,
-                            role: "member",
-                            isDisabled: false,
-                            isSystem: false,
-                            placeholder: true,
-                          });
-                          setLookupState("idle");
-                        }}
-                        className="w-full rounded-lg px-2 py-3 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                      >
-                        未找到已登录玩家。选择该 SteamID 后仍可创建占位管理员。
-                      </button>
-                    ) : lookupState === "error" ? (
-                      <p className="px-2 py-3 text-sm text-muted-foreground">
-                        查询失败，请稍后重试。
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-
-              {selected ? (
-                <div className="flex items-center gap-3 rounded-lg border bg-muted/20 p-3">
-                  <UserAvatar name={selected.name} avatarUrl={selected.avatarUrl} size="sm" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium break-words">{selected.name}</p>
-                    <p className="font-mono text-[11px] text-muted-foreground">
-                      {selected.steamId64}
-                    </p>
-                  </div>
-                  <Check className="size-4 shrink-0 text-success" aria-hidden="true" />
-                </div>
-              ) : null}
-
+        <Modal
+          open={showAdd}
+          onOpenChange={setShowAdd}
+          title="新增管理员"
+          description="输入 SteamID64 后选择玩家，再添加为管理员。对方不需要立即在线。"
+          size="md"
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setShowAdd(false)}>
+                取消
+              </Button>
               <Button
                 type="submit"
-                className="w-full"
+                form="admin-add-form"
                 disabled={
                   busySteamId === "add" ||
                   !selected ||
@@ -410,12 +333,123 @@ export function AdminAccountsManager({
                 )}
                 添加管理员
               </Button>
-            </form>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              生产环境建议至少保留两位正常管理员，避免单人账号丢失后无法管理。
-            </p>
-          </CardContent>
-        </Card>
+            </div>
+          }
+        >
+          <form id="admin-add-form" onSubmit={handleAdd} className="space-y-5">
+            <div className="relative space-y-1.5">
+              <Label htmlFor="admin-steam-id">SteamID64</Label>
+              <Input
+                id="admin-steam-id"
+                autoComplete="off"
+                inputMode="numeric"
+                maxLength={17}
+                placeholder="76561198000000000"
+                value={steamId64}
+                onChange={(event) => {
+                  const value = event.target.value.replace(/\D/g, "").slice(0, 17);
+                  setSteamId64(value);
+                  setSelected(null);
+                  setLookup(null);
+                  setLookupState(value.length === 17 ? "loading" : "idle");
+                }}
+              />
+              {steamId64.length === 17 ? (
+                <div className="absolute z-20 mt-2 w-full rounded-xl border bg-background p-2 shadow-lg">
+                  {lookupState === "loading" ? (
+                    <p className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
+                      <LoaderCircle className="size-4 animate-spin" />
+                      正在查询玩家…
+                    </p>
+                  ) : lookupState === "found" && lookup ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelected(lookup);
+                        setLookup(null);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-accent"
+                    >
+                      <UserAvatar name={lookup.name} avatarUrl={lookup.avatarUrl} size="sm" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium break-words">{lookup.name}</span>
+                        <span className="block font-mono text-[11px] text-muted-foreground">
+                          {lookup.steamId64}
+                        </span>
+                      </span>
+                      <span className="shrink-0">
+                        {lookup.role === "admin" ? (
+                          <Badge variant="success">已是管理员</Badge>
+                        ) : lookup.isDisabled ? (
+                          <Badge variant="destructive">已禁用</Badge>
+                        ) : (
+                          <Badge variant="muted">成员</Badge>
+                        )}
+                      </span>
+                    </button>
+                  ) : lookupState === "missing" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelected({
+                          steamId64,
+                          name: `Steam 用户 ${steamId64.slice(-6)}`,
+                          avatarUrl: null,
+                          role: "member",
+                          isDisabled: false,
+                          isSystem: false,
+                          placeholder: true,
+                        });
+                        setLookupState("idle");
+                      }}
+                      className="w-full rounded-lg px-2 py-3 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    >
+                      未找到已登录玩家。选择该 SteamID 后仍可创建占位管理员。
+                    </button>
+                  ) : lookupState === "error" ? (
+                    <p className="px-2 py-3 text-sm text-muted-foreground">
+                      查询失败，请稍后重试。
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            {selected ? (
+              <div className="flex items-center gap-3 rounded-lg border bg-muted/20 p-3">
+                <UserAvatar name={selected.name} avatarUrl={selected.avatarUrl} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium break-words">{selected.name}</p>
+                  <p className="font-mono text-[11px] text-muted-foreground">
+                    {selected.steamId64}
+                  </p>
+                </div>
+                <Check className="size-4 shrink-0 text-success" aria-hidden="true" />
+              </div>
+            ) : null}
+
+            <Alert variant="info">
+              <AlertDescription>
+                生产环境建议至少保留两位正常管理员，避免单人账号丢失后无法管理。
+              </AlertDescription>
+            </Alert>
+          </form>
+        </Modal>
+
+        <ConfirmDialog
+          open={removeTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setRemoveTarget(null);
+            }
+          }}
+          title={removeTarget ? `取消 ${removeTarget.name} 的管理员权限` : "取消管理员权限"}
+          description="该账号会降级为成员，现有会话会被撤销。此操作不会删除用户数据。"
+          confirmLabel="取消管理员"
+          destructive
+          pending={removeTarget !== null && busySteamId === removeTarget.steamId64}
+          onConfirm={() => removeTarget && void handleRemove(removeTarget)}
+        />
       </div>
     </div>
   );

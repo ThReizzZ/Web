@@ -24,7 +24,13 @@
 - 新增管理员角色：`ADMIN_STEAM_IDS` 配置；`/admin` 与 `/api/v1/admin/overview` 双重校验。
 - 新增管理员管理：按 SteamID64 添加管理员、取消管理员、禁用/启用账号，并保护最后一位可用管理员。
 - 新增管理员输入查询：输入 17 位 SteamID64 后显示玩家头像、昵称和 ID 下拉框，选择后再添加。
+- 新增论坛管理：主题/回复编辑、软删除、恢复、置顶/热门/分类/标签设置，论坛用户禁言与封禁。
+- 新增服务器管理：添加/删除、启用停用、在线玩家查看、踢出指令、服务器封禁与解封。
 - 管理员、封禁、白名单授权和最近注册恢复为单列列表；玩家名称完整换行显示，状态、SteamID64、时间和操作分区展示，不需要横向滚动。
+- 新增管理员、新增封禁、手动添加白名单、添加服务器改为 Modal 弹窗，不再在当前页面展开表单。
+- 新增通用 Modal、确认弹窗、Toast、Tooltip、Alert 组合；管理操作反馈使用 Toast，危险操作使用确认弹窗。
+- 管理面板导航新增论坛管理和服务器管理。
+- 管理面板表单改为弹窗后，页面默认只展示列表；弹窗支持遮罩、Esc/关闭按钮和移动端滚动。
 - 新增封禁管理：临时/永久封禁、封禁记录、解封；封禁立即撤销网站会话并阻止登录。
 - 新增白名单审核：服务器白名单开关、玩家申请、通过/拒绝、手动授权、移除授权；用户中心提供白名单申请表单。
 - 服务器 API 与卡片新增 `requiresWhitelist` 标记。
@@ -72,6 +78,9 @@
 - 修复教程正文单换行被折叠成一段的问题，保留步骤换行。
 - 移除运营概览中的“真实数据 / 页面数据来自 PostgreSQL”提示卡片。
 - 修复管理面板宽表格在 1440 和移动端被截断/页面横向溢出的问题，表单在窄屏改为紧凑网格布局。
+- 修复管理面板客户端组件使用相对时间导致 React hydration text mismatch 的问题，客户端时间改为稳定绝对时间。
+- 移除关闭按钮的自定义 Tooltip，改用原生 title，修复悬停时元素被弹窗边缘裁切的问题。
+- 修复新增封禁弹窗中存在正文和底部两个提交按钮的问题。
 - 管理员/封禁/白名单列表在 390px 宽度下改为单列换行，不再出现页面级横向滚动或名称截断。
 
 ### Security
@@ -85,8 +94,8 @@
 
 ### Compatibility / Upgrade Notes
 
-- 新增迁移 `20261023230000_real_content_and_steam_auth.sql`、`20261023233000_seed_new_player_guide.sql` 与 `20261023235000_admin_moderation_whitelist.sql`，部署时必须先运行 `migrate`。
-- 新迁移新增 `users.is_system`、`users.is_disabled`、`servers.requires_whitelist`、`bans`、`whitelist_applications`、`server_whitelist`；不会创建模拟服务器或模拟玩家。
+- 新增迁移 `20261023230000_real_content_and_steam_auth.sql`、`20261023233000_seed_new_player_guide.sql`、`20261023235000_admin_moderation_whitelist.sql` 与 `20261024010000_forum_server_moderation.sql`，部署时必须先运行 `migrate`。
+- 新迁移新增 `users.is_system`、`users.is_disabled`、`servers.requires_whitelist`、`bans`、`whitelist_applications`、`server_whitelist`、`forum_mutes`、`server_bans`、`server_actions`；不会创建模拟服务器或模拟玩家。
 - 数据库预置 5 个论坛分类、1 个系统账号和 1 篇官方新手指南；不会创建模拟服务器、模拟玩家或模拟讨论。
 - 需要在环境变量中设置 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM`；生产必须 HTTPS。
 - 首次登录后从用户中心获取 SteamID64，再加入 `ADMIN_STEAM_IDS` 并重新登录以获得管理员角色。

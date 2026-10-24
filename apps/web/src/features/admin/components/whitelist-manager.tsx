@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
@@ -17,15 +17,19 @@ import { UserAvatar } from "@/components/shared/user-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Label } from "@/components/ui/label";
+import { Modal } from "@/components/ui/modal";
 import type {
   ServerWhitelistSetting,
   WhitelistApplication,
   WhitelistEntry,
   WhitelistOverview,
 } from "@/features/admin/types";
-import { formatDate, formatRelativeTime } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { getBrowserApiClient } from "@/lib/api/browser";
+import { useToast } from "@/components/ui/toast";
 import {
   addWhitelistEntry,
   removeWhitelistEntry,
@@ -55,6 +59,13 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
   const [playerName, setPlayerName] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [showManual, setShowManual] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<WhitelistEntry | null>(null);
+  const [reviewTarget, setReviewTarget] = useState<{
+    application: WhitelistApplication;
+    decision: "approve" | "reject";
+  } | null>(null);
+  const [reviewNote, setReviewNote] = useState("");
   const [, startTransition] = useTransition();
 
   const pending = applications.filter((item) => item.status === "pending");
@@ -69,13 +80,19 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
     return error instanceof Error ? error.message : "操作失败，请稍后重试。";
   }
 
-  async function review(application: WhitelistApplication, decision: "approve" | "reject") {
-    const note = window.prompt(
-      `${decision === "approve" ? "通过" : "拒绝"} ${application.playerName} 的申请，审核备注（可选）`,
-    );
-    if (note === null) {
+  const { toast } = useToast();
+
+  function review(application: WhitelistApplication, decision: "approve" | "reject") {
+    setReviewNote("");
+    setReviewTarget({ application, decision });
+  }
+
+  async function submitReview() {
+    if (!reviewTarget) {
       return;
     }
+    const { application, decision } = reviewTarget;
+    const note = reviewNote.trim();
     setBusy(application.id);
     setFeedback(null);
     try {
@@ -106,6 +123,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
           ...current,
         ]);
       }
+      setReviewTarget(null);
       setFeedback(decision === "approve" ? "申请已通过并加入白名单。" : "申请已拒绝。");
       refresh();
     } catch (error) {
@@ -149,6 +167,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
       setSteamId64("");
       setPlayerName("");
       setFeedback("已加入白名单。");
+      setShowManual(false);
       refresh();
     } catch (error) {
       setFeedback(errorMessage(error));
@@ -158,9 +177,6 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
   }
 
   async function removeEntry(entry: WhitelistEntry) {
-    if (!window.confirm(`从 ${entry.serverName} 的白名单移除 ${entry.playerName}？`)) {
-      return;
-    }
     setBusy(`${entry.serverId}:${entry.steamId64}`);
     setFeedback(null);
     try {
@@ -202,6 +218,13 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
     }
   }
 
+  useEffect(() => {
+    if (feedback) {
+      const tone = /失败|错误|不能|请先|无效|不符合/.test(feedback) ? "error" : "success";
+      toast(feedback, tone);
+    }
+  }, [feedback, toast]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -212,15 +235,14 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
             管理需要白名单的服务器、审核玩家申请并维护已授权名单。实际服务器拦截由游戏服务器插件读取白名单数据。
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant="warning">{pending.length} 条待审核</Badge>
           <Badge variant="secondary">{entries.length} 条授权</Badge>
+          <Button type="button" size="sm" onClick={() => setShowManual((value) => !value)}>
+            <Plus /> {showManual ? "收起表单" : "手动添加"}
+          </Button>
         </div>
       </div>
-
-      {feedback ? (
-        <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">{feedback}</div>
-      ) : null}
 
       <section className="rounded-xl border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
@@ -260,7 +282,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                         {application.message}
                       </p>
                       <p className="mt-2 text-[11px] text-muted-foreground">
-                        提交于 {formatRelativeTime(application.createdAt)}
+                        提交于 {formatDate(application.createdAt)}
                       </p>
                     </div>
                   </div>
@@ -327,7 +349,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                   ) : null}
                 </div>
                 <span className="shrink-0 text-[11px] text-muted-foreground">
-                  {formatRelativeTime(application.reviewedAt ?? application.createdAt)}
+                  {formatDate(application.reviewedAt ?? application.createdAt)}
                   {application.reviewedBy ? ` · ${application.reviewedBy}` : ""}
                 </span>
               </div>
@@ -336,8 +358,8 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
         </section>
       ) : null}
 
-      <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="order-1 min-w-0 space-y-6 2xl:order-1">
+      <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <section className="rounded-xl border bg-card">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
               <div>
@@ -428,7 +450,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                       variant="ghost"
                       className="self-start md:self-auto"
                       disabled={busy === `${entry.serverId}:${entry.steamId64}`}
-                      onClick={() => void removeEntry(entry)}
+                      onClick={() => setRemoveTarget(entry)}
                     >
                       <Trash2 aria-hidden="true" />
                       移除
@@ -444,12 +466,34 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
           </section>
         </div>
 
-        <div className="order-2 h-fit rounded-xl border bg-card p-5 shadow-sm 2xl:order-2">
-          <h2 className="font-semibold">手动添加白名单</h2>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            适用于已在其他渠道核实过的玩家，或申请人无法使用论坛时。
-          </p>
-          <form onSubmit={addEntry} className="mt-4 grid gap-4 md:grid-cols-2 2xl:grid-cols-1">
+        <Modal
+          open={showManual}
+          onOpenChange={setShowManual}
+          title="手动添加白名单"
+          description="适用于已在其他渠道核实过的玩家。"
+          size="md"
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setShowManual(false)}>
+                取消
+              </Button>
+              <Button
+                type="submit"
+                form="whitelist-add-form"
+                disabled={busy === "add" || servers.length === 0}
+              >
+                {busy === "add" ? <LoaderCircle className="animate-spin" /> : <Plus />}
+                加入白名单
+              </Button>
+            </div>
+          }
+        >
+          <form id="whitelist-add-form" onSubmit={addEntry} className="grid gap-4 md:grid-cols-2">
+            <Alert variant="info" className="md:col-span-2">
+              <AlertDescription>
+                白名单写入后，需由游戏服务器插件在连接前读取并执行拦截。
+              </AlertDescription>
+            </Alert>
             <div className="space-y-1.5">
               <Label htmlFor="whitelist-server">服务器</Label>
               <select
@@ -479,7 +523,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                 onChange={(event) => setSteamId64(event.target.value.replace(/\D/g, ""))}
               />
             </div>
-            <div className="space-y-1.5 md:col-span-2 2xl:col-span-1">
+            <div className="space-y-1.5 md:col-span-2">
               <Label htmlFor="whitelist-player-name">玩家昵称（可选）</Label>
               <Input
                 id="whitelist-player-name"
@@ -488,19 +532,63 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                 onChange={(event) => setPlayerName(event.target.value)}
               />
             </div>
-            <Button
-              type="submit"
-              className="w-full md:col-span-2 2xl:col-span-1"
-              disabled={busy === "add" || servers.length === 0}
-            >
-              {busy === "add" ? <LoaderCircle className="animate-spin" /> : <Plus />}
-              加入白名单
-            </Button>
           </form>
           <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
             已授权：{whitelisted.size} 条。服务器插件接入后，连接时按 SteamID64 校验这里的记录。
           </p>
-        </div>
+        </Modal>
+
+        <ConfirmDialog
+          open={reviewTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setReviewTarget(null);
+            }
+          }}
+          title={
+            reviewTarget
+              ? `${reviewTarget.decision === "approve" ? "通过" : "拒绝"} ${reviewTarget.application.playerName} 的申请`
+              : "审核白名单申请"
+          }
+          description={
+            reviewTarget?.decision === "approve"
+              ? "通过后会立即写入对应服务器的白名单。"
+              : "拒绝后会在申请记录中保留审核备注。"
+          }
+          confirmLabel={reviewTarget?.decision === "approve" ? "通过申请" : "拒绝申请"}
+          destructive={reviewTarget?.decision === "reject"}
+          pending={reviewTarget !== null && busy === reviewTarget.application.id}
+          onConfirm={() => void submitReview()}
+        >
+          <div className="space-y-2">
+            <Label htmlFor="whitelist-review-note">审核备注（可选）</Label>
+            <textarea
+              id="whitelist-review-note"
+              rows={3}
+              maxLength={500}
+              value={reviewNote}
+              onChange={(event) => setReviewNote(event.target.value)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </div>
+        </ConfirmDialog>
+
+        <ConfirmDialog
+          open={removeTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setRemoveTarget(null);
+            }
+          }}
+          title={removeTarget ? `移除 ${removeTarget.playerName} 的白名单` : "移除白名单"}
+          description="移除后该玩家需要重新申请或由管理员重新授权。"
+          confirmLabel="移除白名单"
+          destructive
+          pending={
+            removeTarget !== null && busy === `${removeTarget.serverId}:${removeTarget.steamId64}`
+          }
+          onConfirm={() => removeTarget && void removeEntry(removeTarget)}
+        />
       </div>
     </div>
   );
