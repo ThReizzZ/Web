@@ -2,13 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Ban, ClipboardCheck, LayoutDashboard, UserCog } from "lucide-react";
+import {
+  Ban,
+  ClipboardCheck,
+  LayoutDashboard,
+  MessageSquareText,
+  Server,
+  UserCog,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 const adminNav = [
   { label: "概览", href: "/admin", icon: LayoutDashboard },
   { label: "管理员", href: "/admin/admins", icon: UserCog },
+  { label: "论坛管理", href: "/admin/forum", icon: MessageSquareText },
+  { label: "服务器管理", href: "/admin/servers", icon: Server },
   { label: "封禁管理", href: "/admin/bans", icon: Ban },
   { label: "白名单审核", href: "/admin/whitelist", icon: ClipboardCheck },
 ] as const;

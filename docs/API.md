@@ -256,6 +256,26 @@ Query：
 - `POST /whitelist/applications` body `{ "serverId": "...", "message": "..." }` 当前登录玩家提交申请；同一服务器已有待审申请或已在白名单时返回 409。
 - 当前没有游戏服务器插件自动读取白名单；实际进服拦截需要插件从 `server_whitelist` / `bans` 表同步或在连接前查询。
 
+### 6.7 论坛管理
+
+- `GET /admin/forum/topics`：返回所有主题（含已软删除），含正文、分类、作者、回复数和管理状态。
+- `PATCH /admin/forum/topics/{slug}` body：`title`、`excerpt`、`content`、`categorySlug`、`tags`、`pinned`、`hot`。
+- `DELETE /admin/forum/topics/{slug}` 软删除；`POST .../restore` 恢复。
+- `GET /admin/forum/replies`、`PATCH/DELETE /admin/forum/replies/{id}`、`POST .../restore` 管理回复。
+- `GET /admin/forum/users`：用户、角色、禁言、封禁、禁用状态。
+- `POST /admin/forum/users/{steam_id64}/mute` body `{ "reason": "...", "expiresInHours": 168 }`；`DELETE` 解除禁言。
+- 禁言只限制论坛发言，不阻止网站登录；封禁继续使用 `/admin/bans`，会撤销登录会话。
+
+### 6.8 服务器管理
+
+- `GET /admin/servers`：服务器、在线玩家、服务器封禁记录。
+- `POST /admin/servers`：添加服务器；字段包括 `id`、`name`、`map`、`host`、`port`、`region`、`tickrate`、`maxPlayers`、`tags`、`mapImage`、`status`、`featured`、`requiresWhitelist`。
+- `PATCH /admin/servers/{id}` body `{ "isActive": false }` 启用/停用；`DELETE` 删除服务器。
+- `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions` 并移除当前在线记录。
+- `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "..." }`：写入 `server_bans` 与 `server_actions`。
+- `POST /admin/server-bans/{id}/lift` 解除服务器封禁。
+- 游戏内执行踢出/封禁需要服务器插件消费 `server_actions` 和读取 `server_bans`；Web API 只负责管理数据和写入待处理指令。
+
 ## 7. 错误结构
 
 业务 API 的错误使用统一结构（健康检查 503 返回专用就绪状态）：

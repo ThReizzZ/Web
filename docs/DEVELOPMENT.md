@@ -17,6 +17,316 @@
 
 ---
 
+## 2026年10月24日 22时42分06秒 弹窗内容重排与关闭按钮遮挡修复
+
+### 背景
+
+用户反馈 Modal 内部比例、布局和样式不好看；鼠标悬停右上角关闭按钮时会有一个元素显示不全、被遮挡。
+
+### 变更内容
+
+#### 1. Modal 结构重做
+
+- Modal 改为固定头部 + 可滚动内容区 + 固定底部操作栏：
+  - 头部显示标题、描述和关闭按钮；
+  - 内容区单独滚动，长表单不会把弹窗撑出视口；
+  - 底部操作栏固定，提交/取消按钮始终可见。
+- 调整尺寸档位：`sm` 26rem、`md` 36rem、`lg` 48rem、`xl` 64rem；不再使用过宽或过窄的临时宽度。
+- 关闭按钮改为原生 `title` 提示，移除自定义 Tooltip，避免弹窗打开时自动聚焦触发悬浮元素或在弹窗边缘被裁切。
+
+#### 2. 表单内容重新布局
+
+- 新增管理员：
+  - SteamID64 查询保留；
+  - 生产管理员数量提醒改为 Alert；
+  - 提交按钮移到 Modal 底部栏。
+- 新增封禁：
+  - 警告、玩家信息、时长、原因分区；
+  - 移除正文中重复的提交按钮，只保留底部栏的“创建封禁”。
+- 手动添加白名单：
+  - 服务器、SteamID64、昵称分区；
+  - 底部栏提交。
+- 添加服务器：
+  - 内容拆为“基本信息 / 网络与运行状态 / 展示与访问”三组；
+  - 描述、网络字段、推荐/白名单选项分组展示；
+  - 底部栏提交。
+- ConfirmDialog/ReasonDialog 使用同一 Modal 头部、内容、底部结构。
+
+#### 3. 其他弹窗交互
+
+- ConfirmDialog 继续用于删除服务器、移除白名单、解封、删除管理员、论坛删除等操作。
+- Toast 继续用于操作结果提示。
+- 白名单“需要白名单”徽章保留 Tooltip 说明；关闭按钮不再使用自定义 Tooltip。
+
+### 涉及文件
+
+- `apps/web/src/components/ui/modal.tsx`
+- `apps/web/src/components/ui/confirm-dialog.tsx`
+- `apps/web/src/components/ui/reason-dialog.tsx`
+- `apps/web/src/components/ui/tooltip.tsx`
+- `apps/web/src/features/admin/components/admin-accounts-manager.tsx`
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `apps/web/src/features/admin/components/whitelist-manager.tsx`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `docs/DEVELOPMENT.md`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 无数据库迁移。
+- 无 API 契约变化。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过；Rust 25 项测试、TypeScript、ESLint、Prettier。
+- `npm run build`：通过。
+- Playwright 1440/390：
+  - 四个表单 Modal 均只有一个提交按钮；
+  - 弹窗内页无横向溢出；
+  - 关闭按钮悬停不再出现被遮挡的 Tooltip；
+  - 添加服务器 Modal 分组布局正常；
+  - 管理页面无 console/pageerror。
+
+### 待办与风险
+
+- 部分原因输入仍使用浏览器 prompt，后续可迁移到 ReasonDialog。
+- 游戏服务器实际踢出/封禁仍需插件消费 `server_actions`。
+
+
+---
+
+## 2026年10月24日 22时33分39秒 管理表单改为 Modal 并补齐 Toast/确认/Tooltip
+
+### 背景
+
+用户认为新增管理员、添加服务器、新增封禁、手动添加白名单在页面内展开表单不优雅，要求改为 Modal 模拟弹窗，并在网站其他合适位置使用 Tooltip、Toast、Alert、Popconfirm、Modal 等交互。
+
+### 变更内容
+
+#### 1. 通用弹窗与反馈组件
+
+新增：
+
+- `components/ui/modal.tsx`：原生 `<dialog>` Modal，支持遮罩、Esc、关闭按钮、标题/描述、滚动内容区和尺寸档位。
+- `components/ui/confirm-dialog.tsx`：基于 Modal 的危险操作确认弹窗，内置 Alert 提示。
+- `components/ui/toast.tsx`：管理面板 ToastProvider 和 `useToast`，固定右上角、自动消失、最多保留 4 条。
+- `components/ui/tooltip.tsx`：轻量悬停 Tooltip，用于 Modal 关闭按钮等场景。
+
+`(admin)/layout.tsx` 增加 `ToastProvider`，所有管理页面共享 Toast。
+
+#### 2. 四个表单改为 Modal
+
+- 新增管理员：
+  - 保留 SteamID64 查询下拉框；
+  - 选择玩家后点击添加；
+  - 表单移入 Modal。
+- 新增封禁：
+  - 表单移入 Modal；
+  - 显示管理员账号不可直接封禁的 Alert。
+- 手动添加白名单：
+  - 表单移入 Modal；
+  - 显示游戏服务器插件执行拦截的 Alert。
+- 添加服务器：
+  - 大尺寸 Modal，字段网格布局；
+  - 移动端弹窗内部滚动，不撑破页面。
+
+点击页面右上角按钮打开弹窗；提交成功后关闭并 Toast 提示。
+
+#### 3. 其他交互动效
+
+- 管理操作原有内联反馈改为 Toast，不再在页面顶部追加反馈条。
+- 删除管理员、移除白名单、解除封禁、删除服务器、删除论坛主题/回复改为 ConfirmDialog。
+- 白名单通过/拒绝改为带审核备注的 Modal，不再使用浏览器 `prompt`。
+- Modal 关闭按钮增加 Tooltip。
+- ConfirmDialog 和部分表单增加 Alert 说明。
+- 修复 Modal 打开时关闭按钮自动聚焦导致 Tooltip 立即显示的问题。
+
+### 涉及文件
+
+- `apps/web/src/components/ui/modal.tsx`（新增）
+- `apps/web/src/components/ui/confirm-dialog.tsx`（新增）
+- `apps/web/src/components/ui/toast.tsx`（新增）
+- `apps/web/src/components/ui/tooltip.tsx`（新增）
+- `apps/web/src/app/(admin)/layout.tsx`
+- `apps/web/src/features/admin/components/admin-accounts-manager.tsx`
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `apps/web/src/features/admin/components/whitelist-manager.tsx`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `apps/web/src/features/admin/components/forum-moderation-manager.tsx`
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `docs/DEVELOPMENT.md`
+
+### 数据库与 API 变化
+
+- 无数据库迁移。
+- 无 API 契约变化。
+- 仅调整管理面板前端交互。
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 11 项、HTTP 合约测试 14 项，共 25 项通过；
+  - TypeScript、ESLint、Prettier、Clippy、rustfmt 通过。
+- `npm run build`：通过。
+- Playwright 实测：
+  - 四个新增表单均以 `dialog[open]` 打开，页面不再出现内联表单；
+  - 1440 和 390 宽度下弹窗打开无页面横向溢出；
+  - 添加服务器成功后弹窗关闭并出现 Toast；
+  - 删除服务器弹出 ConfirmDialog，确认后删除成功；
+  - 管理页面无 console/pageerror，无 hydration mismatch；
+  - Modal 关闭按钮 Tooltip 仅在悬停时显示。
+- 临时管理员会话和测试服务器已清理。当前数据库：1 位真实管理员、1 篇官方指南、0 个服务器。
+
+### 待办与风险
+
+- 部分原因输入（如踢出原因、服务器封禁原因、禁言原因）仍使用浏览器 prompt；后续可继续迁移为统一 ReasonDialog。
+- 游戏服务器实际踢出/封禁仍需插件消费 `server_actions`。
+- 本轮只调整前端交互，未新增业务权限；管理 API 继续执行管理员校验。
+
+
+---
+
+## 2026年10月24日 20时48分45秒 管理表单重设计、论坛管理与服务器管理
+
+### 背景
+
+用户要求：
+
+1. 重新设计新增管理员、新增封禁、手动添加白名单三个表单，保留管理员 SteamID64 查询下拉框；
+2. 管理面板增加论坛管理：主题/回复编辑、删除、禁言、论坛用户封禁等；
+3. 管理面板增加服务器管理：服务器添加/删除、在线玩家踢出/封禁等；
+4. 改善整体排版，避免表格和表单拥挤。
+
+### 变更内容
+
+#### 1. 表单重设计
+
+- 新增管理员、新增封禁、手动添加白名单改为**可折叠表单**：
+  - 默认突出列表；
+  - 点击页面右上角按钮展开；
+  - 表单采用居中卡片、分区字段和统一的主按钮。
+- 管理员表单保留 SteamID64 查询下拉框，选择玩家后再添加。
+- 封禁表单使用 SteamID64/昵称、时长、原因分区。
+- 手动白名单表单使用服务器、SteamID64、昵称分区。
+- 提交成功后自动收起表单并刷新列表。
+
+#### 2. 论坛管理
+
+新增 `/admin/forum` 与 `forum_admin` API：
+
+- 主题：
+  - 编辑标题、摘要、正文、分类、标签、置顶、热门；
+  - 软删除与恢复。
+- 回复：
+  - 编辑正文；
+  - 软删除与恢复。
+- 用户：
+  - 查看角色、登录/禁言/封禁状态；
+  - 禁言与解除禁言（可设置时长与原因）；
+  - 永久封禁（复用网站封禁，撤销会话并阻止登录）；
+  - 管理员账号不提供禁言/封禁操作。
+- 页面使用“主题 / 回复 / 用户”标签页，保持单列列表布局。
+
+#### 3. 服务器管理
+
+新增 `/admin/servers` 与 `server_admin` API：
+
+- 添加服务器（ID、名称、地图、Host/IP、端口、地区、Tickrate、最大人数、状态、标签、图片、推荐、白名单）；
+- 删除服务器（级联其在线玩家、白名单、服务器封禁和指令）；
+- 启用/停用服务器；
+- 查看在线玩家；
+- 对在线玩家提交踢出指令；
+- 对在线玩家执行服务器封禁；
+- 查看服务器封禁并解封。
+- 新增 `server_actions` 队列，供游戏服务器插件消费踢出/封禁指令。
+- 当前数据库没有服务器和玩家，页面显示空状态；实际游戏内执行仍依赖插件。
+
+#### 4. 布局与稳定性
+
+- 管理导航新增“论坛管理”“服务器管理”。
+- 运营概览新增论坛管理和服务器管理快捷入口。
+- 客户端管理列表时间改为稳定绝对时间，修复 React hydration text mismatch。
+- 管理员、封禁、白名单、论坛、服务器页面在 1440 和 390 宽度下无页面横向溢出。
+
+### 涉及文件
+
+- `services/api/migrations/20261024010000_forum_server_moderation.sql`（新增）
+- `services/api/src/modules/forum_admin.rs`（新增）
+- `services/api/src/modules/server_admin.rs`（新增）
+- `services/api/src/modules/mod.rs`
+- `services/api/src/routes/mod.rs`
+- `services/api/tests/http_contract.rs`
+- `apps/web/src/features/admin/components/forum-moderation-manager.tsx`（新增）
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`（新增）
+- `apps/web/src/features/admin/components/admin-accounts-manager.tsx`
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `apps/web/src/features/admin/components/whitelist-manager.tsx`
+- `apps/web/src/features/admin/components/admin-nav.tsx`
+- `apps/web/src/app/(admin)/admin/forum/page.tsx`（新增）
+- `apps/web/src/app/(admin)/admin/servers/page.tsx`（新增）
+- `apps/web/src/app/(admin)/admin/page.tsx`
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/services/content.ts`
+- `README.md`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+新增迁移 `20261024010000_forum_server_moderation.sql`：
+
+- `forum_mutes`：论坛禁言记录；
+- `server_bans`：服务器级封禁；
+- `server_actions`：供游戏服务器插件消费的踢出/封禁待处理指令。
+
+新增 API：
+
+- `GET /admin/forum/topics`、`PATCH/DELETE /admin/forum/topics/{slug}`、`POST .../restore`
+- `GET /admin/forum/replies`、`PATCH/DELETE /admin/forum/replies/{id}`、`POST .../restore`
+- `GET /admin/forum/users`、`POST/DELETE /admin/forum/users/{steam_id64}/mute`
+- `GET/POST /admin/servers`
+- `PATCH/DELETE /admin/servers/{id}`
+- `POST /admin/servers/{id}/players/{steam_id64}/kick`
+- `POST /admin/servers/{id}/players/{steam_id64}/ban`
+- `POST /admin/server-bans/{id}/lift`
+
+### 测试与结果
+
+- `./scripts/check.sh`：通过。
+  - Rust 单元测试 11 项、HTTP 合约测试 14 项，共 25 项通过；
+  - TypeScript、ESLint、Prettier、Clippy、rustfmt 通过。
+- `npm run build`：通过，新增 `/admin/forum`、`/admin/servers` 路由。
+- API 实测：
+  - 论坛主题编辑、删除/恢复 204；
+  - 回复编辑、删除/恢复 204；
+  - 禁言/解除禁言成功；
+  - 服务器添加/删除 204；
+  - 在线玩家踢出 204，玩家从在线列表移除；
+  - 服务器封禁 204，封禁记录生效，解封 204；
+  - 服务器启停 204；
+  - 匿名访问新增管理接口返回 401。
+- Playwright 实测：
+  - 新增管理员/新增封禁/手动白名单/添加服务器表单可展开，1440 无溢出；
+  - 论坛主题通过 UI 编辑成功，论坛用户可通过 UI 禁言；
+  - 服务器通过 UI 添加成功；
+  - 管理页面 1440/390 全量加载无 console/pageerror，无横向滚动；
+  - 修复了此前管理页面 React hydration text mismatch。
+- 临时测试用户、主题、回复、服务器、玩家、禁言、封禁、白名单和会话均已清理。
+- 当前数据库：1 位真实管理员、1 篇官方指南、0 个服务器、0 条论坛测试内容、0 条封禁/禁言。
+
+### 待办与风险
+
+- 游戏内踢出/封禁需要服务器插件消费 `server_actions` 并读取 `server_bans`；Web 端只写指令和记录。
+- 公开论坛发帖/回复写接口仍未开放；当前论坛管理针对已有内容。
+- 禁言目前记录在 `forum_mutes`，待发帖接口接入后必须在发帖服务中强制校验。
+- 服务器管理当前支持添加、删除、启停和在线玩家操作；完整字段编辑、分类管理和论坛审核工作流仍需后续扩展。
+
+
+---
+
 ## 2026年10月24日 00时43分30秒 管理列表恢复列表式并修复玩家名称截断
 
 ### 背景

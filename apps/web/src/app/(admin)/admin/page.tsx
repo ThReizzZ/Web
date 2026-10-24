@@ -102,13 +102,27 @@ export default async function AdminOverviewPage() {
         })}
       </section>
 
-      <section className="grid gap-4 md:grid-cols-3">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <QuickAction
           href="/admin/admins"
           icon={UserCog}
           title="管理员管理"
           description="新增管理员、取消权限或禁用账号。"
           meta={`${overview.roles.find((role) => role.role === "admin")?.count ?? 0} 位管理员`}
+        />
+        <QuickAction
+          href="/admin/forum"
+          icon={MessageSquareText}
+          title="论坛管理"
+          description="编辑、删除主题与回复，禁言或封禁论坛用户。"
+          meta={`${overview.stats.topics} 个主题`}
+        />
+        <QuickAction
+          href="/admin/servers"
+          icon={Server}
+          title="服务器管理"
+          description="添加服务器、维护状态与在线玩家、踢出或封禁玩家。"
+          meta={`${overview.stats.servers} 个服务器`}
         />
         <QuickAction
           href="/admin/bans"

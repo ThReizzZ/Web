@@ -108,6 +108,7 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 - `ServerDirectory`：3 列卡片墙/列表显示模式切换、`localStorage` 偏好与 1/2/3 列响应式分配；
 - `CopyAddressButton` / `JoinServerButton`：剪贴板、原生 `<dialog>` 加入说明与交互状态；
 - `LogoutButton`：调用登出 API 并刷新导航；
+- `Modal` / `ConfirmDialog` / `ToastProvider` / `Tooltip`：管理面板弹窗、危险操作确认、操作反馈和悬浮提示；
 - `error.tsx` / `global-error.tsx`：错误边界需要交互；
 - Radix `Label` / `Separator` 包装组件（基础交互组件）。
 
@@ -138,7 +139,7 @@ Steam 是唯一登录方式：
 - 顶部导航在未登录时显示“使用Steam登录”，链接到 `/api/v1/auth/steam/login`。
 - “管理面板”入口只在当前用户角色为 `admin` 时加入顶部导航；匿名用户和普通成员不渲染该入口，页脚也不展示管理员入口。
 - `(admin)` layout 在服务端再次读取会话：匿名访问重定向到 `/account`，非管理员重定向到首页，只有管理员渲染管理面板。
-- 管理面板页面：`/admin` 运营概览、`/admin/admins` 管理员管理、`/admin/bans` 封禁管理、`/admin/whitelist` 白名单审核；共享服务端角色门禁与响应式侧边导航。服务状态入口已移除，其信息由运营概览覆盖。
+- 管理面板页面：`/admin` 运营概览、`/admin/admins` 管理员管理、`/admin/forum` 论坛管理、`/admin/servers` 服务器管理、`/admin/bans` 封禁管理、`/admin/whitelist` 白名单审核；共享服务端角色门禁与响应式侧边导航。服务状态入口已移除，其信息由运营概览覆盖。
 - API 跳转 Steam OpenID；Steam 回调到 `${WEB_URL}/api/v1/auth/steam/callback`。
 - API 向 Steam 校验断言，记录/更新 `users`，生成随机会话令牌；数据库只保存令牌的 SHA-256 哈希，浏览器收到 HttpOnly Cookie。
 - 服务端请求通过 `getServerApiClient()` 转发 Cookie；`/auth/me` 决定导航显示登录按钮还是用户头像。
@@ -179,7 +180,7 @@ src/modules/                auth / servers / forum / community / account / admin
 src/bin/migrate.rs          独立迁移二进制
 ```
 
-已实现模块：`auth`（Steam OpenID、会话、用户）、`servers`（目录、在线玩家与白名单标记）、`forum`（分类/主题/回复读取）、`community`（统计）、`account`（当前用户概览）、`admin`（运营统计）、`admin_users`（管理员增删/禁用）、`bans`（封禁/解封）、`whitelist`（申请审核与服务器白名单）。每个模块目前按职责分文件；后续写接口继续沿用以下结构：
+已实现模块：`auth`（Steam OpenID、会话、用户）、`servers`（目录、在线玩家与白名单标记）、`server_admin`（服务器增删与玩家操作）、`forum`（分类/主题/回复读取）、`forum_admin`（内容编辑/删除/恢复与用户禁言）、`community`（统计）、`account`（当前用户概览）、`admin`（运营统计）、`admin_users`（管理员增删/禁用）、`bans`（封禁/解封）、`whitelist`（申请审核与服务器白名单）。每个模块目前按职责分文件；后续写接口继续沿用以下结构：
 
 ```text
 modules/<name>/
@@ -301,6 +302,7 @@ modules/<name>/
 - `users.is_disabled` 禁用管理员账号；禁用会撤销会话并阻止登录。
 - `bans` 保存 SteamID64、原因、到期时间、操作者与解封记录；生效封禁阻止登录。
 - `server_whitelist`、`whitelist_applications` 管理服务器白名单与审核；`servers.requires_whitelist` 标记需要白名单的服务器。
+- `forum_mutes` 记录论坛禁言；`server_bans` 记录服务器级封禁；`server_actions` 保存待游戏服务器插件消费的踢出/封禁指令。
 - 迁移只新增，不修改已应用迁移。
 - 禁止应用启动时删除/重建数据库；禁止容器启动时无条件清空卷。
 - 备份/恢复流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。

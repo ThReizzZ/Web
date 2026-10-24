@@ -117,3 +117,101 @@ export interface AdminLookupUser {
 export interface AdminLookupResponse {
   user: AdminLookupUser | null;
 }
+
+export interface AdminForumTopic {
+  slug: string;
+  title: string;
+  excerpt: string;
+  content: string;
+  categorySlug: string;
+  categoryName: string;
+  authorName: string;
+  authorRole: string;
+  authorAvatarUrl: string | null;
+  tags: string[];
+  views: number;
+  pinned: boolean;
+  hot: boolean;
+  createdAt: string;
+  lastActivityAt: string;
+  replyCount: number;
+  deletedAt: string | null;
+  isDeleted: boolean;
+}
+
+export interface AdminForumReply {
+  id: string;
+  topicSlug: string;
+  topicTitle: string;
+  content: string;
+  authorName: string;
+  authorRole: string;
+  authorAvatarUrl: string | null;
+  likes: number;
+  createdAt: string;
+  deletedAt: string | null;
+  isDeleted: boolean;
+}
+
+export interface AdminForumUser {
+  steamId64: string;
+  name: string;
+  avatarUrl: string | null;
+  role: string;
+  isDisabled: boolean;
+  isBanned: boolean;
+  isMuted: boolean;
+  muteReason: string | null;
+  mutedUntil: string | null;
+  createdAt: string;
+  lastLoginAt: string;
+}
+
+export interface AdminServer {
+  id: string;
+  name: string;
+  map: string;
+  description: string;
+  status: string;
+  host: string;
+  port: number;
+  region: string;
+  tickrate: number;
+  maxPlayers: number;
+  latencyMs: number | null;
+  tags: string[];
+  mapImage: string;
+  featured: boolean;
+  isActive: boolean;
+  requiresWhitelist: boolean;
+  players: AdminServerPlayer[];
+}
+
+export interface AdminServerPlayer {
+  steamId64: string;
+  name: string;
+  avatarUrl: string | null;
+  connectedAt: string;
+  lastSeenAt: string;
+}
+
+export interface ServerBan {
+  id: string;
+  serverId: string;
+  serverName: string;
+  steamId64: string;
+  playerName: string;
+  avatarUrl: string | null;
+  reason: string;
+  expiresAt: string | null;
+  createdAt: string;
+  createdBy: string;
+  liftedAt: string | null;
+  liftedBy: string | null;
+  isActive: boolean;
+}
+
+export interface ServerAdminOverview {
+  servers: AdminServer[];
+  bans: ServerBan[];
+}

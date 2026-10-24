@@ -1,8 +1,12 @@
 import type { AccountOverview } from "@/features/account/types";
 import type {
   AdminAccount,
+  AdminForumReply,
+  AdminForumTopic,
+  AdminForumUser,
   AdminLookupResponse,
   Ban,
+  ServerAdminOverview,
   WhitelistOverview,
 } from "@/features/admin/types";
 import type { AdminOverview } from "@/features/admin/types";
@@ -213,5 +217,166 @@ export function fetchAdminUserLookup(
   return client.get<AdminLookupResponse>("/api/v1/admin/users/lookup", {
     ...noStore,
     query: { steamId64 },
+  });
+}
+
+export async function fetchAdminForumTopics(client: ApiClient): Promise<AdminForumTopic[]> {
+  return client.get<AdminForumTopic[]>("/api/v1/admin/forum/topics", noStore);
+}
+
+export async function fetchAdminForumReplies(client: ApiClient): Promise<AdminForumReply[]> {
+  return client.get<AdminForumReply[]>("/api/v1/admin/forum/replies", noStore);
+}
+
+export async function fetchAdminForumUsers(client: ApiClient): Promise<AdminForumUser[]> {
+  return client.get<AdminForumUser[]>("/api/v1/admin/forum/users", noStore);
+}
+
+export async function updateAdminTopic(
+  client: ApiClient,
+  slug: string,
+  input: {
+    title: string;
+    excerpt: string;
+    content: string;
+    categorySlug: string;
+    tags: string[];
+    pinned: boolean;
+    hot: boolean;
+  },
+): Promise<void> {
+  await client.request<void>(`/api/v1/admin/forum/topics/${encodeURIComponent(slug)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteAdminTopic(client: ApiClient, slug: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/forum/topics/${encodeURIComponent(slug)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function restoreAdminTopic(client: ApiClient, slug: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/forum/topics/${encodeURIComponent(slug)}/restore`, {
+    method: "POST",
+  });
+}
+
+export async function updateAdminReply(
+  client: ApiClient,
+  id: string,
+  content: string,
+): Promise<void> {
+  await client.request<void>(`/api/v1/admin/forum/replies/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export async function deleteAdminReply(client: ApiClient, id: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/forum/replies/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function restoreAdminReply(client: ApiClient, id: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/forum/replies/${encodeURIComponent(id)}/restore`, {
+    method: "POST",
+  });
+}
+
+export async function muteForumUser(
+  client: ApiClient,
+  steamId64: string,
+  reason: string,
+  expiresInHours?: number | null,
+): Promise<void> {
+  await client.request<void>(`/api/v1/admin/forum/users/${encodeURIComponent(steamId64)}/mute`, {
+    method: "POST",
+    body: JSON.stringify({ reason, expiresInHours }),
+  });
+}
+
+export async function unmuteForumUser(client: ApiClient, steamId64: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/forum/users/${encodeURIComponent(steamId64)}/mute`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchAdminServers(client: ApiClient): Promise<ServerAdminOverview> {
+  return client.get<ServerAdminOverview>("/api/v1/admin/servers", noStore);
+}
+
+export async function createAdminServer(
+  client: ApiClient,
+  input: {
+    id: string;
+    name: string;
+    map: string;
+    description: string;
+    status: string;
+    host: string;
+    port: number;
+    region: string;
+    tickrate: number;
+    maxPlayers: number;
+    latencyMs?: number | null;
+    tags: string[];
+    mapImage: string;
+    featured: boolean;
+    requiresWhitelist: boolean;
+  },
+): Promise<void> {
+  await client.request<void>("/api/v1/admin/servers", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setAdminServerActive(
+  client: ApiClient,
+  id: string,
+  isActive: boolean,
+): Promise<void> {
+  await client.request<void>(`/api/v1/admin/servers/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ isActive }),
+  });
+}
+
+export async function deleteAdminServer(client: ApiClient, id: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/servers/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function kickServerPlayer(
+  client: ApiClient,
+  serverId: string,
+  steamId64: string,
+  reason: string,
+): Promise<void> {
+  await client.request<void>(
+    `/api/v1/admin/servers/${encodeURIComponent(serverId)}/players/${encodeURIComponent(steamId64)}/kick`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+}
+
+export async function banServerPlayer(
+  client: ApiClient,
+  serverId: string,
+  steamId64: string,
+  input: { reason: string; playerName?: string; expiresInHours?: number | null },
+): Promise<void> {
+  await client.request<void>(
+    `/api/v1/admin/servers/${encodeURIComponent(serverId)}/players/${encodeURIComponent(steamId64)}/ban`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function liftServerBan(client: ApiClient, id: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/server-bans/${encodeURIComponent(id)}/lift`, {
+    method: "POST",
   });
 }
