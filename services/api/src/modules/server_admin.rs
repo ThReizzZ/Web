@@ -3,12 +3,13 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post, put},
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::{
     errors::AppError,
@@ -18,11 +19,14 @@ use crate::{
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)]
 pub struct AdminServer {
     pub id: String,
     pub name: String,
     pub map: String,
     pub description: String,
+    pub community_id: Option<String>,
+    pub community: String,
     pub status: String,
     pub host: String,
     pub port: i32,
@@ -38,6 +42,10 @@ pub struct AdminServer {
     pub player_count: Option<i32>,
     pub last_reported_at: Option<DateTime<Utc>>,
     pub plugin_state: String,
+    pub has_rcon_password: bool,
+    pub last_rcon_at: Option<DateTime<Utc>>,
+    pub rcon_failures: i32,
+    pub pending_actions: i64,
     pub players: Vec<AdminPlayer>,
 }
 
@@ -77,11 +85,14 @@ pub struct ServerAdminOverview {
 }
 
 #[derive(Debug, FromRow)]
+#[allow(clippy::struct_excessive_bools)]
 struct ServerRow {
     id: String,
     name: String,
     map: String,
     description: String,
+    community_id: Option<String>,
+    community: String,
     status: String,
     host: String,
     port: i32,
@@ -97,6 +108,10 @@ struct ServerRow {
     player_count: Option<i32>,
     last_reported_at: Option<DateTime<Utc>>,
     plugin_state: String,
+    has_rcon_password: bool,
+    last_rcon_at: Option<DateTime<Utc>>,
+    rcon_failures: i32,
+    pending_actions: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -109,24 +124,53 @@ struct PlayerRow {
     last_seen_at: DateTime<Utc>,
 }
 
+/// Adds a server with as little as `host` and `port`. Everything else is
+/// optional: the API generates the id, derives a display name and fills safe
+/// defaults until the plugin reports real map/player data.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateServerRequest {
-    pub id: String,
-    pub name: String,
-    pub map: String,
-    pub description: String,
-    pub status: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub map: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Optional community group id. Groups are created separately through
+    /// `/admin/server-communities` so a server cannot reference a missing group.
+    #[serde(default)]
+    pub community_id: Option<String>,
+    /// Legacy group name sent by pages loaded before community groups existed.
+    #[serde(default)]
+    pub community: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
     pub host: String,
     pub port: i32,
-    pub region: String,
-    pub tickrate: i32,
-    pub max_players: i32,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub tickrate: Option<i32>,
+    #[serde(default)]
+    pub max_players: Option<i32>,
+    #[serde(default)]
     pub latency_ms: Option<i32>,
+    #[serde(default)]
     pub tags: Vec<String>,
-    pub map_image: String,
+    #[serde(default)]
+    pub map_image: Option<String>,
+    #[serde(default)]
     pub featured: bool,
+    #[serde(default)]
     pub requires_whitelist: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateServerResponse {
+    pub id: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -157,6 +201,10 @@ pub fn router() -> Router<AppState> {
             delete(delete_server).patch(update_server_active),
         )
         .route(
+            "/admin/servers/{id}/community",
+            patch(update_server_community),
+        )
+        .route(
             "/admin/servers/{id}/players/{steam_id64}/kick",
             post(kick_player),
         )
@@ -170,9 +218,14 @@ pub fn router() -> Router<AppState> {
                 .post(rotate_plugin_token)
                 .delete(clear_plugin_token),
         )
+        .route(
+            "/admin/servers/{id}/rcon-password",
+            put(set_rcon_password).delete(clear_rcon_password),
+        )
         .route("/admin/server-bans/{id}/lift", post(lift_server_ban))
 }
 
+#[allow(clippy::too_many_lines)]
 async fn overview(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -180,18 +233,26 @@ async fn overview(
     require_admin(&state, &headers).await?;
     let rows = sqlx::query_as::<_, ServerRow>(
         r"
-        SELECT id, name, map, description, status, host, port, region, tickrate,
-               max_players, latency_ms, tags, map_image, featured, is_active, requires_whitelist,
-               player_count, last_reported_at,
+        SELECT s.id, s.name, s.map, s.description, s.community_id,
+               coalesce(c.name, '') AS community, s.status, s.host, s.port, s.region,
+               s.tickrate, s.max_players, s.latency_ms, s.tags, s.map_image, s.featured,
+               s.is_active, s.requires_whitelist, s.player_count, s.last_reported_at,
                CASE
-                   WHEN plugin_token IS NULL THEN 'disabled'
-                   WHEN last_reported_at IS NOT NULL
-                        AND last_reported_at > now() - make_interval(secs => $1::double precision)
+                   WHEN s.plugin_token IS NULL THEN 'disabled'
+                   WHEN s.last_reported_at IS NOT NULL
+                        AND s.last_reported_at > now() - make_interval(secs => $1::double precision)
                        THEN 'connected'
                    ELSE 'waiting'
-               END AS plugin_state
-        FROM servers
-        ORDER BY is_active DESC, name
+               END AS plugin_state,
+               (s.rcon_password IS NOT NULL) AS has_rcon_password,
+               s.last_rcon_at, s.rcon_failures,
+               (
+                   SELECT count(*) FROM server_actions a
+                   WHERE a.server_id = s.id AND a.processed_at IS NULL
+               ) AS pending_actions
+        FROM servers s
+        LEFT JOIN server_communities c ON c.id = s.community_id
+        ORDER BY s.is_active DESC, s.name
         ",
     )
     .bind(f64::from(STALE_AFTER_SECS))
@@ -228,6 +289,8 @@ async fn overview(
                 name: row.name,
                 map: row.map,
                 description: row.description,
+                community_id: row.community_id,
+                community: row.community,
                 status: row.status,
                 host: row.host,
                 port: row.port,
@@ -243,6 +306,10 @@ async fn overview(
                 player_count: row.player_count,
                 last_reported_at: row.last_reported_at,
                 plugin_state: row.plugin_state,
+                has_rcon_password: row.has_rcon_password,
+                last_rcon_at: row.last_rcon_at,
+                rcon_failures: row.rcon_failures,
+                pending_actions: row.pending_actions,
                 players,
             }
         })
@@ -275,43 +342,70 @@ async fn create_server(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateServerRequest>,
-) -> Result<StatusCode, AppError> {
+) -> Result<(StatusCode, Json<CreateServerResponse>), AppError> {
     require_admin(&state, &headers).await?;
     validate_server(&request)?;
-    let exists =
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM servers WHERE id = $1)")
-            .bind(&request.id)
+
+    let host = request.host.trim().to_owned();
+    let id = match non_empty(request.id.as_deref()) {
+        Some(id) => {
+            let exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM servers WHERE id = $1)",
+            )
+            .bind(id)
             .fetch_one(&state.db)
             .await?;
-    if exists {
-        return Err(AppError::Conflict);
-    }
+            if exists {
+                return Err(AppError::Conflict);
+            }
+            id.to_owned()
+        }
+        None => format!("srv-{}", &Uuid::new_v4().simple().to_string()[..12]),
+    };
+    let name = non_empty(request.name.as_deref())
+        .map_or_else(|| format!("{host}:{}", request.port), str::to_owned);
+    let map = non_empty(request.map.as_deref()).unwrap_or("待上报");
+    let description = non_empty(request.description.as_deref()).unwrap_or_default();
+    let community_id = resolve_community_id(
+        &state,
+        non_empty(request.community_id.as_deref()),
+        non_empty(request.community.as_deref()),
+    )
+    .await?;
+    let status = non_empty(request.status.as_deref()).unwrap_or("offline");
+    let region = non_empty(request.region.as_deref()).unwrap_or("未知");
+    let tickrate = request.tickrate.unwrap_or(128);
+    let max_players = request.max_players.unwrap_or(64);
+    let map_image = non_empty(request.map_image.as_deref()).unwrap_or_default();
+
     sqlx::query(
         r"
         INSERT INTO servers (
-            id, name, map, description, status, host, port, region, tickrate,
-            max_players, latency_ms, tags, map_image, featured, requires_whitelist
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            id, name, map, description, community_id, status, host, port, region,
+            tickrate, max_players, latency_ms, tags, map_image, featured,
+            requires_whitelist
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
         ",
     )
-    .bind(&request.id)
-    .bind(request.name.trim())
-    .bind(request.map.trim())
-    .bind(request.description.trim())
-    .bind(&request.status)
-    .bind(request.host.trim())
+    .bind(&id)
+    .bind(name)
+    .bind(map)
+    .bind(description)
+    .bind(community_id)
+    .bind(status)
+    .bind(&host)
     .bind(request.port)
-    .bind(request.region.trim())
-    .bind(request.tickrate)
-    .bind(request.max_players)
+    .bind(region)
+    .bind(tickrate)
+    .bind(max_players)
     .bind(request.latency_ms)
     .bind(&request.tags)
-    .bind(request.map_image.trim())
+    .bind(map_image)
     .bind(request.featured)
     .bind(request.requires_whitelist)
     .execute(&state.db)
     .await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok((StatusCode::CREATED, Json(CreateServerResponse { id })))
 }
 
 #[utoipa::path(
@@ -447,6 +541,118 @@ pub async fn clear_plugin_token(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Write-only RCON credential for the optional hibernation fallback. The
+/// password is never returned by any admin endpoint and is never logged.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SetRconPasswordRequest {
+    pub password: String,
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/admin/servers/{id}/rcon-password",
+    tag = "admin",
+    params(("id" = String, Path, description = "Server id")),
+    request_body = SetRconPasswordRequest,
+    responses(
+        (status = 204, description = "RCON password stored; it is never returned"),
+        (status = 401, description = "Authentication required", body = crate::errors::ErrorResponse),
+        (status = 403, description = "Administrator role required", body = crate::errors::ErrorResponse),
+        (status = 404, description = "Server not found", body = crate::errors::ErrorResponse),
+        (status = 422, description = "Password is invalid", body = crate::errors::ErrorResponse)
+    )
+)]
+async fn set_rcon_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetRconPasswordRequest>,
+) -> Result<StatusCode, AppError> {
+    require_admin(&state, &headers).await?;
+    let password = request.password;
+    if password.trim().is_empty()
+        || password.chars().count() > 256
+        || password.chars().any(char::is_control)
+    {
+        return Err(AppError::Validation(
+            "password must be between 1 and 256 printable characters".to_owned(),
+        ));
+    }
+
+    let result = sqlx::query(
+        r"
+        UPDATE servers
+        SET rcon_password = $2,
+            last_rcon_at = NULL,
+            rcon_failures = 0,
+            updated_at = now()
+        WHERE id = $1
+        ",
+    )
+    .bind(&id)
+    .bind(&password)
+    .execute(&state.db)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/admin/servers/{id}/rcon-password",
+    tag = "admin",
+    params(("id" = String, Path, description = "Server id")),
+    responses(
+        (status = 204, description = "RCON password removed and hibernating status cleared"),
+        (status = 401, description = "Authentication required", body = crate::errors::ErrorResponse),
+        (status = 403, description = "Administrator role required", body = crate::errors::ErrorResponse),
+        (status = 404, description = "Server not found", body = crate::errors::ErrorResponse)
+    )
+)]
+async fn clear_rcon_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    require_admin(&state, &headers).await?;
+    let mut transaction = state.db.begin().await?;
+    let status = sqlx::query_scalar::<_, String>(
+        r"
+        UPDATE servers
+        SET rcon_password = NULL,
+            last_rcon_at = NULL,
+            rcon_failures = 0,
+            status = CASE
+                WHEN status = 'hibernating' THEN 'offline'
+                ELSE status
+            END,
+            player_count = CASE
+                WHEN status = 'hibernating' THEN 0
+                ELSE player_count
+            END,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING status
+        ",
+    )
+    .bind(&id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if status == "offline" {
+        sqlx::query("DELETE FROM server_players WHERE server_id = $1")
+            .bind(&id)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    transaction.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateServerRequest {
@@ -465,6 +671,81 @@ async fn update_server_active(
         .bind(request.is_active)
         .execute(&state.db)
         .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateServerCommunityRequest {
+    /// Community group id, or null/omitted to leave the server ungrouped.
+    #[serde(default)]
+    pub community_id: Option<String>,
+    /// Legacy group name sent by pages loaded before community groups existed.
+    #[serde(default)]
+    pub community: Option<String>,
+}
+
+/// Accept `communityId` from current clients and the legacy group name from
+/// pages that were loaded before the upgrade. Resolving the name keeps an old
+/// browser from silently detaching a server when it saves its free-text label.
+async fn resolve_community_id(
+    state: &AppState,
+    community_id: Option<&str>,
+    community_name: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    if let Some(community_id) = community_id {
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM server_communities WHERE id = $1)",
+        )
+        .bind(community_id)
+        .fetch_one(&state.db)
+        .await?;
+        if !exists {
+            return Err(AppError::Validation(
+                "communityId does not match an existing community group".to_owned(),
+            ));
+        }
+        return Ok(Some(community_id.to_owned()));
+    }
+    let Some(name) = community_name else {
+        return Ok(None);
+    };
+    let id = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM server_communities WHERE lower(name) = lower($1)",
+    )
+    .bind(name)
+    .fetch_optional(&state.db)
+    .await?;
+    id.map(Some).ok_or_else(|| {
+        AppError::Validation(
+            "community does not match an existing community group; create it in 社区组管理 first"
+                .to_owned(),
+        )
+    })
+}
+
+async fn update_server_community(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateServerCommunityRequest>,
+) -> Result<StatusCode, AppError> {
+    require_admin(&state, &headers).await?;
+    let community_id = resolve_community_id(
+        &state,
+        non_empty(request.community_id.as_deref()),
+        non_empty(request.community.as_deref()),
+    )
+    .await?;
+    let result =
+        sqlx::query("UPDATE servers SET community_id = $2, updated_at = now() WHERE id = $1")
+            .bind(id)
+            .bind(community_id)
+            .execute(&state.db)
+            .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
@@ -600,51 +881,84 @@ async fn lift_server_ban(
     Path(id): Path<uuid::Uuid>,
 ) -> Result<StatusCode, AppError> {
     let admin = require_admin(&state, &headers).await?;
-    let result = sqlx::query(
-        "UPDATE server_bans SET lifted_at = now(), lifted_by = $2 WHERE id = $1 AND lifted_at IS NULL",
+    let mut transaction = state.db.begin().await?;
+    let lifted = sqlx::query_as::<_, (String, String)>(
+        r"
+        UPDATE server_bans
+        SET lifted_at = now(), lifted_by = $2
+        WHERE id = $1 AND lifted_at IS NULL
+        RETURNING server_id, steam_id64
+        ",
     )
     .bind(id)
     .bind(admin.id)
-    .execute(&state.db)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::Conflict)?;
+
+    // A kick/ban action may still be waiting for the plugin. If the admin
+    // lifts the ban first, drop that queued ban so the plugin cannot apply it
+    // after the unban.
+    sqlx::query(
+        r"
+        UPDATE server_actions
+        SET processed_at = COALESCE(processed_at, now())
+        WHERE server_id = $1
+          AND steam_id64 = $2
+          AND action = 'ban'
+          AND processed_at IS NULL
+        ",
+    )
+    .bind(&lifted.0)
+    .bind(&lifted.1)
+    .execute(&mut *transaction)
     .await?;
-    if result.rows_affected() == 0 {
-        return Err(AppError::Conflict);
-    }
+
+    transaction.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 fn validate_server(request: &CreateServerRequest) -> Result<(), AppError> {
-    if request.id.len() > 80
-        || request.id.is_empty()
-        || !request
-            .id
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+    let host = request.host.trim();
+    if host.is_empty()
+        || host.chars().count() > 255
+        || host.chars().any(|ch| ch.is_whitespace() || ch == '/')
+    {
+        return Err(AppError::Validation(
+            "host must be a hostname or IP address without spaces or slashes".to_owned(),
+        ));
+    }
+    if let Some(id) = non_empty(request.id.as_deref())
+        && (id.chars().count() > 80
+            || !id
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'))
     {
         return Err(AppError::Validation(
             "id must use lowercase letters, numbers and hyphens".to_owned(),
         ));
     }
-    if request.name.trim().is_empty()
-        || request.map.trim().is_empty()
-        || request.host.trim().is_empty()
-    {
-        return Err(AppError::Validation(
-            "name, map and host are required".to_owned(),
-        ));
-    }
     if !(1..=65535).contains(&request.port) {
         return Err(AppError::Validation("port is invalid".to_owned()));
     }
-    if !(1..=1000).contains(&request.tickrate) || !(1..=1024).contains(&request.max_players) {
+    if request
+        .tickrate
+        .is_some_and(|value| !(1..=1000).contains(&value))
+        || request
+            .max_players
+            .is_some_and(|value| !(1..=1024).contains(&value))
+    {
         return Err(AppError::Validation(
             "tickrate or maxPlayers is invalid".to_owned(),
         ));
     }
-    if !matches!(
-        request.status.as_str(),
-        "online" | "maintenance" | "offline"
-    ) {
+    if let Some(status) = non_empty(request.status.as_deref())
+        && !matches!(status, "online" | "maintenance" | "offline")
+    {
         return Err(AppError::Validation("status is invalid".to_owned()));
     }
     Ok(())

@@ -1,6 +1,8 @@
 import type { AccountOverview } from "@/features/account/types";
 import type {
   AdminAccount,
+  AdminCommunity,
+  AdminCommunityOverview,
   AdminForumReply,
   AdminForumTopic,
   AdminForumUser,
@@ -311,25 +313,9 @@ export async function fetchAdminServers(client: ApiClient): Promise<ServerAdminO
 
 export async function createAdminServer(
   client: ApiClient,
-  input: {
-    id: string;
-    name: string;
-    map: string;
-    description: string;
-    status: string;
-    host: string;
-    port: number;
-    region: string;
-    tickrate: number;
-    maxPlayers: number;
-    latencyMs?: number | null;
-    tags: string[];
-    mapImage: string;
-    featured: boolean;
-    requiresWhitelist: boolean;
-  },
-): Promise<void> {
-  await client.request<void>("/api/v1/admin/servers", {
+  input: { host: string; port: number; communityId?: string },
+): Promise<{ id: string }> {
+  return client.request<{ id: string }>("/api/v1/admin/servers", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -363,6 +349,23 @@ export async function clearAdminServerPluginToken(client: ApiClient, id: string)
   });
 }
 
+export async function setAdminServerRconPassword(
+  client: ApiClient,
+  id: string,
+  password: string,
+): Promise<void> {
+  await client.request<void>(`/api/v1/admin/servers/${encodeURIComponent(id)}/rcon-password`, {
+    method: "PUT",
+    body: JSON.stringify({ password }),
+  });
+}
+
+export async function clearAdminServerRconPassword(client: ApiClient, id: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/servers/${encodeURIComponent(id)}/rcon-password`, {
+    method: "DELETE",
+  });
+}
+
 export async function setAdminServerActive(
   client: ApiClient,
   id: string,
@@ -372,6 +375,74 @@ export async function setAdminServerActive(
     method: "PATCH",
     body: JSON.stringify({ isActive }),
   });
+}
+
+export async function setAdminServerCommunity(
+  client: ApiClient,
+  id: string,
+  communityId: string | null,
+): Promise<void> {
+  await client.request<void>(`/api/v1/admin/servers/${encodeURIComponent(id)}/community`, {
+    method: "PATCH",
+    body: JSON.stringify({ communityId }),
+  });
+}
+
+export async function fetchAdminCommunities(client: ApiClient): Promise<AdminCommunity[]> {
+  const response = await client.get<AdminCommunityOverview>(
+    "/api/v1/admin/server-communities",
+    noStore,
+  );
+  return response.communities;
+}
+
+export async function createAdminCommunity(
+  client: ApiClient,
+  input: { name: string; description?: string },
+): Promise<{ id: string }> {
+  return client.request<{ id: string }>("/api/v1/admin/server-communities", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateAdminCommunity(
+  client: ApiClient,
+  id: string,
+  input: { name?: string; description?: string },
+): Promise<void> {
+  await client.request<void>(`/api/v1/admin/server-communities/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteAdminCommunity(client: ApiClient, id: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/server-communities/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function addAdminCommunityServers(
+  client: ApiClient,
+  id: string,
+  serverIds: string[],
+): Promise<void> {
+  await client.request<void>(`/api/v1/admin/server-communities/${encodeURIComponent(id)}/servers`, {
+    method: "POST",
+    body: JSON.stringify({ serverIds }),
+  });
+}
+
+export async function removeAdminCommunityServer(
+  client: ApiClient,
+  id: string,
+  serverId: string,
+): Promise<void> {
+  await client.request<void>(
+    `/api/v1/admin/server-communities/${encodeURIComponent(id)}/servers/${encodeURIComponent(serverId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function deleteAdminServer(client: ApiClient, id: string): Promise<void> {

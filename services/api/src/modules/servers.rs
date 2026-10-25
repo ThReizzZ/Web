@@ -11,6 +11,7 @@ pub struct ServerRow {
     pub name: String,
     pub map: String,
     pub description: String,
+    pub community: String,
     pub status: String,
     pub host: String,
     pub port: i32,
@@ -48,6 +49,7 @@ pub struct Server {
     pub name: String,
     pub map: String,
     pub description: String,
+    pub community: String,
     pub status: String,
     pub ip: String,
     pub port: i32,
@@ -76,12 +78,14 @@ pub fn router() -> Router<AppState> {
 async fn list_servers(State(state): State<AppState>) -> Result<Json<Vec<Server>>, AppError> {
     let rows = sqlx::query_as::<_, ServerRow>(
         r"
-        SELECT id, name, map, description, status, host, port, region, tickrate,
-               max_players, latency_ms, tags, map_image, featured, requires_whitelist,
-               player_count
-        FROM servers
-        WHERE is_active = true
-        ORDER BY featured DESC, name
+        SELECT s.id, s.name, s.map, s.description,
+               coalesce(c.name, '') AS community, s.status, s.host, s.port, s.region,
+               s.tickrate, s.max_players, s.latency_ms, s.tags, s.map_image, s.featured,
+               s.requires_whitelist, s.player_count
+        FROM servers s
+        LEFT JOIN server_communities c ON c.id = s.community_id
+        WHERE s.is_active = true
+        ORDER BY s.featured DESC, s.name
         ",
     )
     .fetch_all(&state.db)
@@ -117,6 +121,7 @@ async fn list_servers(State(state): State<AppState>) -> Result<Json<Vec<Server>>
                 name: row.name,
                 map: row.map,
                 description: row.description,
+                community: row.community,
                 status: row.status,
                 ip: row.host,
                 port: row.port,

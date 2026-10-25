@@ -1,9 +1,15 @@
 /**
- * ThRei_Players — reports Source server status and identified players to threi.
+ * ThRei_Players — reports server state and enforces ThRei access rules.
  *
- * The plugin posts a JSON snapshot to POST /api/v1/plugin/report using a
- * per-server token. It replaces A2S/RCON polling: the API never connects to
- * the game server.
+ * The plugin polls three authenticated endpoints with a per-server token:
+ *   POST /api/v1/plugin/report
+ *   GET  /api/v1/plugin/access-snapshot
+ *   GET  /api/v1/plugin/actions
+ *
+ * Whitelist and ban enforcement is local: the plugin keeps the latest
+ * snapshot in memory and checks players when they finish connecting, so an
+ * API outage does not block normal play. Kick/ban commands from the website
+ * are consumed from the action queue and acknowledged after execution.
  *
  * Requirements:
  *   - SourceMod 1.11+
@@ -15,19 +21,26 @@
 
 #include <sourcemod>
 #include <SteamWorks>
+#include <adt_array>
 
-#define PLUGIN_VERSION "1.0.0"
+#define PLUGIN_VERSION "1.4.0"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
+#define MAX_SERVER_NAME_LENGTH 256
 #define MAX_REPORT_PLAYERS 1024
 #define BODY_BUFFER_SIZE 131072
 #define FRAGMENT_BUFFER_SIZE 2048
 #define ERROR_BODY_SIZE 2048
+#define ACCESS_BODY_MAX 2097152
+#define ACTION_BODY_MAX 262144
+#define MAX_ACTION_LINE 1024
+#define MAX_REASON_LENGTH 512
+#define MAX_ACK_QUEUE 128
 
 public Plugin myinfo = {
     name = "ThRei_Players",
     author = "threi",
-    description = "Reports server status and identified players to threi",
+    description = "Reports server state and enforces ThRei whitelists and bans",
     version = PLUGIN_VERSION,
     url = "https://github.com/XBDJ504764827/threi",
 };
@@ -37,15 +50,47 @@ ConVar g_cvApiUrl;
 ConVar g_cvServerId;
 ConVar g_cvToken;
 ConVar g_cvInterval;
+ConVar g_cvAccessEnabled;
+ConVar g_cvAccessFailOpen;
+ConVar g_cvAccessInterval;
+ConVar g_cvActionsEnabled;
+ConVar g_cvActionsInterval;
+ConVar g_cvWhitelistKickMessage;
+ConVar g_cvBanKickMessage;
 
 Handle g_hTimer;
-Handle g_hRequest;
+Handle g_hReportRequest;
+Handle g_hAccessRequest;
+Handle g_hActionRequest;
+Handle g_hAckRequest;
 float g_fNextReport;
+float g_fNextAccess;
+float g_fNextActions;
+int g_iSkipUserId;
+int g_iAccessFailures;
+int g_iActionFailures;
 bool g_bConfigWarned;
+bool g_bControlUrlWarned;
 bool g_bSteamWorksWarned;
+bool g_bAccessLoaded;
+bool g_bAccessRequired;
+
+StringMap g_smWhitelist;
+StringMap g_smBans;
+StringMap g_smBanReasons;
+ArrayList g_aAckQueue;
 
 char g_sBody[BODY_BUFFER_SIZE];
 char g_sErrorBody[ERROR_BODY_SIZE + 1];
+
+// Per-instance values loaded from sm_threi_instance lines in the shared
+// cfg/sourcemod/threi_players.cfg. Only the entry matching hostport is used.
+int g_iHostPort;
+bool g_bInstanceEntriesSeen;
+bool g_bInstanceMatched;
+bool g_bInstanceMatchWarned;
+char g_sInstanceServerId[128];
+char g_sInstanceToken[256];
 
 public void OnPluginStart() {
     g_cvEnabled = CreateConVar("sm_threi_players_enabled", "1",
@@ -58,41 +103,87 @@ public void OnPluginStart() {
         "Per-server plugin token generated in the threi admin panel.",
         FCVAR_PROTECTED | FCVAR_UNLOGGED);
     g_cvInterval = CreateConVar("sm_threi_interval", "30",
-        "Seconds between reports. Player joins, disconnects, and map changes also trigger a report.",
+        "Seconds between reports. Player joins and map changes also trigger a report.",
         FCVAR_NONE, true, 5.0, true, 600.0);
+
+    g_cvAccessEnabled = CreateConVar("sm_threi_access_enabled", "1",
+        "Enable whitelist and ban enforcement.", FCVAR_NONE, true, 0.0, true, 1.0);
+    g_cvAccessFailOpen = CreateConVar("sm_threi_access_fail_open", "1",
+        "Allow players while the first access snapshot is still loading.",
+        FCVAR_NONE, true, 0.0, true, 1.0);
+    g_cvAccessInterval = CreateConVar("sm_threi_access_interval", "30",
+        "Seconds between access snapshot refreshes.",
+        FCVAR_NONE, true, 10.0, true, 600.0);
+    g_cvActionsEnabled = CreateConVar("sm_threi_actions_enabled", "1",
+        "Enable website kick/ban command polling.", FCVAR_NONE, true, 0.0, true, 1.0);
+    g_cvActionsInterval = CreateConVar("sm_threi_actions_interval", "15",
+        "Seconds between action queue polls.",
+        FCVAR_NONE, true, 5.0, true, 600.0);
+    g_cvWhitelistKickMessage = CreateConVar("sm_threi_whitelist_kick_message",
+        "该服务器需要白名单。请在 threi.cn 提交申请后重试。",
+        "Message shown when a non-whitelisted player is kicked.", FCVAR_NONE);
+    g_cvBanKickMessage = CreateConVar("sm_threi_ban_kick_message",
+        "你已被该服务器封禁。",
+        "Message shown when a banned player is kicked.", FCVAR_NONE);
+
+    g_smWhitelist = new StringMap();
+    g_smBans = new StringMap();
+    g_smBanReasons = new StringMap();
+    g_aAckQueue = new ArrayList(ByteCountToCells(64));
+
+    ResolveHostPort();
+
+    // Registered before AutoExecConfig so the per-instance lines in
+    // cfg/sourcemod/threi_players.cfg are parsed when the config executes.
+    RegServerCmd("sm_threi_instance", Command_Instance,
+        "Map this server port to a plugin token: sm_threi_instance <port> <token>");
 
     AutoExecConfig(true, "threi_players");
 
     RegAdminCmd("sm_threi_report", Command_Report, ADMFLAG_ROOT,
         "Send a ThRei_Players report immediately.");
     RegAdminCmd("sm_threi_status", Command_Status, ADMFLAG_ROOT,
-        "Show ThRei_Players configuration status without revealing the token.");
+        "Show ThRei_Players configuration and access-cache status without revealing tokens.");
 
-    g_fNextReport = GetGameTime() + 5.0;
+    float now = GetGameTime();
+    g_fNextReport = now + 5.0;
+    g_fNextAccess = now + 3.0;
+    g_fNextActions = now + 8.0;
     g_hTimer = CreateTimer(1.0, Timer_Poll, _, TIMER_REPEAT);
 }
 
 public void OnAllPluginsLoaded() {
     if (!SteamWorks_IsLoaded()) {
-        LogError("[ThRei_Players] SteamWorks extension is not loaded; reports cannot be sent.");
+        LogError("[ThRei_Players] SteamWorks extension is not loaded; HTTP features are unavailable.");
         g_bSteamWorksWarned = true;
     }
 }
 
 public void OnConfigsExecuted() {
     QueueReport(2.0);
+    ScheduleAccess(2.0);
+    ScheduleActions(4.0);
 }
 
 public void OnMapStart() {
     QueueReport(5.0);
+    ScheduleAccess(3.0);
+    ScheduleActions(5.0);
 }
 
 public void OnClientPostAdminCheck(int client) {
+    CheckClientAccess(client);
     QueueReport(1.0);
 }
 
 public void OnClientDisconnect(int client) {
-    QueueReport(1.0);
+    // Report immediately when the server becomes empty. CS:GO may hibernate
+    // as soon as the last player leaves, which would stop all SourceMod timers.
+    g_iSkipUserId = GetClientUserId(client);
+    g_fNextReport = GetGameTime();
+    if (g_hReportRequest == null) {
+        SendReport();
+    }
 }
 
 public void OnPluginEnd() {
@@ -100,25 +191,53 @@ public void OnPluginEnd() {
         KillTimer(g_hTimer);
         g_hTimer = null;
     }
-    if (g_hRequest != null) {
-        CloseHandle(g_hRequest);
-        g_hRequest = null;
+    CloseRequest(g_hReportRequest);
+    CloseRequest(g_hAccessRequest);
+    CloseRequest(g_hActionRequest);
+    CloseRequest(g_hAckRequest);
+    g_hReportRequest = null;
+    g_hAccessRequest = null;
+    g_hActionRequest = null;
+    g_hAckRequest = null;
+
+    if (g_smWhitelist != null) {
+        delete g_smWhitelist;
+        g_smWhitelist = null;
+    }
+    if (g_smBans != null) {
+        delete g_smBans;
+        g_smBans = null;
+    }
+    if (g_smBanReasons != null) {
+        delete g_smBanReasons;
+        g_smBanReasons = null;
+    }
+    if (g_aAckQueue != null) {
+        delete g_aAckQueue;
+        g_aAckQueue = null;
     }
 }
 
 public Action Timer_Poll(Handle timer) {
-    if (g_hRequest != null || !g_cvEnabled.BoolValue) {
-        return Plugin_Continue;
+    float now = GetGameTime();
+
+    if (g_cvEnabled.BoolValue && g_hReportRequest == null && now >= g_fNextReport) {
+        SendReport();
     }
-    if (GetGameTime() < g_fNextReport) {
-        return Plugin_Continue;
+    if (g_cvAccessEnabled.BoolValue && g_hAccessRequest == null && now >= g_fNextAccess) {
+        SendAccessSnapshot();
     }
-    SendReport();
+    if (g_cvActionsEnabled.BoolValue && g_hActionRequest == null && now >= g_fNextActions) {
+        SendActions();
+    }
+    if (g_aAckQueue != null && g_aAckQueue.Length > 0 && g_hAckRequest == null) {
+        SendNextAck();
+    }
     return Plugin_Continue;
 }
 
 public Action Command_Report(int client, int args) {
-    if (g_hRequest != null) {
+    if (g_hReportRequest != null) {
         ReplyToCommand(client, "[ThRei_Players] A report is already in flight.");
         return Plugin_Handled;
     }
@@ -132,16 +251,111 @@ public Action Command_Status(int client, int args) {
     char serverId[128];
     char token[256];
     GetConVarString(g_cvApiUrl, apiUrl, sizeof(apiUrl));
-    GetConVarString(g_cvServerId, serverId, sizeof(serverId));
-    GetConVarString(g_cvToken, token, sizeof(token));
 
-    ReplyToCommand(client, "[ThRei_Players] enabled=%d interval=%d",
-        g_cvEnabled.BoolValue, g_cvInterval.IntValue);
+    if (g_bInstanceMatched) {
+        strcopy(serverId, sizeof(serverId), g_sInstanceServerId);
+        strcopy(token, sizeof(token), g_sInstanceToken);
+    } else if (!g_bInstanceEntriesSeen) {
+        GetConVarString(g_cvServerId, serverId, sizeof(serverId));
+        GetConVarString(g_cvToken, token, sizeof(token));
+    } else {
+        serverId[0] = '\0';
+        token[0] = '\0';
+    }
+
+    ReplyToCommand(client, "[ThRei_Players] version=%s enabled=%d interval=%d",
+        PLUGIN_VERSION, g_cvEnabled.BoolValue, g_cvInterval.IntValue);
+    ReplyToCommand(client, "[ThRei_Players] config=cfg/sourcemod/threi_players.cfg");
+    ReplyToCommand(client, "[ThRei_Players] hostport=%d instance=%s", g_iHostPort,
+        g_bInstanceMatched
+            ? "matched"
+            : (g_bInstanceEntriesSeen ? "no matching entry" : "not configured"));
     ReplyToCommand(client, "[ThRei_Players] api=%s", apiUrl[0] ? apiUrl : "(not configured)");
-    ReplyToCommand(client, "[ThRei_Players] server=%s", serverId[0] ? serverId : "(not configured)");
-    ReplyToCommand(client, "[ThRei_Players] token=%s", token[0] ? "configured" : "(not configured)");
+    ReplyToCommand(client, "[ThRei_Players] server=%s",
+        serverId[0] ? serverId : (g_bInstanceMatched ? "(matched by token)" : "(not configured)"));
+    ReplyToCommand(client, "[ThRei_Players] token=%s",
+        token[0] ? "configured" : "(not configured)");
     ReplyToCommand(client, "[ThRei_Players] steamworks=%s",
         SteamWorks_IsLoaded() ? "loaded" : "missing");
+    ReplyToCommand(client, "[ThRei_Players] access=%s loaded=%s required=%s whitelist=%d bans=%d",
+        g_cvAccessEnabled.BoolValue ? "enabled" : "disabled",
+        g_bAccessLoaded ? "yes" : "no",
+        g_bAccessRequired ? "yes" : "no",
+        g_smWhitelist != null ? g_smWhitelist.Size : 0,
+        g_smBans != null ? g_smBans.Size : 0);
+    ReplyToCommand(client, "[ThRei_Players] actions=%s interval=%d pendingAcks=%d",
+        g_cvActionsEnabled.BoolValue ? "enabled" : "disabled",
+        g_cvActionsInterval.IntValue,
+        g_aAckQueue != null ? g_aAckQueue.Length : 0);
+    return Plugin_Handled;
+}
+
+void ResolveHostPort() {
+    ConVar hostport = FindConVar("hostport");
+    g_iHostPort = hostport != null ? hostport.IntValue : 0;
+    if (g_iHostPort <= 0) {
+        ConVar portCvar = FindConVar("port");
+        if (portCvar != null) {
+            g_iHostPort = portCvar.IntValue;
+        }
+    }
+    if (g_iHostPort <= 0) {
+        LogError("[ThRei_Players] Could not determine hostport; sm_threi_instance entries cannot be matched.");
+    }
+}
+
+/**
+ * Handles one line of the shared config:
+ *
+ *   sm_threi_instance <port> <token>
+ *   sm_threi_instance <port> <server-id> <token>
+ *
+ * Only the line whose port matches this instance's hostport is kept. The
+ * two-argument form lets the API resolve the server by the unique token, so
+ * every instance can share one config file without copying server ids.
+ */
+public Action Command_Instance(int args) {
+    if (args < 2 || args > 3) {
+        LogError("[ThRei_Players] sm_threi_instance expects <port> <token> "
+                 ... "or <port> <server-id> <token>.");
+        return Plugin_Handled;
+    }
+
+    char portValue[16];
+    GetCmdArg(1, portValue, sizeof(portValue));
+    int port = StringToInt(portValue);
+    if (port <= 0 || port > 65535) {
+        LogError("[ThRei_Players] sm_threi_instance has an invalid port: %s.", portValue);
+        return Plugin_Handled;
+    }
+
+    char serverId[128];
+    char token[256];
+    if (args == 2) {
+        serverId[0] = '\0';
+        GetCmdArg(2, token, sizeof(token));
+    } else {
+        GetCmdArg(2, serverId, sizeof(serverId));
+        GetCmdArg(3, token, sizeof(token));
+    }
+    TrimString(serverId);
+    TrimString(token);
+
+    if (token[0] == '\0') {
+        LogError("[ThRei_Players] sm_threi_instance for port %d has an empty token.", port);
+        return Plugin_Handled;
+    }
+
+    g_bInstanceEntriesSeen = true;
+    if (port != g_iHostPort) {
+        return Plugin_Handled;
+    }
+
+    strcopy(g_sInstanceServerId, sizeof(g_sInstanceServerId), serverId);
+    strcopy(g_sInstanceToken, sizeof(g_sInstanceToken), token);
+    g_bInstanceMatched = true;
+    g_bInstanceMatchWarned = false;
+    LogMessage("[ThRei_Players] Using sm_threi_instance entry for port %d.", port);
     return Plugin_Handled;
 }
 
@@ -149,6 +363,103 @@ void QueueReport(float delay) {
     float due = GetGameTime() + delay;
     if (g_fNextReport <= 0.0 || due < g_fNextReport) {
         g_fNextReport = due;
+    }
+}
+
+void ScheduleAccess(float delay) {
+    g_fNextAccess = GetGameTime() + delay;
+}
+
+void ScheduleActions(float delay) {
+    g_fNextActions = GetGameTime() + delay;
+}
+
+bool ResolveConfig(char[] apiUrl, int apiMax, char[] serverId, int serverIdMax,
+        char[] token, int tokenMax) {
+    GetConVarString(g_cvApiUrl, apiUrl, apiMax);
+    TrimString(apiUrl);
+
+    if (g_bInstanceEntriesSeen) {
+        if (!g_bInstanceMatched) {
+            if (!g_bInstanceMatchWarned) {
+                LogError("[ThRei_Players] No sm_threi_instance entry matches hostport %d; "
+                         ... "requests are skipped. Add a matching line to "
+                         ... "cfg/sourcemod/threi_players.cfg.", g_iHostPort);
+                g_bInstanceMatchWarned = true;
+            }
+            return false;
+        }
+        strcopy(serverId, serverIdMax, g_sInstanceServerId);
+        strcopy(token, tokenMax, g_sInstanceToken);
+    } else {
+        GetConVarString(g_cvServerId, serverId, serverIdMax);
+        GetConVarString(g_cvToken, token, tokenMax);
+        TrimString(serverId);
+        TrimString(token);
+    }
+
+    if (apiUrl[0] == '\0' || token[0] == '\0') {
+        if (!g_bConfigWarned) {
+            LogError("[ThRei_Players] Configuration is incomplete. Set sm_threi_api_url and "
+                     ... "either sm_threi_instance or sm_threi_token in "
+                     ... "cfg/sourcemod/threi_players.cfg.");
+            g_bConfigWarned = true;
+        }
+        return false;
+    }
+    if (strncmp(apiUrl, "https://", 8, false) != 0 && strncmp(apiUrl, "http://", 7, false) != 0) {
+        LogError("[ThRei_Players] sm_threi_api_url must start with http:// or https://.");
+        return false;
+    }
+
+    g_bConfigWarned = false;
+    return true;
+}
+
+/**
+ * Derives a control endpoint from the configured report URL by replacing
+ * "/plugin/report" with the requested suffix. Keeping one base setting makes
+ * the existing single-instance and shared-config setups work unchanged.
+ */
+bool BuildControlUrl(const char[] reportUrl, const char[] endpoint, char[] output, int maxLength) {
+    int index = StrContains(reportUrl, "/plugin/report", false);
+    if (index <= 0) {
+        if (!g_bControlUrlWarned) {
+            LogError("[ThRei_Players] sm_threi_api_url must contain /plugin/report so "
+                     ... "access and action endpoints can be derived.");
+            g_bControlUrlWarned = true;
+        }
+        return false;
+    }
+
+    int prefixLength = index;
+    if (prefixLength + strlen(endpoint) >= maxLength) {
+        return false;
+    }
+    strcopy(output, maxLength, reportUrl);
+    output[prefixLength] = '\0';
+    StrCat(output, maxLength, endpoint);
+    return true;
+}
+
+bool PrepareRequest(Handle request, const char[] token) {
+    if (request == null) {
+        return false;
+    }
+    if (!SteamWorks_SetHTTPRequestHeaderValue(request, TOKEN_HEADER, token)) {
+        LogError("[ThRei_Players] Could not set the plugin token header.");
+        return false;
+    }
+    if (!SteamWorks_SetHTTPRequestNetworkActivityTimeout(request, 15)) {
+        LogError("[ThRei_Players] Could not set the HTTP timeout.");
+        return false;
+    }
+    return true;
+}
+
+void CloseRequest(Handle request) {
+    if (request != null) {
+        CloseHandle(request);
     }
 }
 
@@ -173,68 +484,200 @@ void SendReport() {
     char apiUrl[512];
     char serverId[128];
     char token[256];
-    GetConVarString(g_cvApiUrl, apiUrl, sizeof(apiUrl));
-    GetConVarString(g_cvServerId, serverId, sizeof(serverId));
-    GetConVarString(g_cvToken, token, sizeof(token));
-    TrimString(apiUrl);
-    TrimString(serverId);
-    TrimString(token);
-
-    if (apiUrl[0] == '\0' || serverId[0] == '\0' || token[0] == '\0') {
-        if (!g_bConfigWarned) {
-            LogError("[ThRei_Players] Configuration is incomplete. Set sm_threi_api_url, "
-                     ... "sm_threi_server_id and sm_threi_token in cfg/sourcemod/threi_players.cfg.");
-            g_bConfigWarned = true;
-        }
-        return;
-    }
-    g_bConfigWarned = false;
-
-    if (strncmp(apiUrl, "https://", 8, false) != 0 && strncmp(apiUrl, "http://", 7, false) != 0) {
-        LogError("[ThRei_Players] sm_threi_api_url must start with http:// or https://.");
+    if (!ResolveConfig(apiUrl, sizeof(apiUrl), serverId, sizeof(serverId), token, sizeof(token))) {
         return;
     }
 
-    if (!BuildBody(serverId)) {
+    int skipUserId = g_iSkipUserId;
+    g_iSkipUserId = 0;
+    if (!BuildBody(serverId, skipUserId)) {
         return;
     }
 
     Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, apiUrl);
-    if (request == null) {
-        LogError("[ThRei_Players] Could not create an HTTP request; is Steam connected?");
+    if (!PrepareRequest(request, token)) {
+        CloseRequest(request);
         return;
     }
 
-    bool configured = SteamWorks_SetHTTPRequestHeaderValue(request, TOKEN_HEADER, token)
-        && SteamWorks_SetHTTPRequestHeaderValue(request, "User-Agent", "ThRei_Players/" ... PLUGIN_VERSION)
-        && SteamWorks_SetHTTPRequestNetworkActivityTimeout(request, 15)
-        && SteamWorks_SetHTTPRequestRawPostBody(request, "application/json", g_sBody, strlen(g_sBody))
-        && SteamWorks_SetHTTPCallbacks(request, OnReportComplete);
-
-    if (!configured) {
-        LogError("[ThRei_Players] Could not configure the HTTP request.");
-        CloseHandle(request);
+    // Steam's HTTP client sets its own User-Agent and rejects the header via
+    // SetHTTPRequestHeaderValue, so no custom User-Agent is sent.
+    if (!SteamWorks_SetHTTPRequestRawPostBody(request, "application/json", g_sBody,
+            strlen(g_sBody))) {
+        LogError("[ThRei_Players] Could not set the HTTP request body.");
+        CloseRequest(request);
+        return;
+    }
+    if (!SteamWorks_SetHTTPCallbacks(request, OnReportComplete)) {
+        LogError("[ThRei_Players] Could not set the HTTP callbacks.");
+        CloseRequest(request);
         return;
     }
 
-    g_hRequest = request;
+    g_hReportRequest = request;
     if (!SteamWorks_SendHTTPRequest(request)) {
         LogError("[ThRei_Players] Could not send the HTTP request.");
-        if (g_hRequest == request) {
-            g_hRequest = null;
+        if (g_hReportRequest == request) {
+            g_hReportRequest = null;
             CloseHandle(request);
         }
     }
 }
 
-bool BuildBody(const char[] serverId) {
-    char serverIdJson[512];
+void SendAccessSnapshot() {
+    int interval = g_cvAccessInterval.IntValue;
+    if (interval < 10) {
+        interval = 10;
+    }
+    g_fNextAccess = GetGameTime() + float(interval);
+
+    if (!SteamWorks_IsLoaded()) {
+        return;
+    }
+
+    char apiUrl[512];
+    char reportUrl[512];
+    char serverId[128];
+    char token[256];
+    if (!ResolveConfig(reportUrl, sizeof(reportUrl), serverId, sizeof(serverId), token,
+            sizeof(token))) {
+        return;
+    }
+    if (!BuildControlUrl(reportUrl, "/plugin/access-snapshot", apiUrl, sizeof(apiUrl))) {
+        return;
+    }
+
+    Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, apiUrl);
+    if (!PrepareRequest(request, token)) {
+        CloseRequest(request);
+        return;
+    }
+    if (!SteamWorks_SetHTTPCallbacks(request, OnAccessComplete)) {
+        LogError("[ThRei_Players] Could not set access snapshot callbacks.");
+        CloseRequest(request);
+        return;
+    }
+
+    g_hAccessRequest = request;
+    if (!SteamWorks_SendHTTPRequest(request)) {
+        LogError("[ThRei_Players] Could not send access snapshot request.");
+        if (g_hAccessRequest == request) {
+            g_hAccessRequest = null;
+            CloseHandle(request);
+        }
+    }
+}
+
+void SendActions() {
+    int interval = g_cvActionsInterval.IntValue;
+    if (interval < 5) {
+        interval = 5;
+    }
+    g_fNextActions = GetGameTime() + float(interval);
+
+    if (!SteamWorks_IsLoaded()) {
+        return;
+    }
+
+    char reportUrl[512];
+    char apiUrl[512];
+    char serverId[128];
+    char token[256];
+    if (!ResolveConfig(reportUrl, sizeof(reportUrl), serverId, sizeof(serverId), token,
+            sizeof(token))) {
+        return;
+    }
+    if (!BuildControlUrl(reportUrl, "/plugin/actions", apiUrl, sizeof(apiUrl))) {
+        return;
+    }
+
+    Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, apiUrl);
+    if (!PrepareRequest(request, token)) {
+        CloseRequest(request);
+        return;
+    }
+    if (!SteamWorks_SetHTTPCallbacks(request, OnActionsComplete)) {
+        LogError("[ThRei_Players] Could not set action poll callbacks.");
+        CloseRequest(request);
+        return;
+    }
+
+    g_hActionRequest = request;
+    if (!SteamWorks_SendHTTPRequest(request)) {
+        LogError("[ThRei_Players] Could not send action poll request.");
+        if (g_hActionRequest == request) {
+            g_hActionRequest = null;
+            CloseHandle(request);
+        }
+    }
+}
+
+void SendNextAck() {
+    if (g_aAckQueue == null || g_aAckQueue.Length == 0) {
+        return;
+    }
+
+    char reportUrl[512];
+    char baseUrl[512];
+    char serverId[128];
+    char token[256];
+    if (!ResolveConfig(reportUrl, sizeof(reportUrl), serverId, sizeof(serverId), token,
+            sizeof(token))) {
+        g_aAckQueue.Clear();
+        return;
+    }
+    if (!BuildControlUrl(reportUrl, "/plugin/actions", baseUrl, sizeof(baseUrl))) {
+        g_aAckQueue.Clear();
+        return;
+    }
+
+    char id[64];
+    g_aAckQueue.GetString(0, id, sizeof(id));
+    g_aAckQueue.Erase(0);
+    if (id[0] == '\0') {
+        return;
+    }
+
+    char url[768];
+    Format(url, sizeof(url), "%s/%s/ack", baseUrl, id);
+    Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, url);
+    if (!PrepareRequest(request, token)) {
+        CloseRequest(request);
+        return;
+    }
+    if (!SteamWorks_SetHTTPCallbacks(request, OnAckComplete)) {
+        LogError("[ThRei_Players] Could not set action ack callbacks.");
+        CloseRequest(request);
+        return;
+    }
+
+    g_hAckRequest = request;
+    if (!SteamWorks_SendHTTPRequest(request)) {
+        LogError("[ThRei_Players] Could not send action ack.");
+        if (g_hAckRequest == request) {
+            g_hAckRequest = null;
+            CloseHandle(request);
+        }
+    }
+}
+
+bool BuildBody(const char[] serverId, int skipUserId) {
     char map[MAX_NAME_LENGTH];
     char mapJson[1024];
+    char serverName[MAX_SERVER_NAME_LENGTH];
+    char serverNameJson[FRAGMENT_BUFFER_SIZE];
 
-    JsonEscape(serverId, serverIdJson, sizeof(serverIdJson));
     GetCurrentMap(map, sizeof(map));
     JsonEscape(map, mapJson, sizeof(mapJson));
+
+    ConVar hostname = FindConVar("hostname");
+    if (hostname != null) {
+        GetConVarString(hostname, serverName, sizeof(serverName));
+    } else {
+        serverName[0] = '\0';
+    }
+    TrimString(serverName);
+    JsonEscape(serverName, serverNameJson, sizeof(serverNameJson));
 
     int maxPlayers = GetMaxHumanPlayers();
     if (maxPlayers < 1) {
@@ -246,9 +689,18 @@ bool BuildBody(const char[] serverId) {
         maxPlayers = MAX_REPORT_PLAYERS;
     }
 
-    Format(g_sBody, sizeof(g_sBody),
-        "{\"serverId\":\"%s\",\"map\":\"%s\",\"maxPlayers\":%d,\"players\":[",
-        serverIdJson, mapJson, maxPlayers);
+    if (serverId[0] != '\0') {
+        char serverIdJson[512];
+        JsonEscape(serverId, serverIdJson, sizeof(serverIdJson));
+        Format(g_sBody, sizeof(g_sBody),
+            "{\"serverId\":\"%s\",\"name\":\"%s\",\"map\":\"%s\",\"maxPlayers\":%d,\"players\":[",
+            serverIdJson, serverNameJson, mapJson, maxPlayers);
+    } else {
+        // Without serverId the API resolves the server from the unique token.
+        Format(g_sBody, sizeof(g_sBody),
+            "{\"name\":\"%s\",\"map\":\"%s\",\"maxPlayers\":%d,\"players\":[",
+            serverNameJson, mapJson, maxPlayers);
+    }
 
     int reported = 0;
     int maxClients = MaxClients;
@@ -259,6 +711,9 @@ bool BuildBody(const char[] serverId) {
     for (int client = 1; client <= maxClients; client++) {
         if (!IsClientInGame(client) || IsFakeClient(client)
                 || IsClientSourceTV(client) || IsClientReplay(client)) {
+            continue;
+        }
+        if (skipUserId > 0 && GetClientUserId(client) == skipUserId) {
             continue;
         }
 
@@ -300,28 +755,533 @@ bool BuildBody(const char[] serverId) {
 
 public void OnReportComplete(Handle request, bool failure, bool requestSuccessful,
         EHTTPStatusCode statusCode) {
-    if (g_hRequest == request) {
-        g_hRequest = null;
+    if (g_hReportRequest == request) {
+        g_hReportRequest = null;
     }
 
     if (failure || !requestSuccessful) {
         LogError("[ThRei_Players] Report failed: network error or timeout.");
     } else if (statusCode != k_EHTTPStatusCode200OK) {
-        int size = 0;
-        if (SteamWorks_GetHTTPResponseBodySize(request, size) && size > 0 && size <= ERROR_BODY_SIZE) {
-            if (SteamWorks_GetHTTPResponseBodyData(request, g_sErrorBody, size)) {
-                g_sErrorBody[size] = '\0';
-                ReplaceString(g_sErrorBody, sizeof(g_sErrorBody), "\n", " ");
-                LogError("[ThRei_Players] API returned HTTP %d: %s", statusCode, g_sErrorBody);
-            } else {
-                LogError("[ThRei_Players] API returned HTTP %d.", statusCode);
-            }
-        } else {
-            LogError("[ThRei_Players] API returned HTTP %d.", statusCode);
-        }
+        LogHttpStatus("report", request, statusCode);
     }
 
     CloseHandle(request);
+}
+
+public void OnAccessComplete(Handle request, bool failure, bool requestSuccessful,
+        EHTTPStatusCode statusCode) {
+    if (g_hAccessRequest == request) {
+        g_hAccessRequest = null;
+    }
+
+    if (failure || !requestSuccessful || statusCode != k_EHTTPStatusCode200OK) {
+        g_iAccessFailures++;
+        g_fNextAccess = GetGameTime() + BackoffDelay(g_cvAccessInterval.IntValue,
+            g_iAccessFailures);
+        if (failure || !requestSuccessful) {
+            LogError("[ThRei_Players] Access snapshot failed: network error or timeout.");
+        } else {
+            LogHttpStatus("access snapshot", request, statusCode);
+        }
+        CloseHandle(request);
+        return;
+    }
+
+    int size = 0;
+    if (!SteamWorks_GetHTTPResponseBodySize(request, size) || size <= 0
+            || size > ACCESS_BODY_MAX) {
+        LogError("[ThRei_Players] Access snapshot body is missing or too large.");
+        g_iAccessFailures++;
+        g_fNextAccess = GetGameTime() + BackoffDelay(g_cvAccessInterval.IntValue,
+            g_iAccessFailures);
+        CloseHandle(request);
+        return;
+    }
+
+    char[] body = new char[size + 1];
+    bool read = SteamWorks_GetHTTPResponseBodyData(request, body, size);
+    if (!read) {
+        LogError("[ThRei_Players] Could not read access snapshot body.");
+        g_iAccessFailures++;
+        g_fNextAccess = GetGameTime() + BackoffDelay(g_cvAccessInterval.IntValue,
+            g_iAccessFailures);
+        CloseHandle(request);
+        return;
+    }
+    body[size] = '\0';
+
+    bool loaded = ParseAccessSnapshot(body);
+    if (!loaded) {
+        LogError("[ThRei_Players] Access snapshot format was not recognized.");
+        g_iAccessFailures++;
+        g_fNextAccess = GetGameTime() + BackoffDelay(g_cvAccessInterval.IntValue,
+            g_iAccessFailures);
+        CloseHandle(request);
+        return;
+    }
+
+    bool firstLoad = !g_bAccessLoaded;
+    g_bAccessLoaded = true;
+    g_iAccessFailures = 0;
+    g_fNextAccess = GetGameTime() + float(g_cvAccessInterval.IntValue);
+    if (firstLoad) {
+        LogMessage("[ThRei_Players] Access snapshot loaded: whitelist=%d bans=%d required=%d.",
+            g_smWhitelist.Size, g_smBans.Size, g_bAccessRequired);
+    }
+
+    for (int client = 1; client <= MaxClients; client++) {
+        if (IsClientInGame(client) && !IsFakeClient(client) && IsClientAuthorized(client)) {
+            CheckClientAccess(client);
+        }
+    }
+    CloseHandle(request);
+}
+
+public void OnActionsComplete(Handle request, bool failure, bool requestSuccessful,
+        EHTTPStatusCode statusCode) {
+    if (g_hActionRequest == request) {
+        g_hActionRequest = null;
+    }
+
+    if (failure || !requestSuccessful || statusCode != k_EHTTPStatusCode200OK) {
+        g_iActionFailures++;
+        g_fNextActions = GetGameTime() + BackoffDelay(g_cvActionsInterval.IntValue,
+            g_iActionFailures);
+        if (failure || !requestSuccessful) {
+            LogError("[ThRei_Players] Action poll failed: network error or timeout.");
+        } else {
+            LogHttpStatus("action poll", request, statusCode);
+        }
+        CloseHandle(request);
+        return;
+    }
+
+    int size = 0;
+    if (!SteamWorks_GetHTTPResponseBodySize(request, size) || size <= 0
+            || size > ACTION_BODY_MAX) {
+        g_iActionFailures++;
+        g_fNextActions = GetGameTime() + BackoffDelay(g_cvActionsInterval.IntValue,
+            g_iActionFailures);
+        CloseHandle(request);
+        return;
+    }
+
+    char[] body = new char[size + 1];
+    if (!SteamWorks_GetHTTPResponseBodyData(request, body, size)) {
+        LogError("[ThRei_Players] Could not read action poll body.");
+        CloseHandle(request);
+        return;
+    }
+    body[size] = '\0';
+
+    ParseAndExecuteActions(body);
+    g_iActionFailures = 0;
+    g_fNextActions = GetGameTime() + float(g_cvActionsInterval.IntValue);
+    CloseHandle(request);
+}
+
+public void OnAckComplete(Handle request, bool failure, bool requestSuccessful,
+        EHTTPStatusCode statusCode) {
+    if (g_hAckRequest == request) {
+        g_hAckRequest = null;
+    }
+    if (failure || !requestSuccessful) {
+        LogError("[ThRei_Players] Action ack failed: network error or timeout.");
+    } else if (statusCode != k_EHTTPStatusCode204NoContent
+            && statusCode != k_EHTTPStatusCode200OK) {
+        LogHttpStatus("action ack", request, statusCode);
+    }
+    CloseHandle(request);
+}
+
+void LogHttpStatus(const char[] label, Handle request, EHTTPStatusCode statusCode) {
+    int size = 0;
+    if (SteamWorks_GetHTTPResponseBodySize(request, size) && size > 0
+            && size <= ERROR_BODY_SIZE) {
+        if (SteamWorks_GetHTTPResponseBodyData(request, g_sErrorBody, size)) {
+            g_sErrorBody[size] = '\0';
+            ReplaceString(g_sErrorBody, sizeof(g_sErrorBody), "\n", " ");
+            LogError("[ThRei_Players] %s returned HTTP %d: %s", label, statusCode,
+                g_sErrorBody);
+            return;
+        }
+    }
+    LogError("[ThRei_Players] %s returned HTTP %d.", label, statusCode);
+}
+
+float BackoffDelay(int baseSeconds, int failures) {
+    if (baseSeconds < 1) {
+        baseSeconds = 1;
+    }
+    if (failures < 1) {
+        failures = 1;
+    }
+    int delay = baseSeconds * (failures + 1);
+    if (delay > 300) {
+        delay = 300;
+    }
+    return float(delay);
+}
+
+bool ParseAccessSnapshot(const char[] body) {
+    if (StrContains(body, "# ThRei access snapshot v1") == -1) {
+        return false;
+    }
+
+    StringMap whitelist = new StringMap();
+    StringMap bans = new StringMap();
+    StringMap banReasons = new StringMap();
+    bool sawRequirements = false;
+    bool requiresWhitelist = false;
+
+    char line[MAX_ACTION_LINE];
+    int position = 0;
+    int bodyLength = strlen(body);
+    while (ReadLine(body, bodyLength, position, line, sizeof(line))) {
+        TrimString(line);
+        if (line[0] == '\0' || line[0] == '#') {
+            continue;
+        }
+
+        if (StartsWith(line, "requires_whitelist ")) {
+            char value[8];
+            strcopy(value, sizeof(value), line[19]);
+            TrimString(value);
+            requiresWhitelist = StringToInt(value) != 0;
+            sawRequirements = true;
+            continue;
+        }
+        if (StartsWith(line, "whitelist ")) {
+            char steamId[32];
+            strcopy(steamId, sizeof(steamId), line[10]);
+            TrimString(steamId);
+            if (IsSteamId64(steamId)) {
+                whitelist.SetValue(steamId, 1, true);
+            }
+            continue;
+        }
+        if (StartsWith(line, "ban ")) {
+            ParseBanLine(line, bans, banReasons);
+        }
+    }
+
+    if (!sawRequirements) {
+        delete whitelist;
+        delete bans;
+        delete banReasons;
+        return false;
+    }
+
+    if (g_smWhitelist != null) {
+        delete g_smWhitelist;
+    }
+    if (g_smBans != null) {
+        delete g_smBans;
+    }
+    if (g_smBanReasons != null) {
+        delete g_smBanReasons;
+    }
+    g_smWhitelist = whitelist;
+    g_smBans = bans;
+    g_smBanReasons = banReasons;
+    g_bAccessRequired = requiresWhitelist;
+    return true;
+}
+
+void ParseBanLine(const char[] line, StringMap bans, StringMap banReasons) {
+    char rest[MAX_ACTION_LINE];
+    strcopy(rest, sizeof(rest), line[4]);
+
+    int position = 0;
+    char steamId[32];
+    char expiryText[32];
+    if (!NextToken(rest, position, steamId, sizeof(steamId))) {
+        return;
+    }
+    if (!NextToken(rest, position, expiryText, sizeof(expiryText))) {
+        return;
+    }
+    if (!IsSteamId64(steamId)) {
+        return;
+    }
+
+    char reason[MAX_REASON_LENGTH];
+    CopyRest(rest, position, reason, sizeof(reason));
+    int expiresAt = StringToInt(expiryText);
+    if (expiresAt > 0 && expiresAt <= GetTime()) {
+        return;
+    }
+
+    bans.SetValue(steamId, expiresAt, true);
+    banReasons.SetString(steamId, reason, true);
+}
+
+void ParseAndExecuteActions(const char[] body) {
+    if (StrContains(body, "# ThRei actions v1") == -1) {
+        return;
+    }
+
+    int executed = 0;
+    char line[MAX_ACTION_LINE];
+    int position = 0;
+    int bodyLength = strlen(body);
+    while (ReadLine(body, bodyLength, position, line, sizeof(line))) {
+        TrimString(line);
+        if (!StartsWith(line, "action ")) {
+            continue;
+        }
+
+        char rest[MAX_ACTION_LINE];
+        strcopy(rest, sizeof(rest), line[7]);
+        int cursor = 0;
+        char id[64];
+        char action[16];
+        char steamId[32];
+        if (!NextToken(rest, cursor, id, sizeof(id))
+                || !NextToken(rest, cursor, action, sizeof(action))
+                || !NextToken(rest, cursor, steamId, sizeof(steamId))) {
+            continue;
+        }
+        if (id[0] == '\0' || !IsSteamId64(steamId)) {
+            continue;
+        }
+
+        char reason[MAX_REASON_LENGTH];
+        if (StrEqual(action, "kick")) {
+            CopyRest(rest, cursor, reason, sizeof(reason));
+            ExecuteKickAction(steamId, reason);
+        } else if (StrEqual(action, "ban")) {
+            char expiryText[32];
+            if (!NextToken(rest, cursor, expiryText, sizeof(expiryText))) {
+                continue;
+            }
+            CopyRest(rest, cursor, reason, sizeof(reason));
+            ExecuteBanAction(steamId, StringToInt(expiryText), reason);
+        } else {
+            continue;
+        }
+
+        // Expired bans are still acknowledged: the plugin checked the database
+        // expiry and there is nothing left to do.
+        if (g_aAckQueue.Length < MAX_ACK_QUEUE) {
+            g_aAckQueue.PushString(id);
+        }
+        executed++;
+    }
+
+    if (executed > 0) {
+        LogMessage("[ThRei_Players] Processed %d website action(s).", executed);
+    }
+}
+
+void ExecuteKickAction(const char[] steamId, const char[] reason) {
+    int target = FindClientBySteamId(steamId);
+    if (target <= 0) {
+        return;
+    }
+
+    char message[256];
+    if (reason[0] != '\0') {
+        Format(message, sizeof(message), "管理员踢出：%s", reason);
+    } else {
+        strcopy(message, sizeof(message), "管理员踢出。");
+    }
+    KickClient(target, "%s", message);
+}
+
+void ExecuteBanAction(const char[] steamId, int expiresAt, const char[] reason) {
+    // The action may race with an unban or a short ban expiring before this
+    // poll. A zero expiry means permanent.
+    if (expiresAt > 0 && expiresAt <= GetTime()) {
+        return;
+    }
+
+    // Cache the ban immediately so a reconnect cannot slip through before the
+    // next access snapshot arrives. The snapshot will replace this entry with
+    // the authoritative expiry/reason from the database.
+    g_smBans.SetValue(steamId, expiresAt, true);
+    g_smBanReasons.SetString(steamId, reason, true);
+
+    int target = FindClientBySteamId(steamId);
+    if (target > 0) {
+        KickForBan(target, steamId, reason);
+    }
+}
+
+int FindClientBySteamId(const char[] steamId) {
+    for (int client = 1; client <= MaxClients; client++) {
+        if (!IsClientInGame(client) || IsFakeClient(client)
+                || IsClientSourceTV(client) || IsClientReplay(client)) {
+            continue;
+        }
+        char current[32];
+        if (GetClientAuthId(client, AuthId_SteamID64, current, sizeof(current), true)
+                && StrEqual(current, steamId)) {
+            return client;
+        }
+    }
+    return 0;
+}
+
+void CheckClientAccess(int client) {
+    if (!g_cvAccessEnabled.BoolValue || IsFakeClient(client)
+            || IsClientSourceTV(client) || IsClientReplay(client)) {
+        return;
+    }
+    if (!IsClientInGame(client) || !IsClientAuthorized(client)) {
+        return;
+    }
+
+    char steamId[32];
+    if (!GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId), true)
+            || !IsSteamId64(steamId)) {
+        return;
+    }
+
+    if (!g_bAccessLoaded) {
+        if (!g_cvAccessFailOpen.BoolValue) {
+            KickForWhitelist(client, true);
+        }
+        return;
+    }
+
+    int expiresAt = 0;
+    if (g_smBans.GetValue(steamId, expiresAt) && (expiresAt == 0 || expiresAt > GetTime())) {
+        KickForBan(client, steamId, "");
+        return;
+    }
+
+    if (!g_bAccessRequired) {
+        return;
+    }
+
+    int listed = 0;
+    if (!g_smWhitelist.GetValue(steamId, listed)) {
+        KickForWhitelist(client, false);
+    }
+}
+
+void KickForWhitelist(int client, bool unavailable) {
+    char message[256];
+    GetConVarString(g_cvWhitelistKickMessage, message, sizeof(message));
+    if (unavailable && message[0] == '\0') {
+        strcopy(message, sizeof(message), "白名单数据尚未加载，请稍后重试。");
+    }
+    KickClient(client, "%s", message);
+}
+
+void KickForBan(int client, const char[] steamId, const char[] actionReason) {
+    char reason[MAX_REASON_LENGTH];
+    reason[0] = '\0';
+    if (actionReason[0] != '\0') {
+        strcopy(reason, sizeof(reason), actionReason);
+    } else if (g_smBanReasons != null) {
+        g_smBanReasons.GetString(steamId, reason, sizeof(reason));
+    }
+
+    char base[256];
+    GetConVarString(g_cvBanKickMessage, base, sizeof(base));
+    if (base[0] == '\0') {
+        strcopy(base, sizeof(base), "你已被该服务器封禁。");
+    }
+
+    char message[512];
+    if (reason[0] != '\0') {
+        Format(message, sizeof(message), "%s（%s）", base, reason);
+    } else {
+        strcopy(message, sizeof(message), base);
+    }
+    KickClient(client, "%s", message);
+}
+
+bool IsSteamId64(const char[] value) {
+    if (strlen(value) != 17) {
+        return false;
+    }
+    for (int index = 0; index < 17; index++) {
+        if (value[index] < '0' || value[index] > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool StartsWith(const char[] value, const char[] prefix) {
+    int prefixLength = strlen(prefix);
+    return strncmp(value, prefix, prefixLength, false) == 0;
+}
+
+bool ReadLine(const char[] text, int length, int &position, char[] output, int maxLength) {
+    if (position >= length) {
+        return false;
+    }
+
+    int start = position;
+    while (position < length && text[position] != '\n') {
+        position++;
+    }
+    int end = position;
+    if (position < length) {
+        position++;
+    }
+    if (end > start && text[end - 1] == '\r') {
+        end--;
+    }
+
+    int outputLength = end - start;
+    if (outputLength >= maxLength) {
+        outputLength = maxLength - 1;
+    }
+    for (int index = 0; index < outputLength; index++) {
+        output[index] = text[start + index];
+    }
+    output[outputLength] = '\0';
+    return true;
+}
+
+bool NextToken(const char[] input, int &position, char[] output, int maxLength) {
+    int length = strlen(input);
+    while (position < length && (input[position] == ' ' || input[position] == '\t')) {
+        position++;
+    }
+    if (position >= length) {
+        output[0] = '\0';
+        return false;
+    }
+
+    int start = position;
+    while (position < length && input[position] != ' ' && input[position] != '\t') {
+        position++;
+    }
+    int outputLength = position - start;
+    if (outputLength >= maxLength) {
+        outputLength = maxLength - 1;
+    }
+    for (int index = 0; index < outputLength; index++) {
+        output[index] = input[start + index];
+    }
+    output[outputLength] = '\0';
+    return true;
+}
+
+void CopyRest(const char[] input, int position, char[] output, int maxLength) {
+    int length = strlen(input);
+    while (position < length && (input[position] == ' ' || input[position] == '\t')) {
+        position++;
+    }
+
+    int outputLength = length - position;
+    if (outputLength < 0) {
+        outputLength = 0;
+    }
+    if (outputLength >= maxLength) {
+        outputLength = maxLength - 1;
+    }
+    for (int index = 0; index < outputLength; index++) {
+        output[index] = input[position + index];
+    }
+    output[outputLength] = '\0';
+    TrimString(output);
 }
 
 void JsonEscape(const char[] input, char[] output, int maxLength) {
@@ -359,8 +1319,13 @@ void JsonEscape(const char[] input, char[] output, int maxLength) {
             if (position + 6 >= maxLength) {
                 break;
             }
-            Format(output[position], maxLength - position, "\\u%04x", character);
-            position += 6;
+            static const char hex[] = "0123456789abcdef";
+            output[position++] = '\\';
+            output[position++] = 'u';
+            output[position++] = '0';
+            output[position++] = '0';
+            output[position++] = hex[(character >> 4) & 0xF];
+            output[position++] = hex[character & 0xF];
         } else {
             if (position + 1 >= maxLength) {
                 break;

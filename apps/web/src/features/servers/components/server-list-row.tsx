@@ -34,6 +34,7 @@ export function ServerListRow({ server }: { server: KzServer }) {
             <ServerStatusBadge status={server.status} />
             <h3 className="text-base font-semibold">{server.name}</h3>
             <Badge variant="muted">KZ</Badge>
+            {server.community ? <Badge variant="outline">{server.community}</Badge> : null}
             {server.requiresWhitelist ? <Badge variant="warning">白名单</Badge> : null}
             <Badge variant="outline">{server.region}</Badge>
           </div>

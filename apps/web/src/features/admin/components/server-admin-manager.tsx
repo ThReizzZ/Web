@@ -6,10 +6,12 @@ import {
   Ban,
   Check,
   Copy,
+  FolderTree,
   Gamepad2,
   KeyRound,
   LoaderCircle,
   Plus,
+  Radio,
   Server,
   Trash2,
   Undo2,
@@ -27,7 +29,12 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Label } from "@/components/ui/label";
 import { Tooltip } from "@/components/ui/tooltip";
-import type { AdminServer, ServerAdminOverview, ServerBan } from "@/features/admin/types";
+import type {
+  AdminCommunity,
+  AdminServer,
+  ServerAdminOverview,
+  ServerBan,
+} from "@/features/admin/types";
 import { formatDate } from "@/lib/format";
 import { getBrowserApiClient } from "@/lib/api/browser";
 import { siteConfig } from "@/lib/site-config";
@@ -35,6 +42,7 @@ import { useToast } from "@/components/ui/toast";
 import {
   banServerPlayer,
   clearAdminServerPluginToken,
+  clearAdminServerRconPassword,
   createAdminServer,
   deleteAdminServer,
   fetchAdminServers,
@@ -43,23 +51,14 @@ import {
   liftServerBan,
   rotateAdminServerPluginToken,
   setAdminServerActive,
+  setAdminServerCommunity,
+  setAdminServerRconPassword,
 } from "@/services/content";
 
 const initialForm = {
-  id: "",
-  name: "",
-  map: "",
-  description: "",
-  status: "offline",
   host: "",
   port: "27015",
-  region: "",
-  tickrate: "128",
-  maxPlayers: "32",
-  tags: "",
-  mapImage: "",
-  featured: false,
-  requiresWhitelist: false,
+  communityId: "",
 };
 
 function pluginStateLabel(state: AdminServer["pluginState"]): string {
@@ -72,7 +71,31 @@ function pluginStateLabel(state: AdminServer["pluginState"]): string {
   return "未接入插件";
 }
 
-export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }) {
+function rconBadge(
+  server: AdminServer,
+): { label: string; variant: "success" | "warning" | "destructive" } | null {
+  if (!server.hasRconPassword) {
+    return null;
+  }
+  if (server.lastRconAt === null) {
+    return { label: "RCON 待检测", variant: "warning" };
+  }
+  if (server.rconFailures === 0) {
+    return { label: "RCON 兜底", variant: "success" };
+  }
+  if (server.rconFailures < 3) {
+    return { label: `RCON 重试 ${server.rconFailures}/3`, variant: "warning" };
+  }
+  return { label: "RCON 不可达", variant: "destructive" };
+}
+
+export function ServerAdminManager({
+  initial,
+  communities,
+}: {
+  initial: ServerAdminOverview;
+  communities: AdminCommunity[];
+}) {
   const [servers, setServers] = useState(initial.servers);
   const [bans, setBans] = useState(initial.bans);
   const [showAdd, setShowAdd] = useState(false);
@@ -86,6 +109,11 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
   const [pluginTokenError, setPluginTokenError] = useState<string | null>(null);
   const [pluginApiUrl, setPluginApiUrl] = useState(`${siteConfig.url}/api/v1/plugin/report`);
   const [configCopied, setConfigCopied] = useState(false);
+  const [communityTarget, setCommunityTarget] = useState<AdminServer | null>(null);
+  const [communityValue, setCommunityValue] = useState("");
+  const [rconTarget, setRconTarget] = useState<AdminServer | null>(null);
+  const [rconPassword, setRconPassword] = useState("");
+  const [rconError, setRconError] = useState<string | null>(null);
 
   const { toast } = useToast();
 
@@ -101,21 +129,20 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
     setBusy("add");
     setFeedback(null);
     try {
-      await createAdminServer(getBrowserApiClient(), {
-        ...form,
+      const created = await createAdminServer(getBrowserApiClient(), {
+        host: form.host.trim(),
         port: Number(form.port),
-        tickrate: Number(form.tickrate),
-        maxPlayers: Number(form.maxPlayers),
-        tags: form.tags
-          .split(",")
-          .map((tag) => tag.trim())
-          .filter(Boolean),
+        communityId: form.communityId.trim() || undefined,
       });
       setForm(initialForm);
       setShowAdd(false);
-      setFeedback("服务器已添加。请打开“插件配置”生成令牌，并安装 ThRei_Players。");
+      setFeedback("服务器已添加。请生成插件令牌，并把配置复制到游戏服务器。");
       try {
-        await reload();
+        const data = await reload();
+        const server = data.servers.find((item) => item.id === created.id);
+        if (server) {
+          openPluginDialog(server);
+        }
       } catch {
         // The inventory refresh is best-effort; creation already succeeded.
       }
@@ -222,14 +249,8 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
     if (!pluginTarget || !pluginToken) {
       return;
     }
-    const config = [
-      `sm_threi_api_url "${pluginApiUrl.trim()}"`,
-      `sm_threi_server_id "${pluginTarget.id}"`,
-      `sm_threi_token "${pluginToken}"`,
-      `sm_threi_interval "30"`,
-    ].join("\n");
     try {
-      await navigator.clipboard.writeText(config);
+      await navigator.clipboard.writeText(pluginConfig);
       setConfigCopied(true);
       setFeedback("插件配置已复制。");
     } catch {
@@ -250,6 +271,98 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
       setFeedback(server.isActive ? "服务器已停用。" : "服务器已启用。");
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "操作失败。");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function openCommunityDialog(server: AdminServer) {
+    setCommunityTarget(server);
+    setCommunityValue(server.communityId ?? "");
+  }
+
+  async function saveCommunity(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!communityTarget) {
+      return;
+    }
+    const target = communityTarget;
+    setBusy(`community-${target.id}`);
+    setFeedback(null);
+    try {
+      const communityId = communityValue.trim() || null;
+      await setAdminServerCommunity(getBrowserApiClient(), target.id, communityId);
+      const community = communities.find((item) => item.id === communityId)?.name ?? "";
+      setServers((current) =>
+        current.map((item) => (item.id === target.id ? { ...item, communityId, community } : item)),
+      );
+      setCommunityTarget(null);
+      setFeedback(community ? `社区组已设置为「${community}」。` : "已清除社区组。");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "保存社区组失败。");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function openRconDialog(server: AdminServer) {
+    setRconTarget(server);
+    setRconPassword("");
+    setRconError(null);
+  }
+
+  async function saveRconPassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!rconTarget) {
+      return;
+    }
+    const target = rconTarget;
+    setBusy(`rcon-${target.id}`);
+    setRconError(null);
+    try {
+      await setAdminServerRconPassword(getBrowserApiClient(), target.id, rconPassword);
+      setRconPassword("");
+      setFeedback(
+        "RCON 密码已保存。下一次检测最多 30 秒后开始；密码不会再次显示，也不会用于白名单或踢封。",
+      );
+      try {
+        const data = await reload();
+        const updated = data.servers.find((server) => server.id === target.id);
+        if (updated) {
+          setRconTarget(updated);
+        }
+      } catch {
+        // The credential was stored successfully.
+      }
+    } catch (error) {
+      setRconError(error instanceof Error ? error.message : "保存 RCON 密码失败。");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeRconPassword() {
+    if (!rconTarget) {
+      return;
+    }
+    const target = rconTarget;
+    if (
+      !window.confirm(
+        `移除「${target.name}」的 RCON 密码？空服休眠时将无法自动判断服务器是否仍在运行。`,
+      )
+    ) {
+      return;
+    }
+    setBusy(`rcon-${target.id}`);
+    setRconError(null);
+    try {
+      await clearAdminServerRconPassword(getBrowserApiClient(), target.id);
+      setRconTarget(null);
+      setRconPassword("");
+      setFeedback("RCON 密码已移除。");
+      await reload();
+    } catch (error) {
+      setRconError(error instanceof Error ? error.message : "移除 RCON 密码失败。");
     } finally {
       setBusy(null);
     }
@@ -280,7 +393,7 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
     try {
       await kickServerPlayer(getBrowserApiClient(), server.id, steamId64, reason);
       setFeedback(
-        `已记录踢出 ${player.name} 的指令；当前 ThRei_Players 只上报数据，游戏内执行尚未接入。`,
+        `踢出 ${player.name} 的指令已进入队列；ThRei_Players 1.4.0+ 会在下一次轮询时执行。`,
       );
       await reload();
     } catch (error) {
@@ -307,7 +420,7 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
         expiresInHours: null,
       });
       setFeedback(
-        `已在 ${server.name} 记录封禁 ${player.name}；游戏内执行尚未接入 ThRei_Players。`,
+        `封禁 ${player.name} 的指令已进入队列；插件会踢出在线目标，并在后续连接时依据封禁名单拦截。`,
       );
       await reload();
     } catch (error) {
@@ -347,9 +460,12 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
     pluginTarget && pluginToken
       ? [
           `sm_threi_api_url "${pluginApiUrl.trim()}"`,
-          `sm_threi_server_id "${pluginTarget.id}"`,
-          `sm_threi_token "${pluginToken}"`,
           `sm_threi_interval "30"`,
+          `sm_threi_access_enabled "1"`,
+          `sm_threi_actions_enabled "1"`,
+          "",
+          `// 每个实例一行；端口必须等于该实例的 hostport`,
+          `sm_threi_instance ${pluginTarget.port} "${pluginToken}"`,
         ].join("\n")
       : "";
 
@@ -360,7 +476,7 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
           <p className="text-sm font-medium text-primary">服务器</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">服务器管理</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            添加或删除服务器、启用/停用节点、查看插件上报的在线玩家，并提交踢出或服务器封禁指令。
+            添加或删除服务器、启用/停用节点、查看插件上报的在线玩家，并通过插件队列执行白名单、踢出和封禁。
           </p>
         </div>
         <Button type="button" onClick={() => setShowAdd((value) => !value)}>
@@ -372,8 +488,8 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
         open={showAdd}
         onOpenChange={setShowAdd}
         title="添加服务器"
-        description="添加后立即写入服务器目录，并可在白名单页面配置白名单要求。"
-        size="xl"
+        description="只需填写游戏服务器的 IP 和端口，服务器 ID 由系统自动生成。"
+        size="lg"
         footer={
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setShowAdd(false)}>
@@ -389,159 +505,66 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
         <form id="server-add-form" onSubmit={handleAdd} className="space-y-6">
           <Alert variant="info">
             <AlertDescription>
-              服务器状态与在线玩家由游戏服务器插件 ThRei_Players 上报。添加后生成插件令牌、安装
-              SourceMod 插件，API 才会收到实时数据；当前不再使用 A2S / RCON 轮询。
+              服务器状态与在线玩家由游戏服务器插件 ThRei_Players 上报。确认添加后会生成服务器 ID
+              并打开插件配置，复制令牌与配置到游戏服务器即可接入。白名单和踢封也走插件队列；RCON
+              仅是空服休眠时的可选状态兜底。
             </AlertDescription>
           </Alert>
 
-          <section className="space-y-3">
-            <h3 className="text-sm font-semibold">基本信息</h3>
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="服务器 ID" htmlFor="server-id">
-                <Input
-                  id="server-id"
-                  placeholder="kz-beginner"
-                  value={form.id}
-                  onChange={(event) => setForm({ ...form, id: event.target.value })}
-                  required
-                />
-              </Field>
-              <Field label="服务器名称" htmlFor="server-name">
-                <Input
-                  id="server-name"
-                  placeholder="KZ | Beginner"
-                  value={form.name}
-                  onChange={(event) => setForm({ ...form, name: event.target.value })}
-                  required
-                />
-              </Field>
-              <Field label="地图" htmlFor="server-map">
-                <Input
-                  id="server-map"
-                  placeholder="kz_beginner"
-                  value={form.map}
-                  onChange={(event) => setForm({ ...form, map: event.target.value })}
-                  required
-                />
-              </Field>
-              <Field label="地区" htmlFor="server-region">
-                <Input
-                  id="server-region"
-                  placeholder="华东"
-                  value={form.region}
-                  onChange={(event) => setForm({ ...form, region: event.target.value })}
-                />
-              </Field>
-              <div className="space-y-1.5 md:col-span-2">
-                <Label htmlFor="server-description">描述</Label>
-                <textarea
-                  id="server-description"
-                  rows={2}
-                  value={form.description}
-                  onChange={(event) => setForm({ ...form, description: event.target.value })}
-                  className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              </div>
-            </div>
-          </section>
-
-          <section className="space-y-3 border-t pt-5">
-            <h3 className="text-sm font-semibold">网络与运行状态</h3>
-            <div className="grid gap-4 md:grid-cols-3">
-              <Field label="Host / IP" htmlFor="server-host">
-                <Input
-                  id="server-host"
-                  placeholder="kz01.example.com"
-                  value={form.host}
-                  onChange={(event) => setForm({ ...form, host: event.target.value })}
-                  required
-                />
-              </Field>
-              <Field label="端口" htmlFor="server-port">
-                <Input
-                  id="server-port"
-                  type="number"
-                  value={form.port}
-                  onChange={(event) => setForm({ ...form, port: event.target.value })}
-                  required
-                />
-              </Field>
-              <Field label="状态" htmlFor="server-status">
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Host / IP" htmlFor="server-host">
+              <Input
+                id="server-host"
+                placeholder="kz01.example.com 或 1.2.3.4"
+                value={form.host}
+                onChange={(event) => setForm({ ...form, host: event.target.value })}
+                required
+              />
+            </Field>
+            <Field label="端口" htmlFor="server-port">
+              <Input
+                id="server-port"
+                type="number"
+                min={1}
+                max={65535}
+                value={form.port}
+                onChange={(event) => setForm({ ...form, port: event.target.value })}
+                required
+              />
+            </Field>
+            <div className="md:col-span-2">
+              <Field label="社区组（可选）" htmlFor="server-community">
                 <select
-                  id="server-status"
-                  value={form.status}
-                  onChange={(event) => setForm({ ...form, status: event.target.value })}
+                  id="server-community"
+                  value={form.communityId}
+                  onChange={(event) => setForm({ ...form, communityId: event.target.value })}
                   className="h-9 w-full rounded-md border bg-background px-3 text-sm"
                 >
-                  <option value="online">在线</option>
-                  <option value="maintenance">维护中</option>
-                  <option value="offline">离线</option>
+                  <option value="">不分组</option>
+                  {communities.map((community) => (
+                    <option key={community.id} value={community.id}>
+                      {community.name}
+                    </option>
+                  ))}
                 </select>
               </Field>
-              <Field label="Tickrate" htmlFor="server-tickrate">
-                <Input
-                  id="server-tickrate"
-                  type="number"
-                  value={form.tickrate}
-                  onChange={(event) => setForm({ ...form, tickrate: event.target.value })}
-                />
-              </Field>
-              <Field label="最大玩家数" htmlFor="server-max-players">
-                <Input
-                  id="server-max-players"
-                  type="number"
-                  value={form.maxPlayers}
-                  onChange={(event) => setForm({ ...form, maxPlayers: event.target.value })}
-                />
-              </Field>
+              <p className="mt-1 text-xs text-muted-foreground">
+                需要新的社区组？前往{" "}
+                <Link
+                  href="/admin/communities"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  社区组管理
+                </Link>{" "}
+                创建。
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Host
-              与端口用于展示和玩家连接；在线状态、地图和人数由插件上报覆盖。维护中状态不会被插件覆盖。
-            </p>
-          </section>
+          </div>
 
-          <section className="space-y-3 border-t pt-5">
-            <h3 className="text-sm font-semibold">展示与访问</h3>
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="标签（逗号分隔）" htmlFor="server-tags">
-                <Input
-                  id="server-tags"
-                  placeholder="新手, 教学, 计时"
-                  value={form.tags}
-                  onChange={(event) => setForm({ ...form, tags: event.target.value })}
-                />
-              </Field>
-              <Field label="地图图片 URL" htmlFor="server-image">
-                <Input
-                  id="server-image"
-                  placeholder="https://... 或 /images/..."
-                  value={form.mapImage}
-                  onChange={(event) => setForm({ ...form, mapImage: event.target.value })}
-                />
-              </Field>
-            </div>
-            <div className="flex flex-wrap items-center gap-5 pt-1">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={form.featured}
-                  onChange={(event) => setForm({ ...form, featured: event.target.checked })}
-                />
-                推荐服务器
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={form.requiresWhitelist}
-                  onChange={(event) =>
-                    setForm({ ...form, requiresWhitelist: event.target.checked })
-                  }
-                />
-                需要白名单
-              </label>
-            </div>
-          </section>
+          <p className="text-xs text-muted-foreground">
+            同一台主机上的多个实例可以加入同一个社区组，网站会按组筛选；IP
+            与端口用于展示和玩家连接。名称、地图和在线人数由插件上报后自动更新。
+          </p>
         </form>
       </Modal>
 
@@ -552,7 +575,8 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
               <Server className="size-4 text-primary" /> 服务器列表
             </h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              插件每 30 秒上报一次；超过 90 秒没有上报会自动标记离线并清空在线名单。
+              插件每 30 秒上报一次；配置 RCON 后，空服休眠会显示为“休眠/待上报”，连续 3 次 RCON
+              检测失败才标记离线。
             </p>
           </div>
           <Badge variant="secondary">{servers.length} 个服务器</Badge>
@@ -573,7 +597,7 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                           variant={
                             server.status === "online"
                               ? "success"
-                              : server.status === "maintenance"
+                              : server.status === "maintenance" || server.status === "hibernating"
                                 ? "warning"
                                 : "muted"
                           }
@@ -582,12 +606,20 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                             ? "在线"
                             : server.status === "maintenance"
                               ? "维护中"
-                              : "离线"}
+                              : server.status === "hibernating"
+                                ? "休眠/待上报"
+                                : "离线"}
                         </Badge>
                         <Badge variant={server.isActive ? "success" : "muted"}>
                           {server.isActive ? "启用" : "停用"}
                         </Badge>
                         <Badge variant="muted">{server.map}</Badge>
+                        {server.community ? (
+                          <Badge variant="outline" className="gap-1">
+                            <FolderTree className="size-3" aria-hidden="true" />
+                            {server.community}
+                          </Badge>
+                        ) : null}
                         {server.requiresWhitelist ? (
                           <Tooltip label="该服务器需要白名单审核">
                             <Badge variant="warning">白名单</Badge>
@@ -605,6 +637,12 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                         >
                           {pluginStateLabel(server.pluginState)}
                         </Badge>
+                        <RconBadge server={server} />
+                        {server.pendingActions > 0 ? (
+                          <Tooltip label="等待 ThRei_Players 轮询执行的踢出/封禁指令">
+                            <Badge variant="warning">待执行 {server.pendingActions}</Badge>
+                          </Tooltip>
+                        ) : null}
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {server.host}:{server.port} · {server.region || "未设置地区"} ·{" "}
@@ -618,6 +656,22 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                           ? ` · 最近上报 ${formatDate(server.lastReportedAt)}`
                           : " · 尚未收到插件上报"}
                       </p>
+                      {server.hasRconPassword ? (
+                        <p className="mt-0.5 text-[11px] text-muted-foreground">
+                          RCON{" "}
+                          {server.lastRconAt
+                            ? `最近检测 ${formatDate(server.lastRconAt)}`
+                            : "等待首次检测"}
+                          {server.rconFailures >= 3
+                            ? " · 连续失败 ≥3 次"
+                            : server.rconFailures > 0
+                              ? ` · 连续失败 ${server.rconFailures}/3`
+                              : " · 检测正常"}
+                          {server.pendingActions > 0
+                            ? ` · ${server.pendingActions} 条指令待插件执行`
+                            : ""}
+                        </p>
+                      ) : null}
                       {server.pluginState === "disabled" ? (
                         <p className="mt-1 text-xs text-muted-foreground">
                           点击“插件配置”生成令牌，并在游戏服务器安装 ThRei_Players。
@@ -639,6 +693,22 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                         <KeyRound />
                       )}
                       插件配置
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => openRconDialog(server)}
+                    >
+                      <Radio /> RCON 兜底
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => openCommunityDialog(server)}
+                    >
+                      <FolderTree /> 社区组
                     </Button>
                     <Button
                       type="button"
@@ -670,7 +740,7 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                     <p className="text-xs font-medium text-muted-foreground">
                       在线玩家 · {server.playerCount ?? server.players.length}
                       <span className="ml-2 font-normal">
-                        踢出/封禁会写入待执行队列；游戏内执行尚未接入。
+                        踢出/封禁会写入执行队列，ThRei_Players 1.4.0+ 轮询后执行。
                       </span>
                     </p>
                     <div className="mt-2 divide-y">
@@ -719,7 +789,9 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                   <p className="mt-3 rounded-lg border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
                     {server.pluginState === "disabled"
                       ? "尚未接入插件，生成令牌并安装 ThRei_Players 后会显示在线玩家。"
-                      : "当前未检测到在线玩家；插件每 30 秒上报一次。"}
+                      : server.status === "hibernating"
+                        ? "服务器处于空服休眠，插件暂停上报；玩家连接后会自动唤醒。"
+                        : "当前未检测到在线玩家；插件每 30 秒上报一次。"}
                   </p>
                 )}
               </article>
@@ -941,6 +1013,15 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
                 </pre>
               </div>
               <p className="text-xs leading-relaxed text-muted-foreground">
+                多实例共用 <code className="font-mono">cfg/sourcemod/threi_players.cfg</code>{" "}
+                时，为每个实例添加一行{" "}
+                <code className="font-mono">
+                  sm_threi_instance &lt;hostport&gt; &quot;令牌&quot;
+                </code>
+                。插件按实例端口选择令牌，API 再根据唯一令牌匹配服务器；端口必须与实例实际的{" "}
+                <code className="font-mono">hostport</code> 一致。
+              </p>
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 将 <code className="font-mono">addons/sourcemod</code>{" "}
                 下的插件文件复制到游戏服务器，编辑配置后重启地图或执行
                 <code className="ml-1 font-mono">sm plugins reload ThRei_Players</code>
@@ -961,6 +1042,174 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
         </div>
       </Modal>
 
+      <Modal
+        open={communityTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCommunityTarget(null);
+          }
+        }}
+        title={communityTarget ? `设置社区组 · ${communityTarget.name}` : "设置社区组"}
+        description="选择该实例所属的社区组；服务器目录会按组筛选，选择“不分组”表示不加入任何社区组。"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setCommunityTarget(null)}>
+              取消
+            </Button>
+            <Button
+              type="submit"
+              form="server-community-form"
+              disabled={busy === `community-${communityTarget?.id}`}
+            >
+              {busy === `community-${communityTarget?.id}` ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Check />
+              )}
+              保存
+            </Button>
+          </div>
+        }
+      >
+        <form id="server-community-form" onSubmit={saveCommunity} className="space-y-4">
+          {communities.length > 0 ? (
+            <Field label="社区组" htmlFor="server-community-edit">
+              <select
+                id="server-community-edit"
+                value={communityValue}
+                onChange={(event) => setCommunityValue(event.target.value)}
+                className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+              >
+                <option value="">不分组</option>
+                {communities.map((community) => (
+                  <option key={community.id} value={community.id}>
+                    {community.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            <Alert variant="info">
+              <AlertDescription>
+                还没有可用的社区组。请先前往{" "}
+                <Link
+                  href="/admin/communities"
+                  className="font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  社区组管理
+                </Link>{" "}
+                创建社区组，再回来设置。
+              </AlertDescription>
+            </Alert>
+          )}
+          <p className="text-xs text-muted-foreground">
+            仅用于网站分组展示和筛选，不影响插件上报或服务器连接。
+          </p>
+        </form>
+      </Modal>
+
+      <Modal
+        open={rconTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRconTarget(null);
+            setRconPassword("");
+            setRconError(null);
+          }
+        }}
+        title={rconTarget ? `RCON 兜底 · ${rconTarget.name}` : "RCON 兜底"}
+        description="仅在插件的空服休眠状态上报之外做存活检测；白名单和踢封不依赖 RCON。"
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            {rconTarget?.hasRconPassword ? (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={busy === `rcon-${rconTarget.id}`}
+                onClick={() => void removeRconPassword()}
+              >
+                移除密码
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setRconTarget(null);
+                setRconPassword("");
+                setRconError(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="submit"
+              form="server-rcon-form"
+              disabled={
+                !rconTarget || rconPassword.trim().length === 0 || busy === `rcon-${rconTarget.id}`
+              }
+            >
+              {rconTarget && busy === `rcon-${rconTarget.id}` ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <Check />
+              )}
+              保存
+            </Button>
+          </div>
+        }
+      >
+        <form id="server-rcon-form" onSubmit={saveRconPassword} className="space-y-4">
+          <Alert variant="info">
+            <AlertDescription>
+              密码只写入数据库，后台不会回显，也不用于白名单或踢封。API 只会对游戏服务器发送{" "}
+              <code className="font-mono">status</code> 命令；请确保 API
+              主机能访问服务器的游戏端口（RCON 默认同端口）。
+            </AlertDescription>
+          </Alert>
+
+          {rconTarget ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">当前状态</span>
+              <RconBadge server={rconTarget} />
+              <span className="text-xs text-muted-foreground">
+                {rconTarget.hasRconPassword
+                  ? rconTarget.lastRconAt
+                    ? `最近检测 ${formatDate(rconTarget.lastRconAt)}`
+                    : "已保存，等待首次检测"
+                  : "尚未配置，空服休眠时无法自动判断存活"}
+              </span>
+            </div>
+          ) : null}
+
+          <Field label="RCON 密码（rcon_password）" htmlFor="server-rcon-password">
+            <Input
+              id="server-rcon-password"
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              value={rconPassword}
+              onChange={(event) => setRconPassword(event.target.value)}
+              placeholder={
+                rconTarget?.hasRconPassword ? "输入新密码以替换" : "输入服务器 RCON 密码"
+              }
+              required
+            />
+          </Field>
+
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            RCON 只用于空服休眠兜底：插件连续 90 秒未上报时，API 每 60 秒检测一次；连续 3
+            次失败才会标记离线。没有 RCON 时仍可正常使用白名单、踢出和封禁。
+          </p>
+
+          {rconError ? (
+            <Alert variant="destructive">
+              <AlertDescription>{rconError}</AlertDescription>
+            </Alert>
+          ) : null}
+        </form>
+      </Modal>
+
       <ConfirmDialog
         open={deleteTarget !== null}
         onOpenChange={(open) => {
@@ -976,6 +1225,18 @@ export function ServerAdminManager({ initial }: { initial: ServerAdminOverview }
         onConfirm={() => deleteTarget && void removeServer(deleteTarget)}
       />
     </div>
+  );
+}
+
+function RconBadge({ server }: { server: AdminServer }) {
+  const badge = rconBadge(server);
+  if (!badge) {
+    return null;
+  }
+  return (
+    <Tooltip label="RCON 仅用于空服休眠时的存活检测；连续 3 次失败才标记离线">
+      <Badge variant={badge.variant}>{badge.label}</Badge>
+    </Tooltip>
   );
 }
 

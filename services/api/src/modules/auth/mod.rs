@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use axum::{
     Extension, Json, Router,
@@ -11,7 +11,6 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use reqwest::Client;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
@@ -19,6 +18,8 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{config::AuthSettings, errors::AppError, state::AppState};
+
+mod steam;
 
 const STEAM_OPENID_ENDPOINT: &str = "https://steamcommunity.com/openid/login";
 const STEAM_CLAIMED_ID_PREFIX: &str = "https://steamcommunity.com/openid/id/";
@@ -76,6 +77,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/steam/login", get(steam_login))
         .route("/auth/steam/callback", get(steam_callback))
+        .route("/auth/magic", get(magic_login))
         .route("/auth/me", get(me))
         .route("/auth/logout", post(logout))
 }
@@ -236,6 +238,111 @@ async fn complete_steam_login(
     Ok((user, token))
 }
 
+/// Exchanges a single-use session token created by the `magic-link` operator
+/// binary for a normal admin session. This is an operational recovery path for
+/// deployments where Steam is temporarily unreachable; it is not a general
+/// login method.
+#[utoipa::path(
+    get,
+    path = "/api/v1/auth/magic",
+    tag = "auth",
+    responses((status = 303, description = "Set session cookie and redirect to the account page"))
+)]
+async fn magic_login(
+    State(state): State<AppState>,
+    Extension(settings): Extension<AuthSettings>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    match exchange_magic_token(&state, &settings, params.get("token").map(String::as_str)).await {
+        Ok(token) => {
+            let mut response =
+                Redirect::to(&format!("{}/account", settings.web_url)).into_response();
+            response.headers_mut().insert(
+                SET_COOKIE,
+                HeaderValue::from_str(&session_cookie(&token, &settings))
+                    .unwrap_or_else(|_| HeaderValue::from_static("")),
+            );
+            response
+                .headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "Magic login failed");
+            redirect_with_error(&settings, "magic_login_failed")
+        }
+    }
+}
+
+async fn exchange_magic_token(
+    state: &AppState,
+    settings: &AuthSettings,
+    token: Option<&str>,
+) -> Result<String, AppError> {
+    let token = token.ok_or_else(|| AppError::bad_request("missing login token"))?;
+    if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(AppError::bad_request("invalid login token"));
+    }
+
+    let mut tx = state.db.begin().await?;
+    let Some(user_id) = sqlx::query_scalar::<_, Uuid>(
+        "DELETE FROM sessions WHERE token_hash = $1 AND expires_at > now() RETURNING user_id",
+    )
+    .bind(hash_token(token))
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        return Err(AppError::bad_request("invalid or expired login token"));
+    };
+
+    let user = sqlx::query_as::<_, AuthUser>(
+        r"
+        SELECT id, steam_id64, persona_name, avatar_url, role, bio, location,
+               is_disabled, created_at, last_login_at
+        FROM users
+        WHERE id = $1
+        ",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let active_ban = sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1 FROM bans
+            WHERE steam_id64 = $1
+              AND lifted_at IS NULL
+              AND (expires_at IS NULL OR expires_at > now())
+        )
+        ",
+    )
+    .bind(&user.steam_id64)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if user.role != "admin" || user.is_disabled || active_ban {
+        tx.commit().await?;
+        return Err(AppError::Forbidden);
+    }
+
+    let new_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let expires_at = Utc::now() + ChronoDuration::days(settings.session_ttl_days);
+    sqlx::query("UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = $1")
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)")
+        .bind(hash_token(&new_token))
+        .bind(user.id)
+        .bind(expires_at)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    Ok(new_token)
+}
+
 async fn verify_openid_assertion(
     settings: &AuthSettings,
     params: &HashMap<String, String>,
@@ -247,33 +354,7 @@ async fn verify_openid_assertion(
         .collect::<Vec<_>>();
     form.push(("openid.mode".to_owned(), "check_authentication".to_owned()));
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent("ThRei/0.1 (+https://threi.example)")
-        .build()
-        .map_err(|error| {
-            AppError::internal_message(format!("failed to create Steam HTTP client: {error}"))
-        })?;
-
-    let endpoint = format!("{}/openid/login", settings.steam_community_base_url);
-    let response = client
-        .post(endpoint)
-        .form(&form)
-        .send()
-        .await
-        .map_err(|error| {
-            AppError::internal_message(format!("Steam OpenID verification failed: {error}"))
-        })?;
-
-    if !response.status().is_success() {
-        return Err(AppError::bad_request(
-            "Steam OpenID verification was rejected",
-        ));
-    }
-
-    let body = response.text().await.map_err(|error| {
-        AppError::internal_message(format!("failed to read Steam response: {error}"))
-    })?;
+    let body = steam::post_form(settings, "/openid/login", &form).await?;
     if !body.lines().any(|line| line.trim() == "is_valid:true") {
         return Err(AppError::bad_request("Steam OpenID assertion is invalid"));
     }
@@ -294,24 +375,7 @@ async fn fetch_steam_profile(
     steam_id64: &str,
 ) -> (String, Option<String>) {
     let (fallback_name, _) = steam_profile_fallback(steam_id64);
-    let Ok(client) = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent("ThRei/0.1 (+https://threi.example)")
-        .build()
-    else {
-        return (fallback_name, None);
-    };
-    let Ok(response) = client
-        .get(format!(
-            "{}/profiles/{steam_id64}?xml=1",
-            settings.steam_community_base_url
-        ))
-        .send()
-        .await
-    else {
-        return (fallback_name, None);
-    };
-    let Ok(xml) = response.text().await else {
+    let Ok(xml) = steam::get(settings, &format!("/profiles/{steam_id64}?xml=1")).await else {
         return (fallback_name, None);
     };
 
@@ -491,6 +555,7 @@ mod tests {
             steam_return_url: "https://example.com/api/v1/auth/steam/callback".to_owned(),
             steam_realm: "https://example.com".to_owned(),
             steam_community_base_url: "https://steamcommunity.com".to_owned(),
+            steam_community_ip: None,
             cookie_secure: true,
             session_ttl_days: 30,
             admin_steam_ids: Vec::new(),

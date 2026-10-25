@@ -1,0 +1,9 @@
+name = "threi-steam-relay"
+main = "steam-relay-worker.js"
+compatibility_date = "2026-10-25"
+
+# Binds the Worker to a custom domain and lets Cloudflare create the proxied
+# DNS record and certificate. Replace the domain if you deploy this elsewhere.
+routes = [
+  { pattern = "steam.threi.online", custom_domain = true }
+]

@@ -47,16 +47,62 @@
 - 论坛“新手指南”卡片的按钮改为“查看教学”，跳转 `/forum/topic/new-player-guide`。
 - 新增 `users.is_system`，官方系统账号不参与成员数、角色分布、最近注册与活跃统计。
 - 新增开发环境外部 PostgreSQL/Redis 配置说明；生产仍使用 Compose 内 PostgreSQL/Redis。
-- 新增 `ThRei_Players` SourceMod 插件（源码、已编译 `smx`、配置示例与安装文档），主动上报地图、人数上限与 SteamID64 在线玩家。
+- 新增 `ThRei_Players` SourceMod 插件（源码、已编译 `smx`、配置示例与安装文档），主动上报服务器 `hostname`、地图、人数上限与 SteamID64 在线玩家。
+- 插件上报中的 `name`（服务器 `hostname`）会自动更新服务器目录显示名称；`POST /api/v1/plugin/report` 的 `name` 字段可选，旧版插件和空名称不会覆盖现有名称。
+- 新增社区组管理：管理面板 `/admin/communities` 可创建、重命名、删除社区组，并在组内添加或移出
+  服务器实例；一个实例最多属于一个组。服务器目录显示社区组标签并支持按组筛选。
+- 新增 `server_communities` 表与 `servers.community_id` 外键，迁移
+  `20261025130000_server_communities.sql` 会把原有自由文本 `servers.community` 自动转换为社区组并回填。
+- 新增管理员接口：`GET/POST /admin/server-communities`、`PATCH/DELETE /admin/server-communities/{id}`、
+  `POST /admin/server-communities/{id}/servers`、`DELETE /admin/server-communities/{id}/servers/{serverId}`。
+- `ThRei_Players` 1.3.0 支持一主机多实例且只使用一份 `cfg/sourcemod/threi_players.cfg`：
+  每个实例写一行 `sm_threi_instance <hostport> "<令牌>"`，插件按自身 `hostport` 选择令牌；
+  上报请求可省略 `serverId`，API 根据唯一令牌定位服务器。任意有效实例行存在时不再使用
+  `sm_threi_server_id` / `sm_threi_token`；端口无匹配行时跳过上报，避免写错服务器。
+  该设计取代 1.2.0 的每端口 `threi_players_<hostport>.cfg` 方案。
+- `ThRei_Players` 1.4.0 新增白名单与服务器封禁同步：每 `sm_threi_access_interval`（默认 30 秒）
+  获取一次纯文本访问快照，在玩家连接完成时拦截，并在每次刷新后复查在线玩家。服务器未开启
+  `requires_whitelist` 时只执行封禁；临时封禁带到期时间，过期或解封后自动恢复放行。
+- 新增网站踢出/封禁执行：插件轮询 `GET /api/v1/plugin/actions`，执行后向
+  `POST /api/v1/plugin/actions/{id}/ack` 确认。解封会同时取消尚未执行的封禁指令；过期封禁不会
+  执行但会确认，避免队列反复下发。白名单、踢出和封禁都不依赖 RCON。
+- 新增 `GET /api/v1/plugin/access-snapshot`：返回 `requires_whitelist`、白名单与带到期 Unix
+  时间戳的封禁原因，使用与上报相同的每服务器令牌。
+- 新增可选的 RCON 空服存活探测：仅对插件上报已过期且管理员设置了 RCON 密码的服务器发送
+  `status`，空服标记为 `hibernating`、有玩家标记为 `online`，连续 3 次失败才标记 `offline`。
+  RCON 密码通过 `PUT/DELETE /admin/servers/{id}/rcon-password` 管理，只写不读。
+- 服务器状态新增 `hibernating`，前端状态徽章与「加入游戏」按钮支持该状态；`offline` 与
+  `hibernating` 都允许用户打开连接对话框。
+- 管理面板服务器卡片新增 RCON 配置弹窗、`RCON 兜底` / 探测失败徽章、待执行指令数，并提示
+  踢出/封禁指令已入队，由插件在一个轮询间隔内执行。
 - 新增 `POST /api/v1/plugin/report` 与每服务器插件令牌；管理面板支持生成、读取、轮换和撤销令牌。
 - 管理面板服务器卡片新增 `pluginState`（`disabled` / `waiting` / `connected`）与最近上报时间，玩家列表显示 SteamID64。
 - 新增 90 秒未上报自动离线和在线名单清理任务。
 - 新增 `STEAM_COMMUNITY_BASE_URL`：API 主机的 Steam OpenID 校验与资料查询可走
   Cloudflare Worker 中继；新增 `deploy/cloudflare/steam-relay-worker.js`。
   浏览器登录跳转不受影响，仍需客户端能访问 Steam。
+- 新增 `STEAM_COMMUNITY_IP`：API 可直连指定的 Steam 边缘 IP，使用完全限定名
+  `steamcommunity.com.` 作为 SNI 并仍按 `steamcommunity.com` 校验证书；适用于大陆主机
+  重置 `steamcommunity.com` TLS 连接的网络。资料查询失败时回退到
+  `STEAM_COMMUNITY_BASE_URL`，OpenID `check_authentication` 不重放。
+- 新增一次性管理员登录链接：`GET /api/v1/auth/magic` 与 `services/api/src/bin/magic-link.rs`。
+  运维可在 API 容器内生成 10 分钟有效、单次使用的管理员会话令牌，用于 Steam 不可用时
+  进入管理面板。令牌只保存哈希，兑换后删除。
 
 ### Changed
 
+- 管理面板“添加服务器”简化为只填 Host/IP 与端口：服务器 ID 自动生成（`srv-` + 12 位十六进制），
+  名称默认 `host:port`，地图、地区、状态等使用默认值；添加成功后自动打开「插件配置」引导生成令牌。
+  `POST /admin/servers` 仅 `host`、`port` 必填，其余字段可选，成功返回 `201 { "id": "..." }`。
+  新增可选 `communityId` 字段；`PATCH /admin/servers/{id}/community` 改为接收 `communityId`。
+  为兼容升级前已加载的页面，两个接口仍接受旧 `community` 组名并按名称匹配已有社区组。
+- `POST /api/v1/plugin/report` 的 `serverId` 改为可选：省略时按唯一插件令牌匹配服务器，
+  提供时仍须与令牌一致。新增迁移 `20261025120000_server_community.sql`。
+- 服务器目录的「加入游戏」按钮不再因 `offline` 状态禁用：离线只表示 90 秒内没有收到
+  插件上报，服务器可能仍在运行（例如空服休眠），用户仍可打开连接对话框尝试加入；
+  对话框会显示状态说明。`maintenance` 仍保持禁用并显示「维护中」。
+- 生产环境服务端 Steam 请求改为 Cloudflare Worker 中继 `steam.threi.online`
+  （`steam-relay-worker.js` + `wrangler.toml`）；直连边缘 IP 保留为备选方案。
 - 前端删除所有模拟数据模块：`features/forum/data`、`features/account/data`、`features/admin/data`。
 - 删除 12 个模拟服务器、模拟玩家头像/昵称、模拟主题/回复、模拟运营指标和未鉴权管理面板内容。
 - 删除 12 张不再使用的 KZ 地图 SVG；服务器地图图片改由数据库 `servers.map_image` 提供。
@@ -64,8 +110,15 @@
 - 管理面板重写为真实统计、角色分布、最近会员、最近主题、7 天活动和服务器节点。
 - 首页/服务器页/论坛页/分类页/主题详情页改为动态读取 API。
 - 登录 CTA 与首页/用户中心/管理面板的登录入口统一使用 Steam OpenID。
-- 服务器实时状态改为由游戏服务器插件上报；移除 API 的 A2S/RCON 轮询和 `SERVER_MONITOR_ENABLED`、`SERVER_POLL_INTERVAL_SECS`、`SERVER_QUERY_TIMEOUT_SECS`。
-- `servers.last_queried_at` 重命名为 `last_reported_at`；移除 `servers.rcon_password`、`servers.query_error`。
+- 服务器实时状态改为由游戏服务器插件上报；移除 API 的 A2S 轮询和
+  `SERVER_MONITOR_ENABLED`、`SERVER_POLL_INTERVAL_SECS`、`SERVER_QUERY_TIMEOUT_SECS`。
+  RCON 之后仅以可选的 `status` 存活探测重新引入，不提供任意命令执行。
+- `servers.last_queried_at` 重命名为 `last_reported_at`；移除旧轮询字段
+  `servers.query_error`。原 `servers.rcon_password` 被删除后，迁移
+  `20261025140000_server_access_and_hibernation.sql` 以只写凭据的形式重新加入，并新增
+  `last_rcon_at` 与 `rcon_failures`。
+- 有插件令牌但超过 90 秒未上报的服务器：未设置 RCON 密码时仍由清理任务标记 `offline`；
+  设置密码且启用 `HIBERNATION_POLL_ENABLED` 时交给 RCON 探测，不再被清理任务直接判离线。
 - `server_players` 移除匿名槽位与来源列，`steam_id64` 恢复为非空；升级后旧轮询快照会被清空，服务器保持离线直到插件首次上报。
 - 新服务器默认状态改为离线，等待插件上报后转为在线；`maintenance` 状态不会被插件覆盖。
 - Compose 增加 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM`、`COOKIE_SECURE`、`SESSION_TTL_DAYS`、`ADMIN_STEAM_IDS`。
@@ -79,10 +132,19 @@
 - 移除前端模拟数据与“预览数据”声明。
 - 移除未使用的 `apps/web/public/images/servers/*.svg`。
 - 移除模拟通知、徽章、审核队列、审计日志、系统设置等未接入真实数据的管理面板模块。
-- 移除 A2S/RCON 客户端、后台轮询任务、`POST /admin/servers/{id}/query` 与 `PUT /admin/servers/{id}/rcon-password`。
+- 移除 A2S 查询、通用 RCON 客户端、后台全量轮询任务与 `POST /admin/servers/{id}/query`。
+  1.4.0 仅重新加入只发送 `status` 的最小 RCON 存活探测和只写 RCON 密码接口，不恢复任意命令执行。
 
 ### Fixed
 
+- 修复 Source RCON 数据包大小字段错误包含 4 字节长度前缀的问题：真实服务器会等待不存在的
+  后续字节，导致存活探测超时。大小字段现只统计 id、type、body 与两个结尾 NUL，并新增会发送
+  空 `RESPONSE_VALUE` 信封的集成测试。
+- 修复无待执行指令时无效插件令牌访问 `/api/v1/plugin/actions` 返回 200 空响应的问题；
+  `actions` 与 `ack` 现在都先校验令牌，无效或缺失令牌统一返回 401。
+- 修复 `ThRei_Players` 将 `User-Agent` 作为自定义请求头导致 Steamworks
+  `SetHTTPRequestHeaderValue` 返回 false、插件始终无法上报的问题。插件改为使用 Steam 自带的
+  User-Agent，并在请求配置失败时记录具体步骤；版本升至 1.1.1。
 - 修复用户中心横幅中用户名与封面重叠、被深色背景遮挡的问题。
 - 修复服务器卡片在无地图图片时的空白封面。
 - 修复服务器延迟未知时的显示。
@@ -99,18 +161,32 @@
 
 - Steam 断言必须经过 Steam OpenID `check_authentication` 验证后才会被信任。
 - 会话令牌只保存哈希；Cookie 为 HttpOnly、SameSite=Lax，生产环境使用 Secure。
-- 插件上报使用每服务器独立令牌；令牌不出现在服务器列表、公开接口和日志中，错误令牌统一返回 401。
+- 插件上报、访问快照、指令轮询与确认均使用每服务器独立令牌；令牌不出现在服务器列表、公开接口
+  和日志中，错误令牌统一返回 401。踢出/封禁原因会压平控制字符并限制长度，防止注入协议行。
+- RCON 密码只能由管理员写入或删除，任何接口都不会返回原文，也不会写入日志；RCON 客户端只会
+  发送 `status`。白名单、踢出和封禁不经过 RCON。
 - 会话 Cookie 有效期可配置；登出删除数据库会话并清除 Cookie。
 - `/account` 需要登录，管理员 API 需要 `admin` 角色。
 - 尚未实现登录限流、CSRF、细粒度 RBAC、审核与审计；当前没有写业务接口。
 - 生产环境仍需 HTTPS；回调地址必须与公开 origin 一致。
+- magic link 是应急通道：链接等同于管理员凭证，只能通过安全渠道交给目标管理员；
+  Nginx 访问日志可能记录 `token` 查询参数。不要在生产启用 `STEAM_SKIP_OPENID_VERIFICATION`。
 
 ### Compatibility / Upgrade Notes
 
 - 新增迁移 `20261023230000_real_content_and_steam_auth.sql`、`20261023233000_seed_new_player_guide.sql`、`20261023235000_admin_moderation_whitelist.sql` 与 `20261024010000_forum_server_moderation.sql`，部署时必须先运行 `migrate`。
-- 新迁移新增 `users.is_system`、`users.is_disabled`、`servers.requires_whitelist`、`bans`、`whitelist_applications`、`server_whitelist`、`forum_mutes`、`server_bans`、`server_actions`；不会创建模拟服务器或模拟玩家。
+- 本里程碑另新增 `20261025060000_server_live_polling.sql`、`20261025070000_server_plugin_reports.sql`、
+  `20261025120000_server_community.sql`、`20261025130000_server_communities.sql` 与
+  `20261025140000_server_access_and_hibernation.sql`。最后一项扩展服务器状态约束以允许
+  `hibernating`，加入只写 `rcon_password`、`last_rcon_at`、`rcon_failures` 及长度/范围约束。
+- 升级 API 后必须同时升级 `ThRei_Players` 到 1.4.0 才能让白名单、踢出和封禁在游戏内生效；
+  旧插件仍可上报状态，但不会执行访问控制或指令。插件配置新增访问/指令轮询开关和提示文案，
+  不配置时使用默认值。RCON 密码是可选配置，不设置也能正常使用全部白名单与封禁功能。
+- 新迁移新增 `users.is_system`、`users.is_disabled`、`servers.requires_whitelist`、`bans`、`whitelist_applications`、`server_whitelist`、`forum_mutes`、`server_bans`、`server_actions`、`server_communities`；不会创建模拟服务器或模拟玩家。
 - 数据库预置 5 个论坛分类、1 个系统账号和 1 篇官方新手指南；不会创建模拟服务器、模拟玩家或模拟讨论。
 - 需要在环境变量中设置 `WEB_URL`、`STEAM_RETURN_URL`、`STEAM_REALM`；生产必须 HTTPS。
+- 大陆主机若无法直连 Steam，可设置 `STEAM_COMMUNITY_IP`（直连）或
+  `STEAM_COMMUNITY_BASE_URL`（Worker 中继），二者可只配其一。修改后需重建 API 容器。
 - 首次登录后从用户中心获取 SteamID64，再加入 `ADMIN_STEAM_IDS` 并重新登录以获得管理员角色。
 - 开发环境可使用局域网 PostgreSQL/Redis；连接信息仅保存在本地 `.env`，不得提交。
 - 如果浏览器从另一台机器访问，必须使用开发机的局域网 IP（当前为 `192.168.0.101:3100`）并让 `WEB_URL` / `STEAM_RETURN_URL` 使用同一 origin，否则 Steam 回调会指向浏览器自己的 `127.0.0.1`。

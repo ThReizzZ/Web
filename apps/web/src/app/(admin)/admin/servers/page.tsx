@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { ServerAdminManager } from "@/features/admin/components/server-admin-manager";
 import { getServerApiClient } from "@/lib/api/server";
-import { fetchAdminServers } from "@/services/content";
+import { fetchAdminCommunities, fetchAdminServers } from "@/services/content";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,9 @@ export const metadata: Metadata = {
 
 export default async function AdminServersPage() {
   const client = await getServerApiClient();
-  const overview = await fetchAdminServers(client);
-  return <ServerAdminManager initial={overview} />;
+  const [overview, communities] = await Promise.all([
+    fetchAdminServers(client),
+    fetchAdminCommunities(client),
+  ]);
+  return <ServerAdminManager initial={overview} communities={communities} />;
 }

@@ -1,4 +1,4 @@
-use std::{env, fmt::Display, str::FromStr, time::Duration};
+use std::{env, fmt::Display, net::IpAddr, str::FromStr, time::Duration};
 
 use axum::http::HeaderValue;
 use thiserror::Error;
@@ -59,6 +59,7 @@ pub struct Settings {
     pub database: DatabaseSettings,
     pub redis: RedisSettings,
     pub auth: AuthSettings,
+    pub hibernation: HibernationSettings,
     pub observability: ObservabilitySettings,
 }
 
@@ -81,6 +82,7 @@ impl Settings {
             database: DatabaseSettings::from_lookup(&lookup)?,
             redis: RedisSettings::from_lookup(&lookup, environment)?,
             auth: AuthSettings::from_lookup(&lookup, environment)?,
+            hibernation: HibernationSettings::from_lookup(&lookup)?,
             observability: ObservabilitySettings::from_lookup(&lookup, environment)?,
         })
     }
@@ -243,11 +245,17 @@ pub struct AuthSettings {
     pub web_url: String,
     pub steam_return_url: String,
     pub steam_realm: String,
-    /// Base URL used for server-side Steam Community calls (OpenID
+    /// Base URL used for server-side Steam Community calls (`OpenID`
     /// `check_authentication` and profile XML). Deployments whose API host
     /// cannot reach `steamcommunity.com` can point this at a relay. The
     /// browser login redirect is deliberately unaffected.
     pub steam_community_base_url: String,
+    /// Optional Steam edge address for direct server-side requests. When set
+    /// (and the base URL is the default Steam origin), the API sends a
+    /// fully-qualified `steamcommunity.com.` SNI to this address. Some
+    /// networks reset connections based on the exact SNI string, while Steam
+    /// serves the same certificate for the fully-qualified name.
+    pub steam_community_ip: Option<IpAddr>,
     pub cookie_secure: bool,
     pub session_ttl_days: i64,
     pub admin_steam_ids: Vec<String>,
@@ -283,6 +291,17 @@ impl AuthSettings {
             .trim_end_matches('/')
             .to_owned();
         validate_http_url("STEAM_COMMUNITY_BASE_URL", &steam_community_base_url)?;
+
+        let steam_community_ip = optional(lookup, "STEAM_COMMUNITY_IP")
+            .map(|value| {
+                value.parse::<IpAddr>().map_err(|_| {
+                    ConfigError::Invalid(
+                        "STEAM_COMMUNITY_IP",
+                        "must be an IPv4 or IPv6 address".to_owned(),
+                    )
+                })
+            })
+            .transpose()?;
 
         let session_ttl_days = number(lookup, "SESSION_TTL_DAYS", 30_i64)?;
         if session_ttl_days <= 0 || session_ttl_days > 365 {
@@ -326,6 +345,7 @@ impl AuthSettings {
             steam_return_url,
             steam_realm,
             steam_community_base_url,
+            steam_community_ip,
             cookie_secure: optional_bool(lookup, "COOKIE_SECURE")?
                 .unwrap_or(environment.is_production()),
             session_ttl_days,
@@ -349,6 +369,53 @@ fn validate_http_url(key: &'static str, value: &str) -> Result<(), ConfigError> 
         ));
     }
     Ok(())
+}
+
+/// Optional Source RCON fallback for servers that stop reporting while empty
+/// and hibernating. RCON is never required for whitelist or moderation; those
+/// run through the plugin's authenticated HTTP channel.
+#[derive(Clone)]
+pub struct HibernationSettings {
+    pub enabled: bool,
+    pub scan_interval: Duration,
+    pub poll_interval: Duration,
+    pub stale_after: Duration,
+    pub rcon_timeout: Duration,
+}
+
+impl HibernationSettings {
+    fn from_lookup<F>(lookup: &F) -> Result<Self, ConfigError>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let enabled = optional_bool(lookup, "HIBERNATION_POLL_ENABLED")?.unwrap_or(true);
+        let scan_interval_secs = number(lookup, "HIBERNATION_POLL_SCAN_INTERVAL_SECS", 30_u64)?;
+        let poll_interval_secs = number(lookup, "HIBERNATION_POLL_INTERVAL_SECS", 60_u64)?;
+        let stale_after_secs = number(lookup, "HIBERNATION_POLL_AFTER_SECS", 90_u64)?;
+        let rcon_timeout_secs = number(lookup, "HIBERNATION_RCON_TIMEOUT_SECS", 5_u64)?;
+
+        for (key, value) in [
+            ("HIBERNATION_POLL_SCAN_INTERVAL_SECS", scan_interval_secs),
+            ("HIBERNATION_POLL_INTERVAL_SECS", poll_interval_secs),
+            ("HIBERNATION_POLL_AFTER_SECS", stale_after_secs),
+            ("HIBERNATION_RCON_TIMEOUT_SECS", rcon_timeout_secs),
+        ] {
+            if value == 0 || value > 3600 {
+                return Err(ConfigError::Invalid(
+                    key,
+                    "must be between 1 and 3600 seconds".to_owned(),
+                ));
+            }
+        }
+
+        Ok(Self {
+            enabled,
+            scan_interval: Duration::from_secs(scan_interval_secs),
+            poll_interval: Duration::from_secs(poll_interval_secs),
+            stale_after: Duration::from_secs(stale_after_secs),
+            rcon_timeout: Duration::from_secs(rcon_timeout_secs),
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -488,6 +555,11 @@ mod tests {
         assert_eq!(settings.auth.session_ttl_days, 30);
         assert!(!settings.auth.cookie_secure);
         assert!(!settings.auth.steam_skip_openid_verification);
+        assert!(settings.hibernation.enabled);
+        assert_eq!(settings.hibernation.scan_interval.as_secs(), 30);
+        assert_eq!(settings.hibernation.poll_interval.as_secs(), 60);
+        assert_eq!(settings.hibernation.stale_after.as_secs(), 90);
+        assert_eq!(settings.hibernation.rcon_timeout.as_secs(), 5);
     }
 
     #[test]
@@ -503,6 +575,30 @@ mod tests {
             settings.auth.steam_community_base_url,
             "https://steam.example"
         );
+    }
+
+    #[test]
+    fn steam_community_ip_is_validated() {
+        let settings = load(&[
+            ("APP_ENV", "development"),
+            ("DATABASE_URL", DATABASE_URL),
+            ("STEAM_COMMUNITY_IP", "23.15.140.216"),
+        ])
+        .expect("direct Steam IP should be valid");
+
+        assert_eq!(
+            settings.auth.steam_community_ip,
+            Some("23.15.140.216".parse().expect("valid IP"))
+        );
+
+        assert!(matches!(
+            load(&[
+                ("APP_ENV", "development"),
+                ("DATABASE_URL", DATABASE_URL),
+                ("STEAM_COMMUNITY_IP", "steamcommunity.com"),
+            ]),
+            Err(ConfigError::Invalid("STEAM_COMMUNITY_IP", _))
+        ));
     }
 
     #[test]

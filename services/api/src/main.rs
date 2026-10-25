@@ -52,7 +52,14 @@ async fn run(settings: Settings) -> Result<(), Box<dyn Error + Send + Sync>> {
         settings.redis.required,
         settings.environment.as_str(),
     );
-    threi_api::modules::server_plugin::spawn_stale_sweeper(state.db.clone());
+    threi_api::modules::server_plugin::spawn_stale_sweeper(
+        state.db.clone(),
+        settings.hibernation.enabled,
+    );
+    threi_api::modules::server_hibernation::spawn_hibernation_poller(
+        state.db.clone(),
+        settings.hibernation.clone(),
+    );
     let router = app::build_router(state, &settings);
 
     let listener = TcpListener::bind((settings.http.host.as_str(), settings.http.port)).await?;

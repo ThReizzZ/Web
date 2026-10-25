@@ -12,6 +12,15 @@ export function ServerStatusBadge({ status }: { status: ServerStatus }) {
     );
   }
 
+  if (status === "hibernating") {
+    return (
+      <Badge variant="warning">
+        <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />
+        休眠/待上报
+      </Badge>
+    );
+  }
+
   if (status === "offline") {
     return (
       <Badge variant="muted">

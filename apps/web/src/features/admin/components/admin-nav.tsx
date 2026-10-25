@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   Ban,
   ClipboardCheck,
+  FolderTree,
   LayoutDashboard,
   MessageSquareText,
   Server,
@@ -18,6 +19,7 @@ const adminNav = [
   { label: "管理员", href: "/admin/admins", icon: UserCog },
   { label: "论坛管理", href: "/admin/forum", icon: MessageSquareText },
   { label: "服务器管理", href: "/admin/servers", icon: Server },
+  { label: "社区组", href: "/admin/communities", icon: FolderTree },
   { label: "封禁管理", href: "/admin/bans", icon: Ban },
   { label: "白名单审核", href: "/admin/whitelist", icon: ClipboardCheck },
 ] as const;

@@ -172,6 +172,8 @@ export interface AdminServer {
   name: string;
   map: string;
   description: string;
+  communityId: string | null;
+  community: string;
   status: string;
   host: string;
   port: number;
@@ -187,7 +189,36 @@ export interface AdminServer {
   playerCount: number | null;
   lastReportedAt: string | null;
   pluginState: "disabled" | "waiting" | "connected";
+  hasRconPassword: boolean;
+  lastRconAt: string | null;
+  rconFailures: number;
+  pendingActions: number;
   players: AdminServerPlayer[];
+}
+
+export interface AdminCommunityServer {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  status: string;
+  isActive: boolean;
+  playerCount: number | null;
+  maxPlayers: number;
+  pluginState: "disabled" | "waiting" | "connected";
+}
+
+export interface AdminCommunity {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+  servers: AdminCommunityServer[];
+}
+
+export interface AdminCommunityOverview {
+  communities: AdminCommunity[];
 }
 
 export interface AdminServerPlayer {

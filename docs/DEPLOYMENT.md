@@ -36,6 +36,11 @@ cp .env.example .env
 | `COOKIE_SECURE` | HTTPS 生产环境保持 `true`；仅本地 HTTP 调试设为 `false` |
 | `SESSION_TTL_DAYS` | 会话有效期，默认 30 天，范围 1–365 |
 | `ADMIN_STEAM_IDS` | 管理员 SteamID64，逗号分隔；空值表示没有管理员 |
+| `HIBERNATION_POLL_ENABLED` | 可选的 RCON 空服存活探测，默认 `true`；白名单、踢出和封禁不依赖它 |
+| `HIBERNATION_POLL_SCAN_INTERVAL_SECS` | 扫描插件上报已过期服务器的间隔，默认 30 秒，范围 1–3600 |
+| `HIBERNATION_POLL_INTERVAL_SECS` | 同一服务器两次 RCON 探测的最小间隔，默认 60 秒 |
+| `HIBERNATION_POLL_AFTER_SECS` | 插件上报超过该秒数才允许 RCON 探测，默认 90 秒 |
+| `HIBERNATION_RCON_TIMEOUT_SECS` | 单次 RCON `status` 查询的总超时，默认 5 秒 |
 | `SERVER_NAME` | Nginx server_name，如 `community.example.com` |
 | `HTTP_BIND` | 默认 `127.0.0.1`；公网部署改为 `0.0.0.0` 并配置防火墙 |
 | `HTTP_PORT` | 默认 `80`；若前置了其他 TLS 代理可改为 `8080` |
@@ -253,39 +258,146 @@ location /admin {
 
 ### Steam 登录网络限制
 
-API 主机必须能访问 `steamcommunity.com` 才能完成 OpenID `check_authentication` 和资料 XML 查询。如果服务器所在网络无法直连 Steam（例如中国大陆主机），可以让服务端请求走 Cloudflare Worker 中继：
+API 主机必须能访问 `steamcommunity.com` 才能完成 OpenID `check_authentication` 和资料 XML 查询。如果服务器所在网络会重置该域名的 TLS 连接（例如中国大陆主机），可以任选一种方式。
+
+#### 方式一：直连 Steam 边缘 IP
+
+查询一个可用的 Steam 边缘 IPv4：
+
+```bash
+curl -sS -H 'accept: application/dns-json' \
+  'https://doh.pub/dns-query?name=steamcommunity.com&type=A'
+```
+
+在 API 主机上验证该 IP（SNI 使用完全限定名 `steamcommunity.com.`，证书仍按 `steamcommunity.com` 校验）：
+
+```bash
+printf 'GET /profiles/76561199125125759?xml=1 HTTP/1.1\r\nHost: steamcommunity.com\r\nConnection: close\r\n\r\n' \
+  | openssl s_client -quiet -connect <IP>:443 -servername steamcommunity.com. \
+      -verify_hostname steamcommunity.com -verify_return_error
+```
+
+返回 `HTTP/1.1 200 OK` 和资料 XML 后，在 `.env` 设置：
+
+```dotenv
+STEAM_COMMUNITY_BASE_URL=https://steamcommunity.com
+STEAM_COMMUNITY_IP=<IP>
+```
+
+然后重建 API：
+
+```bash
+docker compose up -d --no-deps --force-recreate api
+```
+
+API 会优先使用该 IP 直连；资料查询失败时回退到 `STEAM_COMMUNITY_BASE_URL`。OpenID `check_authentication` 是一次性断言，失败后不会自动重放，重新登录即可。Steam/Akamai 轮换 IP 后登录可能重新失败，此时重新查询并更新 `.env`。
+
+#### 方式二：Cloudflare Worker 中继
+
+> 本项目生产环境（`threi.cn`）当前使用本方式：Worker `threi-steam-relay` 绑定
+> `steam.threi.online`，服务器与 API 容器均已验证可访问。仓库内
+> `deploy/cloudflare/wrangler.toml` 可用 `npx wrangler deploy` 一键部署。
 
 1. 按 [deploy/cloudflare/README.md](../deploy/cloudflare/README.md) 部署 Worker 到
    `steam.threi.online`；
-2. 在 `.env` 设置 `STEAM_COMMUNITY_BASE_URL=https://steam.threi.online`；
+2. 在 `.env` 设置 `STEAM_COMMUNITY_BASE_URL=https://steam.threi.online`（留空或不要设置 `STEAM_COMMUNITY_IP`）；
 3. `docker compose up -d --no-deps --force-recreate api`。
 
-Worker 只代理服务端校验，**不会**让浏览器登录页变得可访问。用户浏览器仍需能打开 `steamcommunity.com`（例如使用代理/VPN）；否则登录会在跳转 Steam 时失败。不要在生产环境使用 `STEAM_SKIP_OPENID_VERIFICATION`。
+Worker 只代理服务端校验，**不会**让浏览器登录页变得可访问。用户浏览器仍需能打开 `steamcommunity.com`（例如开启 Steam 社区加速器、代理或 VPN）；否则登录会在跳转 Steam 时失败。不要在生产环境使用 `STEAM_SKIP_OPENID_VERIFICATION`。
+
+### 应急管理员登录（magic link）
+
+当 Steam 暂时不可用、但需要进入管理面板时，服务器运维可以在 API 容器内生成一次性管理员登录链接：
+
+```bash
+cd /home/web/threi
+docker compose exec api /app/magic-link --steam-id 76561199125125759
+```
+
+- 链接 10 分钟内有效且只能使用一次；打开后会把一次性令牌换成正常会话并跳转 `/account`。
+- 用户不存在时会创建为管理员；已存在的普通成员需要加 `--promote`；已禁用账号会被拒绝。
+- 链接本身是管理员凭证，不要通过聊天或工单传播；Nginx 访问日志可能记录查询字符串。
+- 这是应急通道，不替代 Steam 登录。
 
 ### 游戏服务器状态与玩家
 
-API 不再轮询 A2S/RCON。每个游戏服务器需要安装 `plugins/ThRei_Players/` 中的 SourceMod 插件：
+API 不再进行 A2S 轮询，也不会向游戏服务器发送任意 RCON 指令。每个游戏服务器需要安装
+`plugins/ThRei_Players/` 中的 SourceMod 插件（当前 `1.4.0`）：
 
 1. 游戏服务器安装 SourceMod 1.11+ 与 SteamWorks 扩展；
-2. 在管理面板添加服务器，打开「插件配置」生成令牌；
-3. 将 `addons/sourcemod/plugins/ThRei_Players.smx` 复制到游戏服务器，填写 `cfg/sourcemod/threi_players.cfg`：
+2. 在管理面板点击「添加服务器」，只需填写游戏服务器的 Host / IP 与端口；服务器 ID 自动生成，添加成功后自动打开「插件配置」。服务器名称、地图和在线人数会在插件首次上报后自动更新；
+3. 点击「生成令牌」，复制弹窗中的 `sm_threi_instance <端口> "<令牌>"` 配置行（不需要复制服务器 ID）；
+4. 将 `addons/sourcemod/plugins/ThRei_Players.smx` 复制到游戏服务器，把配置写入 `cfg/sourcemod/threi_players.cfg`（多实例见下方说明）：
 
 ```cfg
 sm_threi_players_enabled "1"
 sm_threi_api_url "https://community.example.com/api/v1/plugin/report"
-sm_threi_server_id "kz-beginner"
-sm_threi_token "<管理面板生成的令牌>"
 sm_threi_interval "30"
+sm_threi_instance 27015 "<管理面板生成的令牌>"
+
+// 白名单与封禁同步、网站踢出/封禁指令（不需要 RCON）
+sm_threi_access_enabled "1"
+sm_threi_access_fail_open "1"
+sm_threi_access_interval "30"
+sm_threi_actions_enabled "1"
+sm_threi_actions_interval "15"
 ```
 
-4. 执行 `sm plugins load ThRei_Players`（或重载地图），然后用 `sm_threi_report` 立即上报；
-5. 管理面板应显示「插件已连接」，网站服务器目录出现在线玩家。
+5. 执行 `sm plugins load ThRei_Players`（或重载地图），然后用 `sm_threi_report` 立即上报；
+6. 管理面板应显示「插件已连接」，网站服务器目录出现在线玩家。`sm_threi_status` 会显示访问快照
+   是否加载、白名单/封禁条目数与待确认指令数，不会输出令牌。
+
+**一台主机运行多个实例：** 所有实例共用同一份 `cfg/sourcemod/threi_players.cfg`，为每个实例
+添加一行 `sm_threi_instance <hostport> "<该实例的令牌>"`：
+
+```cfg
+sm_threi_players_enabled "1"
+sm_threi_api_url "https://community.example.com/api/v1/plugin/report"
+sm_threi_interval "30"
+sm_threi_instance 10001 "<实例 10001 的令牌>"
+sm_threi_instance 10002 "<实例 10002 的令牌>"
+```
+
+插件读取自身 `hostport`（缺失时回退 `port`），只使用端口匹配那一行的令牌。上报请求可以不带
+`serverId`，API 根据唯一令牌定位服务器。配置中只要出现任意一行有效 `sm_threi_instance`，
+`sm_threi_server_id` / `sm_threi_token` 就不再生效；端口没有匹配行时插件记录错误并跳过上报，
+避免把数据写入错误的服务器。`sm_threi_status` 会显示 `hostport` 与 `instance=matched`。
+仍兼容三参数形式 `sm_threi_instance <端口> <服务器ID> <令牌>`。
+
+**社区组：** 在管理面板「社区组」页面先创建社区组，再点击组内「添加实例」把同一主机的多个
+实例加入；也可以在「服务器管理」的添加服务器弹窗中直接选择社区组。一个实例只能属于一个组，
+服务器目录会显示社区组标签并支持按组筛选。删除社区组不会删除服务器，只会让实例变为未分组。
 
 游戏服务器必须能访问 `sm_threi_api_url`。生产环境应使用 HTTPS，因为令牌通过 HTTP 头传输。插件令牌按服务器隔离；重新生成或撤销后旧令牌立即失效。超过 90 秒没有上报会自动显示离线。完整说明见 [../plugins/ThRei_Players/README.md](../plugins/ThRei_Players/README.md)。
 
 ### 封禁与白名单
 
-管理面板已提供封禁/解封与白名单审核。封禁会阻止网站登录并撤销会话。`ThRei_Players` 只上报状态和玩家，不执行踢出/封禁/白名单拦截；这些**游戏内操作**仍需后续插件消费 `server_actions`、`server_bans` 和 `server_whitelist`。API 仅负责管理数据和审核流程。
+管理面板提供白名单审核、移除授权、服务器封禁/解封，以及在线玩家的踢出/封禁。这些游戏内操作
+由 `ThRei_Players` 1.4.0+ 通过带每服务器令牌的 HTTP 通道执行，**不需要 RCON**：
+
+- 插件每 30 秒（`sm_threi_access_interval`）获取一次纯文本访问快照。服务器开启
+  `requires_whitelist` 时，不在白名单的玩家会在连接完成时被踢出；封禁始终生效，并支持临时封禁
+  到期。审核通过、移除授权、新增封禁或解封最长在一个刷新间隔内同步到游戏服务器。
+- 插件每 15 秒（`sm_threi_actions_interval`）轮询网站下发的踢出/封禁指令。执行后调用确认接口，
+  API 记录 `processed_at`；确认失败会在下次轮询重试。目标已离线时踢出无额外动作，封禁仍写入
+  插件本地缓存，阻止其重新连接。
+- 解封会同时取消尚未执行的封禁指令，避免解封后旧指令再次踢人。
+- 网站后台的 `pendingActions` 表示尚未被插件确认的指令数。管理面板会提示指令已入队，插件执行
+  存在一个轮询间隔的延迟。
+- 插件缓存最后一次成功加载的访问规则。API 暂时不可达时不会因为一次网络失败突然放行或踢出
+  所有人；首次快照加载前是否放行由 `sm_threi_access_fail_open` 控制（默认放行）。
+- 令牌错误、撤销或缺失时，访问快照和指令接口返回 `401`，插件保留旧快照并记录日志。
+
+**可选的 RCON 空服探测：** CS:GO 的 `sv_hibernate_when_empty` 会在空服时暂停 SourceMod 定时器，
+插件因此停止上报。若在管理面板「服务器管理 → RCON」为实例保存 RCON 密码，API 会在插件上报过期
+后只发送 `status` 命令：空服标记 `hibernating`，有玩家标记 `online`，连续 3 次失败才标记
+`offline`。RCON 密码只写不读，不出现在任何 API 响应或日志中；删除密码会把 `hibernating`
+恢复为 `offline`。RCON 不是白名单、踢出或封禁的前置条件，未配置 RCON 的服务器一切照常工作。
+
+网站账号封禁（`bans`）与服务器封禁（`server_bans`）相互独立：前者阻止 Steam 登录并撤销会话，
+后者只影响对应游戏服务器。完整协议与排错见
+[../plugins/ThRei_Players/README.md](../plugins/ThRei_Players/README.md) 和
+[API.md](API.md)。
 
 ## 9. 备份与恢复
 
@@ -399,7 +511,11 @@ curl -fsS http://127.0.0.1/api/v1/system/info
 - [ ] `docker compose ps` 所有服务 healthy（`migrate` 为 exited 0）
 - [ ] API/Web 健康检查通过
 - [ ] `ADMIN_STEAM_IDS` 已配置，管理面板与管理员 API 验证通过
-- [ ] 每个游戏服务器已安装 `ThRei_Players`，后台显示「插件已连接」，令牌未写入 Git
+- [ ] 每个游戏服务器已安装 `ThRei_Players` 1.4.0+，后台显示「插件已连接」，令牌未写入 Git
+- [ ] 一主机多实例时，所有实例共用一份 `threi_players.cfg`，每个实例都有匹配 `hostport` 的 `sm_threi_instance` 行，后台各自显示「插件已连接」
+- [ ] 已在「社区组」页面创建社区组并加入同一主机的多个实例，服务器目录按组显示正常
+- [ ] 白名单拦截与网站踢出/封禁已在一个轮询间隔内验证生效，并确认没有配置 RCON 也能执行
+- [ ] 如启用 RCON 空服探测，已设置密码、验证 `hibernating` 状态，且 API 可访问对应 RCON 端口；密码未写入日志或 Git
 - [ ] HTTPS 证书有效，HSTS 仅在验证后启用
 - [ ] 日志中无密钥、Cookie 或连接串
 - [ ] 已阅读并遵守 `docs/DEVELOPMENT.md` 的日志规则

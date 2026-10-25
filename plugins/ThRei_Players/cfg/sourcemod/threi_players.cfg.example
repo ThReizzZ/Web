@@ -3,6 +3,11 @@
 // Copy the values into cfg/sourcemod/threi_players.cfg on the game server.
 // The plugin creates that file automatically on first load; edit the values
 // generated there instead of replacing the whole file if you prefer.
+//
+// Multiple instances sharing one cfg/sourcemod directory: add one
+// sm_threi_instance line per instance. The plugin reads the line whose port
+// equals the instance's hostport; the API resolves the server from the unique
+// token, so server ids do not need to be copied into the config.
 
 // Enable reporting to threi. 1 = enabled, 0 = disabled.
 sm_threi_players_enabled "1"
@@ -11,12 +16,38 @@ sm_threi_players_enabled "1"
 // Use HTTPS in production so the plugin token is not sent in clear text.
 sm_threi_api_url "https://example.com/api/v1/plugin/report"
 
-// Server ID shown in the threi admin panel.
-sm_threi_server_id "kz-beginner"
-
-// Per-server token generated in the admin panel. Keep this secret.
-sm_threi_token "REPLACE_WITH_PLUGIN_TOKEN"
+// One line per instance: sm_threi_instance <hostport> <token>
+// Ports must match each server's actual hostport.
+sm_threi_instance 27015 "REPLACE_WITH_TOKEN_FOR_PORT_27015"
+// sm_threi_instance 27016 "REPLACE_WITH_TOKEN_FOR_PORT_27016"
 
 // Seconds between reports, 5-600. Player joins, disconnects and map changes
 // also trigger reports.
 sm_threi_interval "30"
+
+// Whitelist and ban enforcement. 1 = enabled, 0 = disabled.
+sm_threi_access_enabled "1"
+
+// Allow connections until the first access snapshot has loaded successfully.
+// Once a snapshot is loaded, whitelist and ban rules are always enforced.
+sm_threi_access_fail_open "1"
+
+// Seconds between access snapshot refreshes, 10-600.
+sm_threi_access_interval "30"
+
+// Website kick/ban action polling. 1 = enabled, 0 = disabled.
+sm_threi_actions_enabled "1"
+
+// Seconds between action polls, 5-600.
+sm_threi_actions_interval "15"
+
+// Kick message shown to a player who is not on the whitelist.
+sm_threi_whitelist_kick_message "该服务器需要白名单。请在 threi.cn 提交申请后重试。"
+
+// Base kick message for banned players; the specific reason is appended.
+sm_threi_ban_kick_message "你已被该服务器封禁。"
+
+// Single-instance alternative (used only when no sm_threi_instance lines are
+// present anywhere in the file):
+// sm_threi_server_id "srv-1a2b3c4d5e6f"
+// sm_threi_token "REPLACE_WITH_PLUGIN_TOKEN"

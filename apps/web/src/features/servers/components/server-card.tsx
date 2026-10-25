@@ -43,6 +43,14 @@ export function ServerCard({
             <Badge variant="secondary" className="bg-white/15 text-white backdrop-blur">
               KZ
             </Badge>
+            {server.community ? (
+              <Badge
+                variant="secondary"
+                className="max-w-[12rem] truncate bg-white/15 text-white backdrop-blur"
+              >
+                {server.community}
+              </Badge>
+            ) : null}
             {server.requiresWhitelist ? (
               <Badge variant="warning" className="bg-amber-400/20 text-amber-100 backdrop-blur">
                 白名单

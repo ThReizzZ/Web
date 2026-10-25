@@ -232,7 +232,8 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
           <p className="text-sm font-medium text-primary">白名单</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">白名单审核</h1>
           <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            管理需要白名单的服务器、审核玩家申请并维护已授权名单。实际服务器拦截由游戏服务器插件读取白名单数据。
+            管理需要白名单的服务器、审核玩家申请并维护已授权名单。ThRei_Players 1.4.0+ 会每 30
+            秒同步名单，并在玩家连接时校验；未通过者会被踢出。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -368,7 +369,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                   服务器白名单设置
                 </h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  开启后，未授权玩家需要先提交申请；服务器插件应在连接前检查白名单表。
+                  开启后，未授权玩家会被插件踢出；审核通过后最多 30 秒同步到游戏服务器。
                 </p>
               </div>
             </div>
@@ -491,7 +492,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
           <form id="whitelist-add-form" onSubmit={addEntry} className="grid gap-4 md:grid-cols-2">
             <Alert variant="info" className="md:col-span-2">
               <AlertDescription>
-                白名单写入后，需由游戏服务器插件在连接前读取并执行拦截。
+                白名单写入后会由 ThRei_Players 1.4.0+ 在 30 秒内同步，并在玩家连接时执行拦截。
               </AlertDescription>
             </Alert>
             <div className="space-y-1.5">
@@ -534,7 +535,8 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
             </div>
           </form>
           <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-            已授权：{whitelisted.size} 条。服务器插件接入后，连接时按 SteamID64 校验这里的记录。
+            已授权：{whitelisted.size} 条。ThRei_Players 1.4.0+ 每 30 秒同步，连接时按 SteamID64
+            校验这里的记录。
           </p>
         </Modal>
 

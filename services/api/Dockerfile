@@ -24,16 +24,16 @@ RUN mkdir -p src/bin \
     && rm -rf src
 
 COPY src ./src
-RUN touch src/main.rs src/lib.rs src/bin/migrate.rs \
+RUN touch src/main.rs src/lib.rs src/bin/migrate.rs src/bin/magic-link.rs \
     && cargo build --release --locked --bins
 
 # ---------------------------------------------------------------------------
-# Runtime stage — Debian slim, non-root, two binaries (API + migrator).
+# Runtime stage — Debian slim, non-root, three binaries (API + migrator + ops).
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tini \
+    && apt-get install -y --no-install-recommends ca-certificates curl openssl tini \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app
@@ -42,6 +42,7 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/threi-api /app/threi-api
 COPY --from=builder /app/target/release/migrate /app/migrate
+COPY --from=builder /app/target/release/magic-link /app/magic-link
 
 USER 10001:10001
 EXPOSE 8080

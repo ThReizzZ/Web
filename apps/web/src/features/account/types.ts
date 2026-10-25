@@ -22,7 +22,7 @@ export interface FavoriteServer {
   id: string;
   name: string;
   map: string;
-  status: "online" | "maintenance" | "offline";
+  status: "online" | "maintenance" | "offline" | "hibernating";
   onlinePlayers: number;
   maxPlayers: number;
   mapImage: string;

@@ -17,7 +17,7 @@ ThRei 是一个长期运营的 CS:GO KZ 社区系统，统一承载官网、服�
 
 当前已实现 Steam OpenID 登录、数据库会话、真实业务表、服务器/论坛/社区/用户中心/管理统计的只读 API、管理面板的服务端角色校验，以及由 `ThRei_Players` SourceMod 插件主动上报的服务器状态与玩家名单。前端不再使用模拟数据。
 
-尚未实现：论坛发帖/回复、资料与收藏写接口、插件对踢出/封禁/白名单指令的游戏内执行、审核/审计写流程、登录限流与 CSRF 令牌、CI 和自动化部署验证。相关能力在本文中明确标记为“规划”。
+尚未实现：论坛发帖/回复、资料与收藏写接口、审核/审计写流程、登录限流与 CSRF 令牌、CI 和自动化部署验证。相关能力在本文中明确标记为“规划”。
 
 ## 2. 技术选型
 
@@ -63,7 +63,7 @@ Game server (SourceMod + ThRei_Players)
 - **PostgreSQL**：权威数据源，只能由 API 访问。
 - **Redis**：缓存和临时状态（未来：限流、会话索引等），不是系统记录。
 - **Nginx**：公开入口、TLS 终止预留、路径转发、请求 ID 注入、隐藏内部健康检查。
-- **游戏服务器插件**：只主动上报状态与已认证玩家，不接收 API 的连接；令牌按服务器隔离。
+- **游戏服务器插件**：主动上报状态与已认证玩家，并通过同一令牌通道同步白名单、封禁与踢出/封禁指令；API 不主动连接插件。可选 RCON 仅用于空服休眠存活探测。
 
 ## 4. Monorepo 结构
 
@@ -145,7 +145,7 @@ Steam 是唯一登录方式：
 - 顶部导航在未登录时显示“使用Steam登录”，链接到 `/api/v1/auth/steam/login`。
 - “管理面板”入口只在当前用户角色为 `admin` 时加入顶部导航；匿名用户和普通成员不渲染该入口，页脚也不展示管理员入口。
 - `(admin)` layout 在服务端再次读取会话：匿名访问重定向到 `/account`，非管理员重定向到首页，只有管理员渲染管理面板。
-- 管理面板页面：`/admin` 运营概览、`/admin/admins` 管理员管理、`/admin/forum` 论坛管理、`/admin/servers` 服务器管理、`/admin/bans` 封禁管理、`/admin/whitelist` 白名单审核；共享服务端角色门禁与响应式侧边导航。服务状态入口已移除，其信息由运营概览覆盖。
+- 管理面板页面：`/admin` 运营概览、`/admin/admins` 管理员管理、`/admin/forum` 论坛管理、`/admin/servers` 服务器管理、`/admin/communities` 社区组管理、`/admin/bans` 封禁管理、`/admin/whitelist` 白名单审核；共享服务端角色门禁与响应式侧边导航。服务状态入口已移除，其信息由运营概览覆盖。
 - API 跳转 Steam OpenID；Steam 回调到 `${WEB_URL}/api/v1/auth/steam/callback`。
 - API 向 Steam 校验断言，记录/更新 `users`，生成随机会话令牌；数据库只保存令牌的 SHA-256 哈希，浏览器收到 HttpOnly Cookie。
 - 服务端请求通过 `getServerApiClient()` 转发 Cookie；`/auth/me` 决定导航显示登录按钮还是用户头像。
@@ -186,7 +186,7 @@ src/modules/                auth / servers / forum / community / account / admin
 src/bin/migrate.rs          独立迁移二进制
 ```
 
-已实现模块：`auth`（Steam OpenID、会话、用户）、`servers`（目录、在线玩家与白名单标记）、`server_plugin`（插件上报、令牌校验、在线名单替换与过期清理）、`server_admin`（服务器增删、插件令牌、玩家操作）、`forum`（分类/主题/回复读取）、`forum_admin`（内容编辑/删除/恢复与用户禁言）、`community`（统计）、`account`（当前用户概览）、`admin`（运营统计）、`admin_users`（管理员增删/禁用）、`bans`（封禁/解封）、`whitelist`（申请审核与服务器白名单）。每个模块目前按职责分文件；后续写接口继续沿用以下结构：
+已实现模块：`auth`（Steam OpenID、会话、用户）、`servers`（目录、在线玩家与白名单标记）、`server_plugin`（插件上报、令牌校验、在线名单替换与过期清理）、`plugin_access`（白名单/封禁快照与踢出/封禁指令队列）、`server_hibernation`（可选 RCON 空服存活探测）、`server_admin`（服务器增删、插件令牌、RCON 密码、玩家操作）、`server_communities`（社区组 CRUD 与实例成员关系）、`forum`（分类/主题/回复读取）、`forum_admin`（内容编辑/删除/恢复与用户禁言）、`community`（统计）、`account`（当前用户概览）、`admin`（运营统计）、`admin_users`（管理员增删/禁用）、`bans`（封禁/解封）、`whitelist`（申请审核与服务器白名单）。每个模块目前按职责分文件；后续写接口继续沿用以下结构：
 
 ```text
 modules/<name>/
@@ -290,13 +290,16 @@ modules/<name>/
 ### 6.6 插件上报与在线状态
 
 - **上报方向**：游戏服务器上的 `ThRei_Players` 通过 SteamWorks 的 HTTP 客户端调用 `POST /api/v1/plugin/report`。API 不主动连接游戏服务器，不需要开放 A2S 端口或保存 RCON 密码。
-- **认证**：每个服务器有独立的 32 位十六进制令牌，保存在 `servers.plugin_token`，通过 `X-ThRei-Plugin-Token` 请求头提交。令牌只在管理员读取/生成接口中返回，不出现在服务器列表、公开接口或日志中。缺失、错误、服务器不存在或 `serverId` 不匹配统一返回 `401`。
+- **认证**：每个服务器有独立的 32 位十六进制令牌，保存在 `servers.plugin_token`，通过 `X-ThRei-Plugin-Token` 请求头提交。令牌只在管理员读取/生成接口中返回，不出现在服务器列表、公开接口或日志中。请求体 `serverId` 可选：省略时按唯一令牌定位服务器，提供时必须与令牌一致；缺失、错误、服务器不存在或不匹配统一返回 `401`。
+- **多实例**：同一主机上的多个实例共用一份 `cfg/sourcemod/threi_players.cfg`，每个实例写一行 `sm_threi_instance <hostport> "<token>"`，插件按自身端口选择令牌并以令牌上报；管理员通过 `server_communities` 社区组把同一主机的实例归在一起，服务器目录显示组名并支持筛选。
 - **输入校验**：`serverId` 最多 80 字符；地图最多 128 字符；`maxPlayers` 为 1–1024；最多 1024 名玩家；SteamID64 必须是 17 位数字；昵称截断到 80 字符；连接秒数限制在 0–2592000。无效或重复玩家记入 `skipped`，不会让整次上报失败。
 - **写入**：在单个事务中更新服务器快照（状态、地图、人数上限、人数、`last_reported_at`），删除本次不再出现的 `server_players`，并 upsert 当前玩家；upsert 保留已有 `connected_at`。`maintenance` 状态不会被上报改为 `online`。
-- **过期清理**：后台任务每 30 秒扫描一次；插件管理的服务器超过 90 秒未上报时，状态改为 `offline`、人数清零、延迟清空、删除在线名单，`maintenance` 保持不变。
+- **过期清理**：后台任务每 30 秒扫描一次；没有 RCON 兜底的插件服务器超过 90 秒未上报时，状态改为 `offline`、人数清零、延迟清空、删除在线名单，`maintenance` 保持不变。启用 RCON 兜底且服务器有密码时，清理任务跳过该服务器，交给休眠探测任务判断。
 - **管理状态**：`pluginState` 由 `plugin_token` 与 `last_reported_at` 派生：`disabled`（无令牌）、`waiting`（有令牌但没有最近上报）、`connected`（90 秒内有上报）。
 - **令牌生命周期**：生成/轮换会清空在线快照并标记离线；撤销令牌执行同样的清理。旧令牌立即失效。
-- **边界**：插件只上报状态和名单，不轮询踢出/封禁/白名单指令。`server_actions` 的游戏内执行仍未实现。
+- **访问控制**：`GET /api/v1/plugin/access-snapshot` 返回纯文本 `server`、`requires_whitelist`、`whitelist` 与带过期时间的 `ban` 行；插件每 30 秒缓存一次，在 `OnClientPostAdminCheck` 与快照刷新时检查在线玩家。白名单仅在服务器开启 `requires_whitelist` 时拦截，封禁始终生效。快照成功加载后即使 API 暂时不可达也继续使用最后一次规则；首次加载前由插件配置决定是否放行。
+- **管理指令**：踢出/封禁写入 `server_actions`；`GET /api/v1/plugin/actions` 返回待执行纯文本（封禁附带到期时间），插件执行后 `POST /api/v1/plugin/actions/{id}/ack` 写入 `processed_at`。解封会同时把未执行的封禁指令标记完成；过期封禁不会被插件执行但会确认。
+- **休眠兜底**：`server_hibernation` 只对启用、非维护、有 RCON 密码且插件上报已过期的服务器执行 `status`。成功时 0 人标记 `hibernating`、有玩家标记 `online`；连续 3 次失败标记 `offline`。不会更新 `last_reported_at`，因此管理面板仍能区分插件失联与进程死亡。该任务不提供任意 RCON 执行面。
 
 ### 6.7 OpenAPI
 
@@ -319,6 +322,8 @@ modules/<name>/
 - `users.is_disabled` 禁用管理员账号；禁用会撤销会话并阻止登录。
 - `bans` 保存 SteamID64、原因、到期时间、操作者与解封记录；生效封禁阻止登录。
 - `servers.plugin_token` 保存每服务器插件令牌，唯一且可空；`servers.last_reported_at` 记录最近插件上报时间。
+- `servers.rcon_password` 保存可选的只写 RCON 密码，仅用于休眠存活探测；`last_rcon_at` 与 `rcon_failures` 记录探测时间和连续失败次数。密码不出现在任何响应或日志中。
+- `server_communities` 保存管理员创建的社区组（名称大小写不敏感唯一、可选描述）；`servers.community_id` 可为空并外键引用该表，删除组时自动置空，一个实例最多属于一个组。
 - `server_players` 的 SteamID64 非空，插件上报时按 `(server_id, steam_id64)` upsert；不再保存 A2S 匿名槽位。
 - `server_whitelist`、`whitelist_applications` 管理服务器白名单与审核；`servers.requires_whitelist` 标记需要白名单的服务器。
 - `forum_mutes` 记录论坛禁言；`server_bans` 记录服务器级封禁；`server_actions` 保存待游戏服务器插件消费的踢出/封禁指令。
@@ -356,7 +361,7 @@ modules/<name>/
 - **角色**：`member` / `moderator` / `admin`；`ADMIN_STEAM_IDS` 仅首次引导，之后由管理面板维护；管理页面和 API 均校验。
 - **登出**：删除数据库会话并返回过期 Cookie。
 - **权限**：`/api/v1/account` 需要登录；`/api/v1/admin/*` 需要管理员；公开读取接口不需要登录。管理员管理、封禁、白名单审核在 API 层再次校验。
-- **插件**：`/api/v1/plugin/report` 不使用 Cookie，只接受每服务器令牌；令牌仅由管理员生成、读取和撤销。
+- **插件**：`/api/v1/plugin/report`、`/access-snapshot`、`/actions` 与指令确认接口不使用 Cookie，只接受每服务器令牌；令牌仅由管理员生成、读取和撤销。RCON 密码只能由管理员写入或删除，读取接口只返回是否已配置。
 
 尚未实现：
 
@@ -409,7 +414,8 @@ Compose 服务：
 **限制：**
 
 - 写接口、CSRF、登录限流、审核与审计尚未实现；论坛/服务器内容目前只能通过数据库或后续管理接口写入。
-- `ThRei_Players` 只上报状态与玩家，不执行踢出、封禁或白名单指令；在线名单依赖游戏服务器能访问 API。
+- `ThRei_Players` 白名单、封禁与踢出执行依赖游戏服务器能访问 API；API 长时间不可达时使用最后一次成功快照，新增审批/封禁无法即时下发。
+- 可选的 RCON 存活探测只能区分空服休眠与进程死亡，不改变白名单、踢出或封禁的执行路径。
 - 在线状态由 90 秒上报窗口判断，API 不保存历史在线曲线。
 - 没有邮件、通知投递和文件存储。
 - 没有 CI、指标、集中日志和自动备份。

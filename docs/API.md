@@ -117,6 +117,7 @@ Steam 是唯一登录方式；没有密码、邮箱注册或其他登录入口�
     "name": "KZ | Beginner",
     "map": "kz_beginner",
     "description": "新手路线",
+    "community": "KZ 社区",
     "status": "online",
     "ip": "kz01.example.com",
     "port": 27015,
@@ -140,9 +141,11 @@ Steam 是唯一登录方式；没有密码、邮箱注册或其他登录入口�
 ]
 ```
 
-- `status`：`online` / `maintenance` / `offline`。
+- `status`：`online` / `maintenance` / `offline` / `hibernating`。`hibernating` 表示空服休眠但进程仍可由可选的 RCON 状态探测确认存活。
+- `community`：可选的社区组名称，用于把同一台主机上的多个实例分组展示；空字符串表示未分组。
 - `latencyMs`、`playerCount` 可为 `null`；`mapImage` 可为空字符串。
-- 状态、地图、人数与在线玩家由游戏服务器上的 `ThRei_Players` 插件上报。API 不再使用 A2S/RCON 轮询；超过 90 秒没有收到上报时，后台任务会把服务器标记为 `offline`、人数清零并删除在线名单。`maintenance` 状态不会被上报或清理任务覆盖。
+- 状态、地图、人数与在线玩家由游戏服务器上的 `ThRei_Players` 插件上报。API 不使用 A2S 轮询，也不会向游戏服务器发送任意 RCON 指令。
+- 没有配置 RCON 密码的插件服务器超过 90 秒未上报时，后台任务会把状态标记为 `offline`、人数清零并删除在线名单。配置了 RCON 密码且启用 `HIBERNATION_POLL_ENABLED` 时，后台只发送 `status` 判断存活：空服标记 `hibernating`，有玩家标记 `online`；连续 3 次 RCON 失败才标记 `offline`。`maintenance` 状态不会被插件上报或后台任务覆盖。
 - 在线名单只包含插件已通过 Steam 认证的玩家（SteamID64 非空）。插件安装与配置见 [../plugins/ThRei_Players/README.md](../plugins/ThRei_Players/README.md)。
 
 ### `POST /api/v1/plugin/report`
@@ -157,7 +160,7 @@ X-ThRei-Plugin-Token: <server plugin token>
 
 ```json
 {
-  "serverId": "kz-beginner",
+  "name": "KZ | 新手服",
   "map": "kz_beginner",
   "maxPlayers": 32,
   "players": [
@@ -170,13 +173,51 @@ X-ThRei-Plugin-Token: <server plugin token>
 }
 ```
 
-- `serverId` 必须与令牌所属服务器一致；`map`、`maxPlayers` 可省略。
+- `serverId` 可省略：令牌在数据库中唯一，API 会直接根据令牌找到服务器。这样一台主机上的多个实例可以共用一份配置，只按端口写各自的令牌。若同时提供 `serverId`，必须与令牌所属服务器一致。
+- `name`、`map`、`maxPlayers` 可省略。`name` 为游戏服务器的 `hostname`，上报后会更新服务器目录中的显示名称；省略或为空时保留当前名称。
 - `players` 中无效或重复的 SteamID64 会被跳过，响应里的 `skipped` 表示跳过数量。
 - `connectedSeconds` 用于恢复 `connected_at`，超出 0–2592000 秒会被截断。
 - 成功返回 `{ "serverId": "...", "playerCount": 1, "skipped": 0, "reportedAt": "..." }`。
-- 令牌缺失、错误、服务器不存在或 `serverId` 不匹配统一返回 `401 unauthorized`，避免枚举服务器。
+- 令牌缺失、错误、服务器不存在或 `serverId` 与令牌不匹配统一返回 `401 unauthorized`，避免枚举服务器。
 - 字段超出限制或 JSON 非法返回 `422`。
 - 上报会在一个事务内替换该服务器的在线名单；本次未出现的玩家会被删除，持续在线的玩家保留原 `connected_at`。
+
+### `GET /api/v1/plugin/access-snapshot`
+
+供 `ThRei_Players` 1.4.0+ 同步访问规则。请求头与上报相同，响应为 `text/plain; charset=utf-8`：
+
+```text
+# ThRei access snapshot v1
+server srv-1a2b3c4d5e6f
+requires_whitelist 1
+whitelist 76561199125125759
+ban 76561198000000000 0 永久封禁
+ban 76561198000000001 1792914155 临时封禁
+```
+
+- `requires_whitelist` 为 `0` 时插件只执行封禁，不检查白名单。
+- `whitelist` 每行一个 SteamID64。
+- `ban` 的第二个字段是到期 Unix 时间戳，`0` 表示永久；第三个字段起为已压平为单行的原因。
+- 最多返回 10,000 条白名单与 10,000 条生效封禁。已解除、已过期封禁不会出现在快照中。
+- 令牌缺失或错误返回 `401`，不泄露服务器是否存在。
+
+### `GET /api/v1/plugin/actions`
+
+供 `ThRei_Players` 1.4.0+ 轮询管理后台下发的指令，响应为 `text/plain; charset=utf-8`：
+
+```text
+# ThRei actions v1
+action 7e4f0d8a-... kick 76561199125125759 管理员踢出
+action 8a1d2c3b-... ban 76561198000000000 1792914155 临时封禁
+```
+
+- 最多返回 100 条未确认指令，按创建时间排序。
+- `kick` 不带到期时间；`ban` 的到期时间用于插件本地拦截临时封禁。
+- 原因中的控制字符会替换为空格并限制为 400 字符，防止注入额外协议行。
+
+### `POST /api/v1/plugin/actions/{id}/ack`
+
+插件执行或判定指令已过期后调用，成功返回 `204 No Content`，把 `server_actions.processed_at` 设为当前时间。指令不属于该令牌对应的服务器时返回 `404`。确认失败不会丢失指令，下一次轮询会再次返回。
 
 ## 5. 论坛
 
@@ -289,7 +330,7 @@ Query：
 - `DELETE /admin/whitelist/{server_id}/{steam_id64}` 移除授权。
 - `PATCH /admin/servers/{id}/whitelist` body `{ "requiresWhitelist": true }` 开关服务器要求。
 - `POST /whitelist/applications` body `{ "serverId": "...", "message": "..." }` 当前登录玩家提交申请；同一服务器已有待审申请或已在白名单时返回 409。
-- 当前没有游戏服务器插件自动读取白名单；实际进服拦截需要插件从 `server_whitelist` / `bans` 表同步或在连接前查询。
+- `ThRei_Players` 1.4.0+ 默认每 30 秒读取一次 `/plugin/access-snapshot`，在玩家连接时执行白名单与服务器封禁拦截；审核通过、移除授权或新增封禁会在一个刷新间隔内生效，不需要 RCON。
 
 ### 6.7 论坛管理
 
@@ -303,16 +344,32 @@ Query：
 
 ### 6.8 服务器管理
 
-- `GET /admin/servers`：服务器、在线玩家、服务器封禁记录。服务器包含 `playerCount`、`lastReportedAt`、`pluginState`（`disabled` / `waiting` / `connected`）；玩家包含 `steamId64`、`name`、`avatarUrl`、`connectedAt`、`lastSeenAt`。API 不返回插件令牌原文。
-- `POST /admin/servers`：添加服务器；字段包括 `id`、`name`、`map`、`host`、`port`、`region`、`tickrate`、`maxPlayers`、`tags`、`mapImage`、`status`、`featured`、`requiresWhitelist`。新服务器在插件首次上报前应保持 `offline`。
+- `GET /admin/servers`：服务器、在线玩家、服务器封禁记录。服务器包含 `playerCount`、`lastReportedAt`、`pluginState`（`disabled` / `waiting` / `connected`）、`hasRconPassword`、`lastRconAt`、`rconFailures`、`pendingActions`；玩家包含 `steamId64`、`name`、`avatarUrl`、`connectedAt`、`lastSeenAt`。API 不返回插件令牌或 RCON 密码原文。
+- `POST /admin/servers`：添加服务器。最小请求体为 `{ "host": "1.2.3.4", "port": 27015 }`；省略 `id` 时自动生成 `srv-` 加 12 位十六进制 ID，`name` 默认 `host:port`，`map` 为 `待上报`，`status` 为 `offline`，`region` 为 `未知`，`tickrate` 为 128，`maxPlayers` 为 64。成功返回 `201` 与 `{ "id": "..." }`。可选字段仍支持 `id`、`name`、`map`、`description`、`communityId`、`region`、`tickrate`、`maxPlayers`、`latencyMs`、`tags`、`mapImage`、`status`、`featured`、`requiresWhitelist`；`communityId` 必须是已存在的社区组 ID，未知 ID 返回 `422`；自定义 `id` 已存在时返回 `409`。为兼容升级前已加载的页面，仍接受 `community` 组名，但只按名称匹配已有社区组，不会自动创建。新服务器在插件首次上报前保持 `offline`。
 - `PATCH /admin/servers/{id}` body `{ "isActive": false }` 启用/停用；`DELETE` 删除服务器。
+- `PATCH /admin/servers/{id}/community` body `{ "communityId": "com-1a2b3c4d5e6f" }`：设置实例所属社区组；传 `null`、空字符串或省略表示不分组；未知组返回 `422`，服务器不存在返回 `404`，成功返回 `204`。旧版页面发送的 `community` 组名也会按名称解析到已有社区组；空字符串仍表示不分组，名称不存在返回 `422` 而不是静默解绑。
 - `GET /admin/servers/{id}/plugin-token`：读取当前插件令牌或 `null`；仅管理员可见，响应带 `Cache-Control: no-store`。
 - `POST /admin/servers/{id}/plugin-token`：生成新令牌；旧令牌立即失效，同时清空在线名单并把状态重置为 `offline`（`maintenance` 保留）。
 - `DELETE /admin/servers/{id}/plugin-token`：撤销令牌，并执行同样的在线状态清理，返回 `204`。
-- `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions`。
-- `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "..." }`：写入 `server_bans` 与 `server_actions`。
-- `POST /admin/server-bans/{id}/lift` 解除服务器封禁。
-- 踢出/封禁目前只落库；`ThRei_Players` 只负责状态与玩家上报，不执行管理指令。游戏内执行需要后续插件消费 `server_actions` 和读取 `server_bans`。
+- `PUT /admin/servers/{id}/rcon-password` body `{ "password": "..." }`：设置可选的 RCON 密码，仅用于空服休眠存活探测。密码只写不读，任何接口都不会返回；成功 `204`，空密码、控制字符或超过 256 字符返回 `422`。
+- `DELETE /admin/servers/{id}/rcon-password`：删除 RCON 密码并清除休眠状态，成功 `204`。
+- `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions`，由 `ThRei_Players` 1.4.0+ 在一个指令轮询间隔（默认 15 秒）内执行。
+- `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "..." }`：原子写入 `server_bans` 与 `server_actions`，插件立即踢出在线目标并阻止重连。
+- `POST /admin/server-bans/{id}/lift` 解除服务器封禁，同时把该服务器该玩家尚未执行的封禁指令标记为已处理，避免解封后旧指令再次生效。
+- 踢出/封禁指令由插件确认后写入 `processed_at`；`pendingActions` 是尚未确认的指令数。封禁到期或已解除时，插件不会执行对应指令，但仍会确认队列项。
+- RCON 只发送 `status` 用于休眠/存活判断，白名单、踢出与封禁都不依赖 RCON。
+
+### 6.9 社区组管理
+
+社区组用于把同一主机或同一社区的多个服务器实例归在一起。一个服务器最多属于一个社区组；删除社区组只会让组内实例变为未分组，不会删除服务器或插件令牌。
+
+- `GET /admin/server-communities`：返回 `{ "communities": [...] }`。每个社区组包含 `id`、`name`、`description`、`createdAt`、`updatedAt`，以及 `servers` 数组；实例包含 `id`、`name`、`host`、`port`、`status`、`isActive`、`playerCount`、`maxPlayers`、`pluginState`。
+- `POST /admin/server-communities` body `{ "name": "ThRei 主机", "description": "可选描述" }`：创建社区组，名称 1–60 字符且大小写不敏感唯一；成功返回 `201 { "id": "com-..." }`，重名返回 `409`。
+- `PATCH /admin/server-communities/{id}` body `{ "name": "...", "description": "..." }`：至少提供一个字段；成功返回 `204`，不存在返回 `404`，重名返回 `409`。
+- `DELETE /admin/server-communities/{id}`：删除社区组并把组内实例置为未分组，返回 `204`。
+- `POST /admin/server-communities/{id}/servers` body `{ "serverIds": ["srv-...", "srv-..."] }`：把实例加入社区组；已属于其他组的实例会被移动到当前组。空数组或未知服务器 ID 返回 `422`，组不存在返回 `404`，成功返回 `204`。
+- `DELETE /admin/server-communities/{id}/servers/{server_id}`：把实例移出社区组；实例不在该组时返回 `404`，成功返回 `204`。
+- 公开服务器接口中的 `community` 为该实例所属社区组名称（未分组为空字符串），管理接口的服务器对象同时返回 `communityId` 与 `community`。
 
 ## 7. 错误结构
 

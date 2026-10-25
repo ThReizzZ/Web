@@ -20,6 +20,7 @@ const TOKEN_HEADER: &str = "x-threi-plugin-token";
 const MAX_TOKEN_CHARS: usize = 128;
 const MAX_PLAYERS: usize = 1024;
 const MAX_NAME_CHARS: usize = 80;
+const MAX_SERVER_NAME_CHARS: usize = 120;
 const MAX_MAP_CHARS: usize = 128;
 const MAX_CONNECTED_SECONDS: i64 = 2_592_000;
 pub(crate) const STALE_AFTER_SECS: i32 = 90;
@@ -28,7 +29,15 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginReportRequest {
-    pub server_id: String,
+    /// Optional server id. When omitted, the server is resolved from the
+    /// unique plugin token, which lets one shared config map a port to a
+    /// token without copying server ids. When present it must match the token.
+    #[serde(default)]
+    pub server_id: Option<String>,
+    /// Server hostname as configured on the game server. Optional so older
+    /// plugin versions keep working; when present it is shown in the catalog.
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub map: Option<String>,
     #[serde(default)]
@@ -93,24 +102,23 @@ pub async fn report(
     Json(request): Json<PluginReportRequest>,
 ) -> Result<Json<PluginReportResponse>, AppError> {
     let token = plugin_token(&headers)?;
-    let server_id = request.server_id.trim();
-    if server_id.is_empty() || server_id.chars().count() > 80 {
-        return Err(AppError::Validation(
-            "serverId must be between 1 and 80 characters".to_owned(),
-        ));
-    }
+    let server_id = normalize_server_id(request.server_id)?;
+    let name = normalize_server_name(request.name);
     let map = normalize_map(request.map)?;
     validate_max_players(request.max_players)?;
     let (players, skipped) = normalize_players(&request.players, Utc::now());
 
     persist_report(
         &state.db,
-        server_id,
-        token,
-        map.as_deref(),
-        request.max_players,
-        &players,
-        skipped,
+        ReportPayload {
+            server_id: server_id.as_deref(),
+            token,
+            name: name.as_deref(),
+            map: map.as_deref(),
+            max_players: request.max_players,
+            players: &players,
+            skipped,
+        },
     )
     .await
     .map(Json)
@@ -118,10 +126,16 @@ pub async fn report(
 
 /// Starts the stale-server sweep. The task lives for the process lifetime and
 /// is cancelled by the Tokio runtime during shutdown.
-pub fn spawn_stale_sweeper(db: PgPool) {
+///
+/// When the RCON fallback is enabled, servers with a stored RCON password are
+/// left to the hibernation poller: it can distinguish an empty hibernating
+/// server from a dead one, while the plugin itself cannot report during
+/// hibernation. Servers without RCON keep the original 90-second behavior.
+pub fn spawn_stale_sweeper(db: PgPool, skip_rcon_servers: bool) {
     tracing::info!(
         sweep_interval_secs = SWEEP_INTERVAL.as_secs(),
         stale_after_secs = STALE_AFTER_SECS,
+        skip_rcon_servers,
         "server plugin stale sweeper started"
     );
 
@@ -130,7 +144,7 @@ pub fn spawn_stale_sweeper(db: PgPool) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            match sweep_stale(&db).await {
+            match sweep_stale(&db, skip_rcon_servers).await {
                 Ok((0, 0)) => {}
                 Ok((servers, players)) => {
                     tracing::info!(servers, players, "marked stale plugin servers offline");
@@ -143,7 +157,7 @@ pub fn spawn_stale_sweeper(db: PgPool) {
     });
 }
 
-fn plugin_token(headers: &HeaderMap) -> Result<&str, AppError> {
+pub(crate) fn plugin_token(headers: &HeaderMap) -> Result<&str, AppError> {
     let token = headers
         .get(TOKEN_HEADER)
         .ok_or(AppError::Unauthorized)?
@@ -154,6 +168,37 @@ fn plugin_token(headers: &HeaderMap) -> Result<&str, AppError> {
         return Err(AppError::Unauthorized);
     }
     Ok(token)
+}
+
+/// Empty or missing ids are allowed: the token itself identifies the server.
+/// A present id still has to be bounded and is checked against the token.
+fn normalize_server_id(value: Option<String>) -> Result<Option<String>, AppError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > 80 {
+        return Err(AppError::Validation(
+            "serverId must be at most 80 characters".to_owned(),
+        ));
+    }
+    Ok(Some(value.to_owned()))
+}
+
+/// Trims the reported hostname, drops control characters and caps the length.
+/// `None` means "keep the current name", so older plugin versions and empty
+/// hostnames do not overwrite it.
+fn normalize_server_name(value: Option<String>) -> Option<String> {
+    let value = value?;
+    let cleaned = sanitize_controls(&value);
+    let value = cleaned.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(truncate(value, MAX_SERVER_NAME_CHARS))
 }
 
 fn normalize_map(value: Option<String>) -> Result<Option<String>, AppError> {
@@ -244,16 +289,21 @@ fn truncate(value: &str, max_chars: usize) -> String {
     truncated
 }
 
+struct ReportPayload<'a> {
+    server_id: Option<&'a str>,
+    token: &'a str,
+    name: Option<&'a str>,
+    map: Option<&'a str>,
+    max_players: Option<i32>,
+    players: &'a [NormalizedPlayer],
+    skipped: i32,
+}
+
 async fn persist_report(
     db: &PgPool,
-    server_id: &str,
-    token: &str,
-    map: Option<&str>,
-    max_players: Option<i32>,
-    players: &[NormalizedPlayer],
-    skipped: i32,
+    report: ReportPayload<'_>,
 ) -> Result<PluginReportResponse, AppError> {
-    let player_count = i32::try_from(players.len()).unwrap_or(i32::MAX);
+    let player_count = i32::try_from(report.players.len()).unwrap_or(i32::MAX);
     let mut transaction = db.begin().await?;
 
     let server = sqlx::query_as::<_, ReportServerRow>(
@@ -263,26 +313,30 @@ async fn persist_report(
                 WHEN status = 'maintenance' THEN status
                 ELSE 'online'
             END,
+            name = COALESCE($6, name),
             map = COALESCE($3, map),
             max_players = COALESCE($4, max_players),
             player_count = $5,
             latency_ms = NULL,
             last_reported_at = now(),
             updated_at = now()
-        WHERE id = $1 AND plugin_token = $2
+        WHERE plugin_token = $2
+          AND ($1::text IS NULL OR id = $1)
         RETURNING id, last_reported_at
         ",
     )
-    .bind(server_id)
-    .bind(token)
-    .bind(map)
-    .bind(max_players)
+    .bind(report.server_id)
+    .bind(report.token)
+    .bind(report.map)
+    .bind(report.max_players)
     .bind(player_count)
+    .bind(report.name)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::Unauthorized)?;
 
-    let steam_ids = players
+    let steam_ids = report
+        .players
         .iter()
         .map(|player| player.steam_id64.clone())
         .collect::<Vec<_>>();
@@ -298,7 +352,7 @@ async fn persist_report(
     .execute(&mut *transaction)
     .await?;
 
-    for player in players {
+    for player in report.players {
         sqlx::query(
             r"
             INSERT INTO server_players (
@@ -332,18 +386,19 @@ async fn persist_report(
     Ok(PluginReportResponse {
         server_id: server.id,
         player_count,
-        skipped,
+        skipped: report.skipped,
         reported_at: server.last_reported_at,
     })
 }
 
-async fn sweep_stale(db: &PgPool) -> Result<(u64, u64), sqlx::Error> {
+async fn sweep_stale(db: &PgPool, skip_rcon_servers: bool) -> Result<(u64, u64), sqlx::Error> {
     let mut transaction = db.begin().await?;
     let stale_ids = sqlx::query_scalar::<_, String>(
         r"
         SELECT s.id
         FROM servers s
         WHERE s.plugin_token IS NOT NULL
+          AND (NOT $2::boolean OR s.rcon_password IS NULL)
           AND (
               s.last_reported_at IS NULL
               OR s.last_reported_at < now() - make_interval(secs => $1::double precision)
@@ -359,6 +414,7 @@ async fn sweep_stale(db: &PgPool) -> Result<(u64, u64), sqlx::Error> {
         ",
     )
     .bind(f64::from(STALE_AFTER_SECS))
+    .bind(skip_rcon_servers)
     .fetch_all(&mut *transaction)
     .await?;
 
@@ -463,6 +519,31 @@ mod tests {
         );
         assert_eq!(normalize_map(Some("   ".to_owned())).unwrap(), None);
         assert!(normalize_map(Some("a".repeat(MAX_MAP_CHARS + 1))).is_err());
+    }
+
+    #[test]
+    fn server_id_is_optional_trimmed_and_limited() {
+        assert_eq!(normalize_server_id(None).unwrap(), None);
+        assert_eq!(normalize_server_id(Some("   ".to_owned())).unwrap(), None);
+        assert_eq!(
+            normalize_server_id(Some("  srv-1a2b3c4d5e6f  ".to_owned())).unwrap(),
+            Some("srv-1a2b3c4d5e6f".to_owned())
+        );
+        assert!(normalize_server_id(Some("a".repeat(81))).is_err());
+    }
+
+    #[test]
+    fn server_name_is_trimmed_limited_and_stripped_of_controls() {
+        assert_eq!(
+            normalize_server_name(Some("  KZ | 新手服\n ".to_owned())),
+            Some("KZ | 新手服".to_owned())
+        );
+        assert_eq!(normalize_server_name(Some("   ".to_owned())), None);
+        assert_eq!(normalize_server_name(None), None);
+        let long = normalize_server_name(Some("服".repeat(MAX_SERVER_NAME_CHARS + 10)))
+            .expect("non-empty name");
+        assert_eq!(long.chars().count(), MAX_SERVER_NAME_CHARS);
+        assert!(long.ends_with('…'));
     }
 
     #[test]

@@ -17,6 +17,637 @@
 
 ---
 
+## 2026年10月25日 13时55分09秒 对标 LumiAdmin 补齐白名单、踢封执行与空服存活判断
+
+### 背景
+
+此前 `ThRei_Players` 只负责上报在线状态，网站上虽然已有白名单、服务器封禁和踢出/封禁按钮，
+但游戏服务器不会执行这些操作。用户要求对标 LumiAdmin / LumiAdmin-plugins 的完整实现，使
+白名单审核、踢出和封禁能够真正作用于游戏服务器；同时不能退回到把 RCON 作为主要控制通道。
+
+空服休眠的 `sv_hibernate_when_empty` 会暂停 SourceMod 定时器，插件因此停止上报，网站会把仍在
+运行的服务器误判为离线。用户明确要求区分“进程已停止”和“空服休眠”，且白名单、踢出、封禁
+不得依赖 RCON。
+
+### 变更内容
+
+- `ThRei_Players` 升至 1.4.0：
+  - 每 `sm_threi_access_interval`（默认 30 秒）读取纯文本访问快照，包含
+    `requires_whitelist`、白名单和带到期 Unix 时间戳的封禁；
+  - 玩家连接完成时按快照拦截，刷新后复查在线玩家；临时封禁到期或解封后自动放行；
+  - 首次快照成功前保持 fail-open，避免 API 暂时不可达时把所有人挡在门外；
+  - 每 `sm_threi_action_interval` 轮询待执行指令，执行后调用 ack；解封会取消尚未执行的封禁，
+    已过期封禁只确认不执行；
+  - 继续使用每实例端口匹配同一份 `threi_players.cfg`，HTTP 通道不引入 JSON/RIPExt 依赖。
+- API 新增插件访问与指令接口，踢出/封禁通过 `server_actions` 队列下发，执行不经过 RCON。
+- 新增可选最小 RCON 存活探测：仅发送 `status`，不暴露任意命令；插件上报过期且管理员设置密码时，
+  空服标为 `hibernating`、有玩家标为 `online`，连续 3 次失败才标为 `offline`。
+- 90 秒清理任务在启用 RCON 兜底时跳过已配置密码的服务器，避免与休眠探测互相覆盖。
+- 管理面板增加 RCON 配置弹窗、只写密码、探测状态/重试徽章、待执行指令数，并说明白名单和
+  踢封不依赖 RCON；服务器状态徽章与目录支持 `hibernating`。
+- 修复本轮验证发现的两个问题：
+  - Source RCON 数据包大小字段错误地包含了 4 字节长度前缀，真实服务器会一直等待不存在的
+    后续字节；改为只统计 id、type、body 和两个结尾 NUL。测试改用会发送空
+    `RESPONSE_VALUE` 信封的阻塞式假服务器覆盖该路径。
+  - 无待执行指令时，无效插件令牌访问 `/plugin/actions` 会返回 200 空响应；改为先按令牌解析
+    服务器，`actions` 与 `ack` 对无效令牌统一返回 401。
+- 管理面板在 RCON 连续失败超过阈值后显示“连续失败 ≥3 次”，不再出现“5/3”这类误导文案。
+
+### 涉及文件
+
+- `services/api/src/modules/plugin_access.rs`
+- `services/api/src/modules/server_hibernation.rs`
+- `services/api/src/modules/server_admin.rs`
+- `services/api/src/modules/server_plugin.rs`
+- `services/api/src/modules/mod.rs`
+- `services/api/src/infrastructure/rcon.rs`
+- `services/api/src/infrastructure/mod.rs`
+- `services/api/src/routes/mod.rs`
+- `services/api/src/openapi.rs`
+- `services/api/src/config/mod.rs`
+- `services/api/src/main.rs`
+- `services/api/migrations/20261025140000_server_access_and_hibernation.sql`
+- `compose.yaml`
+- `.env.example`
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `apps/web/src/features/admin/components/community-admin-manager.tsx`
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/features/account/types.ts`
+- `apps/web/src/features/servers/components/server-card.tsx`
+- `apps/web/src/features/servers/components/server-status-badge.tsx`
+- `apps/web/src/features/servers/components/join-server-button.tsx`
+- `apps/web/src/features/servers/data/servers.ts`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DEPLOYMENT.md`
+- `docs/CHANGELOG.md`
+- `docs/DEVELOPMENT.md`
+
+### 数据库与 API 变化
+
+- 迁移 `20261025140000_server_access_and_hibernation.sql`：
+  - 服务器状态约束增加 `hibernating`；
+  - 新增只写 `servers.rcon_password`（长度与空值约束）、`last_rcon_at`、`rcon_failures`
+    （0–100）及部分索引。
+- 插件接口（请求头 `X-ThRei-Plugin-Token`）：
+  - `GET /api/v1/plugin/access-snapshot`：纯文本白名单/封禁快照；
+  - `GET /api/v1/plugin/actions`：纯文本待执行踢出/封禁；
+  - `POST /api/v1/plugin/actions/{id}/ack`：确认执行，幂等；无效令牌 401。
+- 管理接口：
+  - `PUT /api/v1/admin/servers/{id}/rcon-password` 写入密码；
+  - `DELETE /api/v1/admin/servers/{id}/rcon-password` 移除密码；
+  - 服务器管理列表新增 `hasRconPassword`、`lastRconAt`、`rconFailures`、`pendingActions`；
+  - 密码只写不读，任何响应与日志都不包含原文；移除密码会重置探测状态。
+- 配置新增 `HIBERNATION_POLL_ENABLED`、`HIBERNATION_POLL_SCAN_INTERVAL_SECS`、
+  `HIBERNATION_POLL_INTERVAL_SECS`、`HIBERNATION_POLL_AFTER_SECS`、
+  `HIBERNATION_RCON_TIMEOUT_SECS`，并已加入 Compose 与 `.env.example`。
+
+### 测试与结果
+
+- `cargo fmt --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：库测试 41 个、HTTP 合约测试 14 个全部通过，0 失败。
+- SourcePawn 1.11.0.6970 编译：通过；代码 38252 字节、数据 141552 字节、栈/堆 24244 字节。
+  安装的 `ThRei_Players.smx` 为 21113 字节，SHA-256
+  `f072131f3837a0755ae54651e2b91233ff490a4476d1e05264475e663dd48e83`。
+- 前端 `npx tsc --noEmit`、`npm run lint`（`--max-warnings=0`）、`npm run format:check`：通过。
+- 本地 API E2E：有效令牌可读取快照与四字段踢出/五字段封禁指令，ack 后指令消失；无效令牌在
+  `actions` 与 `ack` 均返回 401；快照排除已过期封禁，永久/临时封禁及原因格式正确；测试数据已清理。
+- 本地假 RCON E2E：探测成功时状态为 `hibernating`、地图更新为 `kz_fake` 且不修改
+  `last_reported_at`；假服务器停止后连续失败达到 3 次标记 `offline` 并清零在线人数。
+- OpenAPI 已包含 `/plugin/access-snapshot`、`/plugin/actions`、`/plugin/actions/{id}/ack` 与
+  `SetRconPasswordRequest`。
+- `docker compose config` 未执行：本机没有 Docker CLI。已用 PyYAML 校验 Compose 语法，并用脚本
+  交叉检查 Compose 引用的变量均存在于 `.env.example`。
+- 生产未部署；本轮只完成本地开发与验证，未 push 到 GitHub。
+
+---
+
+## 2026年10月25日 11时53分30秒 离线状态仍允许打开加入游戏
+
+### 背景
+
+网站上的 `offline` 只表示 90 秒内没有收到插件上报，并不代表游戏服务器进程已停止。
+空服休眠时会暂停 SourceMod 定时器，插件停止上报，服务器在目录中显示“离线”，但进程仍可连接。
+原按钮在 `offline` 时禁用，只显示“离线”，用户会误以为服务器无法加入。
+
+### 变更内容
+
+- `JoinServerButton` 只在 `maintenance` 状态禁用；`online` 与 `offline` 都显示“加入游戏”并可打开连接对话框。
+- 对话框在 `offline` 时显示提示：超过 90 秒没有收到插件上报，服务器可能仍在运行（例如空服休眠），可以直接尝试连接。
+- `maintenance` 仍显示“维护中”并保持禁用，避免绕过管理员明确的维护状态。
+
+### 涉及文件
+
+- `apps/web/src/features/servers/components/join-server-button.tsx`
+- `docs/CHANGELOG.md`
+- `docs/DEVELOPMENT.md`
+
+### 数据库与 API 变化
+
+- 无。仅调整前端按钮可用性与提示文案。
+
+### 测试与结果
+
+- Prettier 格式化 `join-server-button.tsx`：通过。
+- `npm run typecheck`：通过。
+- `npm run lint`：通过。
+- `npm run build`：通过。
+- 生产部署：重建并重启 `web` 容器，健康检查为 `healthy`。
+- 生产 `GET https://threi.cn/api/v1/servers`：`ThRei 2服` 返回 `status: "offline"`、0 人。
+- 生产 `/servers` HTML：离线实例同样渲染“加入游戏”，并包含离线状态提示；`maintenance` 未出现。
+- 未 push 到 GitHub。
+
+---
+
+## 2026年10月25日 11时05分38秒 新增社区组管理页面与实例成员关系
+
+### 背景
+
+上一条记录只把社区组实现为服务器上的自由文本字段，管理员必须先添加服务器、再逐个填写组名，
+无法先创建社区组，也无法在组内集中管理实例。用户要求网站提供“添加社区组”的功能，并能在
+社区组中添加实例。因此把社区组升级为独立实体，服务器通过外键归属到一个组。
+
+### 变更内容
+
+- 新增迁移 `20261025130000_server_communities.sql`：
+  - 创建 `server_communities`（`com-` + 12 位十六进制 ID、名称大小写不敏感唯一、可选描述）；
+  - 把原有 `servers.community` 的非空文本按大小写不敏感名称去重后写入社区组；
+  - 新增可空外键 `servers.community_id`（`ON DELETE SET NULL`），回填后删除旧列；
+  - 为 `servers.community_id` 建索引，并挂接 `set_updated_at()` 触发器。
+- 新增 API 模块 `server_communities`：
+  - `GET/POST /admin/server-communities`；
+  - `PATCH/DELETE /admin/server-communities/{id}`；
+  - `POST /admin/server-communities/{id}/servers` 批量加入实例（跨组时自动移动）；
+  - `DELETE /admin/server-communities/{id}/servers/{server_id}` 移出实例。
+- `server_admin`：`POST /admin/servers` 改收 `communityId` 并校验组存在；
+  `PATCH /admin/servers/{id}/community` 改为接收 `communityId`（空值表示未分组）；
+  管理服务器列表同时返回 `communityId` 与组名 `community`。
+- 公开 `GET /api/v1/servers` 通过 LEFT JOIN 返回社区组名称，目录展示与筛选逻辑不变。
+- 管理面板新增 `/admin/communities`「社区组」页面：创建/编辑/删除社区组、查看组内实例、
+  通过勾选弹窗批量添加实例、移出实例；删除组前提示实例会变为未分组。
+- 管理面板导航新增「社区组」；添加服务器弹窗的社区组改为下拉选择；服务器列表的「社区组」
+  按钮也改为下拉选择，并提示先到社区组页面创建。
+- 更新 `docs/API.md`、`docs/ARCHITECTURE.md`、`docs/DEPLOYMENT.md`、`docs/CHANGELOG.md`。
+
+### 涉及文件
+
+- `services/api/migrations/20261025130000_server_communities.sql`
+- `services/api/src/modules/server_communities.rs`
+- `services/api/src/modules/server_admin.rs`
+- `services/api/src/modules/servers.rs`
+- `services/api/src/modules/mod.rs`
+- `services/api/src/routes/mod.rs`
+- `services/api/src/openapi.rs`
+- `services/api/tests/http_contract.rs`
+- `apps/web/src/app/(admin)/admin/communities/page.tsx`
+- `apps/web/src/app/(admin)/admin/servers/page.tsx`
+- `apps/web/src/features/admin/components/community-admin-manager.tsx`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `apps/web/src/features/admin/components/admin-nav.tsx`
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/services/content.ts`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DEPLOYMENT.md`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 数据库：新增 `server_communities` 表；`servers.community` 被 `servers.community_id` 外键取代，
+  原有非空组名自动迁移，空值保持未分组；删除社区组时实例自动置空。
+- 新增管理员社区组 CRUD 与成员接口（见 `docs/API.md` 6.9）。
+- `POST /admin/servers` 的 `community` 字段改为 `communityId`；`PATCH /admin/servers/{id}/community`
+  同步改为 `communityId`，未知组返回 `422`。为兼容升级前已加载的旧页面，两个接口仍接受
+  `community` 组名并按名称匹配已有组；名称不存在时返回 `422`，不会静默解绑。
+- 公开服务器响应仍返回 `community` 字符串（组名）；管理服务器对象新增 `communityId`。
+- `GET /admin/server-communities` 返回社区组及其实例摘要，供管理页面一次渲染。
+
+### 测试与结果
+
+- 在临时数据库 `threi_migration_test` 中按顺序执行全部旧迁移，插入两个仅大小写不同的同组标签、
+  一个空白标签、一个独立组服务器，再执行新迁移：小写同名标签合并为一个社区组并回填两个实例，
+  空白标签保持 `NULL`，独立组正常生成，旧列已删除；
+- `cargo fmt`、`cargo check --all-targets` 通过；
+- `cargo test --lib`：30 个测试通过，包含名称/描述校验与服务器 ID 去重测试；
+- `cargo test`：14 个 HTTP 合约测试通过（新增匿名访问社区组接口返回 401）；
+- `cargo clippy --all-targets -- -D warnings` 通过；
+- `npm run typecheck`、`npm run lint` 通过，变更文件已执行 Prettier；
+- 本地 API 端到端验证：创建组 `201`、大小写重名 `409`、未知组添加服务器 `422`、
+  加入实例 `204`、重命名后管理接口与公开接口均返回新组名、删除组后实例 `communityId=null`；
+- 本地兼容性验证：旧载荷 `community` 组名创建服务器可解析到已有组；`PATCH` 发送其他组名
+  返回 `204` 并移动实例，发送不存在的名称返回 `422` 且不解绑，发送空字符串返回 `204` 并解绑；
+- Next.js 开发服务器渲染 `/admin/communities` 与 `/admin/servers` 均返回 `200`，页面包含
+  「社区组管理」「添加社区组」「移出」等新界面文案；
+- 生产部署已执行（2026-10-25 11:13 CST）：重建 `api`/`web` 镜像，`migrate` 退出码 `0`；
+  `server_communities` 表与 `servers.community_id` 已存在，原 `srv-724e9db592f3`（ThRei 1服）
+  自动归入「ThRei 1」；公开 API 返回 `community: "ThRei 1"`，匿名管理接口 `401`，匿名页面
+  `307`；管理员登录后 `/admin/communities` 返回 `200`，临时组创建 `201`、页面可见、删除 `204`，
+  测试组已清理。
+
+---
+
+## 2026年10月25日 10时46分44秒 ThRei_Players 改为单配置文件按端口匹配，新增社区组
+
+### 背景
+
+上一条记录实现了 1.2.0 的每端口配置文件方案：多实例主机需要为每个实例复制
+`threi_players_<hostport>.cfg`。用户明确要求改回**只保留一个** `threi_players.cfg`，在文件内
+按端口填写各实例的令牌，由插件根据自身端口匹配，API 根据令牌定位服务器；同时希望网站在服务器
+上增加“社区组”，用于区分同一台主机上的多个实例。因此 1.3.0 取代 1.2.0 的每端口文件方案。
+
+### 变更内容
+
+- 移除 `ResolveConfigName()` / `g_sConfigName` 与每端口文件逻辑，恢复固定加载
+  `cfg/sourcemod/threi_players.cfg`。
+- 新增服务器控制台命令 `sm_threi_instance <port> <token>`（兼容
+  `sm_threi_instance <port> <server-id> <token>`），在 `AutoExecConfig` 之前注册，使
+  cfg 中的多行配置在加载时被解析。
+- 插件启动时读取 `hostport`（缺失时回退 `port`），只采用端口匹配的令牌；存在任意有效实例行时
+  忽略 `sm_threi_server_id` / `sm_threi_token`，端口无匹配行时记录错误并跳过上报，避免把数据
+  写入错误的服务器。
+- `BuildBody()` 在未配置服务器 ID 时省略 `serverId`，仅凭令牌上报。
+- `sm_threi_status` 改为输出 `hostport` 与实例匹配状态（`matched` / `no matching entry` /
+  `not configured`），不再输出配置文件名，仍不输出令牌。
+- API `POST /api/v1/plugin/report` 的 `serverId` 改为可选；省略时按唯一 `plugin_token` 定位
+  服务器，提供时 SQL 同时校验令牌与 ID。新增 `normalize_server_id()` 处理空值与 80 字符上限。
+- 新增迁移 `20261025120000_server_community.sql`：`servers.community text NOT NULL DEFAULT ''`，
+  限制最多 60 字符。
+- 公开服务器 API/类型新增 `community`；服务器卡片显示社区组徽标，列表行显示标签，服务器目录
+  支持按社区组筛选并纳入搜索。
+- 管理端 `POST /admin/servers` 支持可选 `community`，新增
+  `PATCH /admin/servers/{id}/community`；服务器管理页新增「社区组」编辑弹窗，添加服务器弹窗
+  可填写社区组。
+- 管理面板插件配置片段改为生成 `sm_threi_instance <port> "<token>"`，不再包含服务器 ID。
+- 更新插件 README、示例 cfg、API/部署/变更文档。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/cfg/sourcemod/threi_players.cfg.example`
+- `plugins/ThRei_Players/README.md`
+- `services/api/migrations/20261025120000_server_community.sql`
+- `services/api/src/modules/server_plugin.rs`
+- `services/api/src/modules/server_admin.rs`
+- `services/api/src/modules/servers.rs`
+- `apps/web/src/features/servers/data/servers.ts`
+- `apps/web/src/features/servers/components/server-card.tsx`
+- `apps/web/src/features/servers/components/server-list-row.tsx`
+- `apps/web/src/features/servers/components/server-directory.tsx`
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `apps/web/src/services/content.ts`
+- `docs/API.md`
+- `docs/DEPLOYMENT.md`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 数据库：新增 `servers.community` 列（非空，默认空字符串，长度不超过 60），由迁移自动执行。
+- `POST /api/v1/plugin/report`：`serverId` 可选；仅凭令牌即可上报。令牌错误、服务器不存在或
+  ID 与令牌不匹配仍统一返回 `401`。
+- `POST /admin/servers`：新增可选 `community`，超过 60 字符或含控制字符返回 `422`。
+- 新增 `PATCH /admin/servers/{id}/community`，成功 `204`，不存在 `404`。
+- 公开 `GET /api/v1/servers` 响应新增 `community`。
+- 旧版 1.1.x 单实例配置（`sm_threi_server_id` + `sm_threi_token`）继续可用；1.2.0 的每端口
+  配置文件不再读取，升级后需把令牌迁移到共享 cfg 的 `sm_threi_instance` 行。
+
+### 测试与结果
+
+- `cargo fmt`、`cargo check --all-targets` 通过；
+- `cargo test --lib`：27 个测试通过，包含新增的 `server_id_is_optional_trimmed_and_limited`；
+- `cargo test`：14 个 HTTP 合约测试通过；
+- `cargo clippy --all-targets -- -D warnings` 通过；
+- `npm run typecheck`、`npm run lint` 通过，变更前端文件已执行 Prettier；
+- `spcomp64`（1.11.0.6970）编译通过，`.smx` 为 11022 字节，SHA-256
+  `841e75361b90c8fc32c8d158ccc1adcfc689d16608a6ddc4f17d8797e7126744`；
+- 使用 `-z 0` 的临时产物确认包含 `1.3.0`、`sm_threi_instance`、`hostport=`、
+  `matched by token` 与端口不匹配的错误文本；
+- 未在真实多实例游戏服务器和生产环境联调；需部署 API/Web、执行迁移并安装 1.3.0 后，用
+  `sm_threi_status` 确认各实例 `instance=matched`。
+
+---
+
+## 2026年10月25日 10时34分14秒 ThRei_Players 支持一主机多实例的端口配置
+
+### 背景
+
+用户在同一台主机上运行多个游戏服务器实例，它们共用同一份 SourceMod 安装和
+`cfg/sourcemod` 目录。管理面板为每个实例分别生成服务器 ID 与令牌，但插件此前固定通过
+`AutoExecConfig(true, "threi_players")` 读取同一个 `threi_players.cfg`，多个实例只能使用
+同一组 ID/令牌，第二个实例的令牌无法生效。
+
+### 变更内容
+
+- 新增 `ResolveConfigName()`：插件启动时读取 `hostport`（缺失时回退 `port`），先检查
+  `cfg/sourcemod/threi_players_<port>.cfg` 是否存在；
+  - 存在：使用该实例专属配置；
+  - 不存在：回退到共享的 `cfg/sourcemod/threi_players.cfg`，保持单实例旧安装的兼容性。
+- `OnPluginStart()` 改为 `AutoExecConfig(true, g_sConfigName)`，动态传入配置基名。
+- 配置不完整时的错误日志改为输出当前实际加载的配置文件名。
+- `sm_threi_status` 新增 `config=cfg/sourcemod/<name>.cfg`，便于确认实例加载了哪个文件。
+- `PLUGIN_VERSION` 从 `1.1.1` 升级到 `1.2.0`，使用 SourcePawn Compiler `1.11.0.6970`
+  重新编译 `ThRei_Players.smx`。
+- 管理面板插件配置弹窗增加多实例提示：每个实例保存为
+  `threi_players_<hostport>.cfg`，公共项可放在共享文件中。
+- 插件 README、部署文档与 CHANGELOG 补充多实例配置方式。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+- `plugins/ThRei_Players/cfg/sourcemod/threi_players.cfg.example`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `docs/DEPLOYMENT.md`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 无数据库和 API 变更；仍然使用每服务器独立的服务器 ID 与令牌，上报协议不变。
+
+### 测试与结果
+
+- `spcomp64`（1.11.0.6970）编译通过，压缩 `.smx` 为 10048 字节；
+- 使用 `-z 0` 的临时产物确认包含版本 `1.2.0`、
+  `cfg/sourcemod/threi_players_%d.cfg`、`threi_players_%d`、实例/共享配置日志与
+  `config=cfg/sourcemod/%s.cfg`；
+- 未在真实多实例游戏服务器上执行联调；需安装 1.2.0 后执行 `sm_threi_status` 确认
+  `config` 指向预期文件，并观察后台两个服务器是否各自更新。
+
+---
+
+## 2026年10月25日 10时24分19秒 修复 ThRei_Players 因自定义 User-Agent 无法上报
+
+### 背景
+
+用户反馈游戏服务器插件没有上报，生产 API 也没有收到任何来自该服务器 IP 的请求。游戏服务器日志
+反复出现：
+
+```text
+[ThRei_Players.smx] [ThRei_Players] Could not configure the HTTP request.
+```
+
+排查 Steamworks 文档和扩展源码后确认：`ISteamHTTP::SetHTTPRequestHeaderValue` 明确禁止设置
+`User-Agent`（Steam 会在发送时覆盖），该调用返回 false。原插件把五个配置调用用 `&&` 串联，
+第一个 Token 头成功后，第二个 `User-Agent` 头失败并短路，导致超时、请求体和回调都没有设置，
+插件始终没有发送请求。该问题在 10:10 记录的 1.1.0 版本中仍然存在；本条记录升级到 1.1.1 修复。
+
+### 变更内容
+
+- 移除 `SteamWorks_SetHTTPRequestHeaderValue(request, "User-Agent", ...)`，由 Steam HTTP
+  客户端使用自身 User-Agent；
+- 将组合的 `&&` 配置链拆成逐步检查；失败时分别记录“token header / timeout / body / callbacks”
+  具体步骤并关闭请求句柄，便于以后排查；
+- `PLUGIN_VERSION` 从 `1.1.0` 升级到 `1.1.1`，使用 SourcePawn Compiler `1.11.0.6970`
+  重新编译 `ThRei_Players.smx`；
+- 插件 README 移除 `User-Agent` 请求头示例。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 无数据库和 API 变更；上报协议、服务器 ID 与令牌格式不变。
+
+### 测试与结果
+
+- `spcomp64`（1.11.0.6970）编译通过，`.smx` 为 9528 字节；
+- 使用 `-z 0` 的临时产物确认不再包含 `User-Agent`，包含 `name` 字段与版本 `1.1.1`；
+- 未能在真实游戏服务器上验证发送结果，需要用户替换 `.smx` 后观察 API 是否收到上报；
+- 生产 API 保持 `healthy`，其余功能未改动。
+
+---
+
+## 2026年10月25日 10时10分21秒 插件上报服务器名称并自动更新目录显示名
+
+### 背景
+
+上一项修改把添加服务器简化为 IP/端口，名称默认显示为 `host:port`。用户指出服务器名称应从游戏
+服务器自动读取，而不是长期显示 IP 或要求管理员另行填写。
+
+### 变更内容
+
+- `ThRei_Players.sp` 升级到 `1.1.0`：读取游戏服务器 `hostname`，在 JSON 请求体中增加可选
+  `name` 字段；
+- 使用 SourceMod `1.11.0.6970` 编译器重新生成 `ThRei_Players.smx`，保持与 SourceMod 1.11
+  运行时兼容；
+- API `PluginReportRequest` 新增可选 `name`；上报时清理控制字符、限制 120 字符，并通过
+  `COALESCE` 更新 `servers.name`，旧版插件或空名称不会覆盖现有名称；
+- `persist_report` 的多个参数收拢为 `ReportPayload`，避免 clippy `too_many_arguments`；
+- 新增单元测试覆盖名称清洗、空值和截断；
+- 文档补充 `name` 字段、自动更新名称与重新编译说明。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+- `services/api/src/modules/server_plugin.rs`
+- `docs/API.md`
+- `docs/DEPLOYMENT.md`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 无数据库迁移，`servers.name` 字段已存在；
+- `POST /api/v1/plugin/report` 新增可选 `name` 字段；不带该字段的旧版插件请求保持兼容。
+
+### 测试与结果
+
+- `spcomp64`（SourcePawn Compiler 1.11.0.6970）编译通过，生成 9483 字节的 `.smx`；用
+  `-z 0` 编译的临时产物确认包含 `{"serverId":"%s","name":"%s",...}` 和 `hostname`；
+- `cargo fmt --all -- --check`、`cargo clippy --all-targets -- -D warnings`：通过；
+- `cargo test`：26 个库单元测试与 14 个 HTTP 合约测试全部通过；
+- 本机端到端：创建测试服务器并生成令牌后，上报
+  `name=KZ | 本地测试服`，管理接口中的名称立即更新；再次上报不带 `name` 时名称保持不变；
+  测试服务器已删除（`204`），测试会话已登出（`204`）；
+- 生产环境：重建 `api` 镜像并重建容器（`healthy`），`https://threi.cn/` 返回 200；用 magic link
+  创建测试服务器并上报 `name=KZ | 生产验证服` 后名称更新，不带 `name` 的后续上报保留名称；
+  测试服务器删除（`204`）并登出（`204`）。
+
+---
+
+## 2026年10月25日 09时55分23秒 简化添加服务器流程为 IP/端口 + 插件令牌
+
+### 背景
+
+添加服务器原先要求管理员自行填写服务器 ID、名称、地图、地区等字段。其中 ID 同时是数据库主键、
+插件配置里的 `sm_threi_server_id` 和上报匹配条件，管理员必须先想好一个合法 ID 才能配置插件，
+容易出错。用户要求改为只输入 IP 和端口，其余通过生成的插件令牌完成配置。
+
+### 变更内容
+
+- `services/api/src/modules/server_admin.rs`：`CreateServerRequest` 除 `host`、`port` 外全部改为
+  `Option` / 默认值；省略 `id` 时生成 `srv-` 加 12 位十六进制的 ID（UUID v4 前 12 位），
+  自定义 `id` 重复时返回 `409`；
+- 默认值：`name` 为 `host:port`，`map` 为 `待上报`，`status` 为 `offline`，`region` 为
+  `未知`，`tickrate` 为 128，`maxPlayers` 为 64；
+- `POST /api/v1/admin/servers` 成功响应改为 `201 Created` 与 `{ "id": "..." }`；
+- 校验改为强制 `host` 非空且不含空格/斜杠、端口 1–65535；可选 ID 仍校验长度、小写字母、
+  数字和连字符；
+- 管理面板“添加服务器”弹窗只保留 Host/IP 与端口两个字段；添加成功后刷新列表并自动打开该
+  服务器的「插件配置」弹窗，引导生成令牌；配置片段继续包含自动生成的服务器 ID；
+- `apps/web/src/services/content.ts` 的 `createAdminServer` 只发送 `{ host, port }` 并返回
+  `{ id }`；
+- 同步更新 API、部署、插件文档与示例配置，示例服务器 ID 改为自动生成格式。
+
+### 涉及文件
+
+- `services/api/src/modules/server_admin.rs`
+- `apps/web/src/services/content.ts`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `docs/API.md`
+- `docs/DEPLOYMENT.md`
+- `docs/CHANGELOG.md`
+- `plugins/ThRei_Players/README.md`
+- `plugins/ThRei_Players/cfg/sourcemod/threi_players.cfg.example`
+
+### 数据库与 API 变化
+
+- 无数据库迁移，`servers` 表结构不变；
+- `POST /api/v1/admin/servers` 请求体中只有 `host`、`port` 必填，响应由空响应体改为
+  `201 { "id": "..." }`；不影响 `ThRei_Players` 上报协议，`.smx` 无需重新编译；
+- 自定义 `id` 仍可通过 API 传入，管理面板不再暴露该字段。
+
+### 测试与结果
+
+- `cargo fmt --all -- --check`：通过；
+- `cargo clippy --all-targets -- -D warnings`：通过；
+- `cargo test`：25 个库单元测试与 14 个 HTTP 合约测试全部通过；
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过；
+- 本机用 magic link 取得管理员会话后，`POST /api/v1/admin/servers` 只发送
+  `{"host":"203.0.113.10","port":27015}`，返回 `201 {"id":"srv-61f15ba2f761"}`；
+- `GET /api/v1/admin/servers` 确认默认值：`name` 为 `203.0.113.10:27015`、`map` 为
+  `待上报`、`status` 为 `offline`、`region` 为 `未知`、`tickrate` 128、`maxPlayers` 64、
+  `pluginState` 为 `disabled`；
+- 为该测试服务器生成插件令牌成功（32 位），随后删除测试服务器（`204`）并登出测试会话；
+- 空 host / 端口 0 返回 `422 validation_error`；
+- 生产环境重建 `api` 与 `web` 镜像并重建容器，二者均为 `healthy`；`https://threi.cn/`
+  返回 `200`，`/api/v1/system/info` 正常；
+- 生产环境用 magic link 取得管理员会话后，只发送
+  `{"host":"203.0.113.10","port":27016}`，返回 `201` 与 `srv-95a26448e473`；默认值、
+  插件令牌生成均正常，随后删除测试服务器（`204`）并登出（`204`）。
+
+---
+
+## 2026年10月25日 09时43分00秒 将生产 Steam 服务端访问切换到 Cloudflare Worker 中继
+
+### 背景
+
+直连 Steam 边缘 IP 已恢复登录，但单 IP 会随 Steam/Akamai 轮换失效。用户已有接入
+Cloudflare 的 `threi.online`，选择用 Worker 中继作为更稳定的生产通道。
+
+### 变更内容
+
+- 在 Cloudflare 账号部署 Worker `threi-steam-relay`，代码来自
+  `deploy/cloudflare/steam-relay-worker.js`；
+- 通过 `wrangler.toml` 的 `custom_domain = true` 绑定 `steam.threi.online`，
+  Cloudflare 自动创建代理 DNS 记录和证书；
+- 新增 `deploy/cloudflare/wrangler.toml`，可用 `npx wrangler deploy` 复现部署；
+- 生产 `.env` 设置 `STEAM_COMMUNITY_BASE_URL=https://steam.threi.online`，
+  并将 `STEAM_COMMUNITY_IP` 置空；
+- 只重建 API 容器，未重新构建镜像；
+- 临时 Cloudflare API Token 仅用于本次部署，用后删除。
+
+### 涉及文件
+
+- `deploy/cloudflare/wrangler.toml`（新增）
+- `deploy/cloudflare/README.md`
+- `docs/DEPLOYMENT.md`
+- `docs/CHANGELOG.md`
+- 服务器 `/home/web/threi/.env`（不提交）
+
+### 数据库与 API 变化
+
+- 无代码和数据库变更；仅运行时环境变量变化。
+
+### 测试与结果
+
+- 本机访问 `https://steam.threi.online/profiles/76561199125125759?xml=1` 返回
+  HTTP 200 和资料 XML；
+- 生产服务器访问同一地址返回 HTTP 200（约 1.2 秒），DNS 解析到 Cloudflare 边缘；
+- POST `/openid/login`（`openid.mode=check_authentication`）返回 `is_valid:false`，
+  说明请求经中继到达 Steam 并可解析响应；
+- 根路径 `/` 返回 404，符合只放行两条路径的设计；
+- API 容器内 `STEAM_COMMUNITY_BASE_URL=https://steam.threi.online`、
+  `STEAM_COMMUNITY_IP` 为空，容器内资料查询返回 200；
+- API 重建后 healthy，`/api/v1/system/info` 正常；
+- 未使用真实 Steam 账号完成浏览器端登录，仍需人工验证一次完整登录流程。
+
+---
+
+## 2026年10月25日 09时03分00秒 修复大陆主机 Steam 登录并新增一次性管理员登录
+
+### 背景
+
+生产 API 部署在腾讯云大陆主机，`steamcommunity.com` 的 TLS 连接会被重置，OpenID
+`check_authentication` 和资料 XML 查询都会失败，用户登录后回到 `/account` 只会看到
+`steam_login_failed`。浏览器侧同样可能无法打开 Steam 登录页，因此还需要一条不依赖 Steam
+的管理员应急入口。
+
+### 变更内容
+
+- 新增 Steam 直连传输 `services/api/src/modules/auth/steam.rs`：
+  - 用 `openssl s_client` 连接 `STEAM_COMMUNITY_IP`，SNI 使用完全限定名
+    `steamcommunity.com.`，证书仍按 `steamcommunity.com` 校验；
+  - 自行构造 HTTP/1.1 请求并解析 `Content-Length` / chunked 响应，只接受 identity 编码；
+  - OpenID `check_authentication` 不重放（断言一次性）；资料查询失败时回退到
+    `STEAM_COMMUNITY_BASE_URL`；
+  - 12 秒超时、1 MiB 响应上限，非 2xx 统一返回错误。
+- 新增配置 `STEAM_COMMUNITY_IP`（可选 IPv4/IPv6），并在 Compose 中透传。
+- 新增一次性管理员登录：`GET /api/v1/auth/magic` 与 `services/api/src/bin/magic-link.rs`。
+  - 运维在 API 容器内生成 64 位十六进制令牌，数据库只存 SHA-256 哈希，10 分钟有效；
+  - 兑换时删除会话行、校验管理员角色/禁用状态/有效封禁，再签发正常会话 Cookie；
+  - 用户不存在时创建管理员；已有普通成员需 `--promote`；失败重定向到
+    `/account?steam_error=magic_login_failed`。
+- API 运行镜像新增 `openssl`，并打包 `magic-link` 二进制；`Cargo.toml` 增加
+  tokio `io-util`、`process`、`time` 特性。
+- 用户中心登录卡片提示：无法打开 Steam 登录页时先开启 Steam 社区加速器。
+- 更新部署文档（直连 / Worker 中继 / magic link）、CHANGELOG 与 Cloudflare 中继说明。
+
+### 涉及文件
+
+- `services/api/src/modules/auth/steam.rs`（新增）
+- `services/api/src/bin/magic-link.rs`（新增）
+- `services/api/src/modules/auth/mod.rs`
+- `services/api/src/config/mod.rs`
+- `services/api/src/openapi.rs`
+- `services/api/Cargo.toml`
+- `services/api/Dockerfile`
+- `compose.yaml`
+- `.env.example`
+- `apps/web/src/app/(account)/account/page.tsx`
+- `docs/DEPLOYMENT.md`、`docs/CHANGELOG.md`、`deploy/cloudflare/README.md`
+
+### 数据库与 API 变化
+
+- 无新迁移；magic link 复用 `sessions` 表（`token_hash`、`user_id`、`expires_at`）。
+- 新增 `GET /api/v1/auth/magic`；OpenAPI 已注册。其余接口契约不变。
+- 新增环境变量 `STEAM_COMMUNITY_IP`，为空时行为与之前一致。
+
+### 测试与结果
+
+- `cargo test --bins`：25 个测试通过，包含配置校验、HTTP 响应解析、chunked 解码、
+  请求构造和传输 future `Send` 断言。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- 在 API 主机上手工验证：
+  - `openssl s_client -connect 23.15.140.216:443 -servername steamcommunity.com.
+    -verify_hostname steamcommunity.com` 返回 `HTTP/1.1 200 OK` 与资料 XML；
+  - 向 `/openid/login` 发送 `check_authentication` 探测请求返回 `is_valid:false`，
+    说明请求到达 Steam 且响应可解析。
+- 未使用真实 Steam 账号完成浏览器端登录；生产部署后仍需人工验证一次完整登录。
+- magic link 的实际兑换在部署后验证；未在本地执行真实数据库集成测试。
+
+---
+
 ## 2026年10月25日 04时23分18秒 用 ThRei_Players 插件替代 A2S/RCON 轮询
 
 ### 背景

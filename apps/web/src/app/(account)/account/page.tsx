@@ -318,6 +318,9 @@ function LoginRequired({ steamError }: { steamError?: string }) {
               Steam 登录未完成，请重新尝试。
             </p>
           ) : null}
+          <p className="text-xs text-muted-foreground">
+            如果无法打开 Steam 登录页，请先开启 Steam 社区加速器（例如 Watt Toolkit）后再试。
+          </p>
           <Button asChild className="w-full">
             <a href="/api/v1/auth/steam/login">
               <Gamepad2 aria-hidden="true" />

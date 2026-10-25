@@ -1,4 +1,4 @@
-export type ServerStatus = "online" | "maintenance" | "offline";
+export type ServerStatus = "online" | "maintenance" | "offline" | "hibernating";
 
 export interface KzPlayer {
   name: string;
@@ -11,6 +11,8 @@ export interface KzServer {
   name: string;
   map: string;
   description: string;
+  /** Optional community/group label used to group instances of one host. */
+  community: string;
   status: ServerStatus;
   ip: string;
   port: number;
@@ -53,6 +55,7 @@ export function searchServers(servers: KzServer[], query: string): KzServer[] {
     [
       server.name,
       server.map,
+      server.community,
       server.region,
       server.description,
       ...server.tags,

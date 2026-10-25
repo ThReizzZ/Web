@@ -27,7 +27,11 @@ export function JoinServerButton({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const address = getServerAddress(server);
   const playerCount = getOnlinePlayerCount(server);
-  const enabled = server.status === "online";
+  // "hibernating" means the empty server paused game frames and cannot run the
+  // plugin, while "offline" means the plugin stopped reporting entirely. Both
+  // can still be reachable, so let visitors try to connect. Maintenance is an
+  // explicit admin choice.
+  const enabled = server.status !== "maintenance";
 
   return (
     <>
@@ -40,7 +44,7 @@ export function JoinServerButton({
         onClick={() => dialogRef.current?.showModal()}
       >
         <Gamepad2 aria-hidden="true" />
-        {enabled ? "加入游戏" : server.status === "maintenance" ? "维护中" : "离线"}
+        {enabled ? "加入游戏" : "维护中"}
       </Button>
 
       <dialog
@@ -96,6 +100,17 @@ export function JoinServerButton({
                 {playerCount}/{server.maxPlayers} 在线
               </Badge>
             </div>
+
+            {server.status === "hibernating" ? (
+              <p className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-700 dark:text-sky-300">
+                空服休眠时游戏会暂停插件上报，但服务器仍在运行。可以直接连接唤醒服务器。
+              </p>
+            ) : server.status === "offline" ? (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                网站超过 90
+                秒没有收到插件上报，服务器可能仍在运行（例如空服休眠）。可以直接尝试连接。
+              </p>
+            ) : null}
 
             <div className="rounded-xl border bg-muted/30 p-4">
               <p className="text-xs text-muted-foreground">服务器地址（IP : PORT）</p>
