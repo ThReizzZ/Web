@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Suspense } from "react";
 import {
   ArrowRight,
   CalendarDays,
@@ -20,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { KzMapsCard, KzMapsCardSkeleton } from "@/features/account/components/kz-maps-card";
 import { LogoutButton } from "@/features/account/components/logout-button";
 import { WhitelistApplyCard } from "@/features/account/components/whitelist-apply-card";
 import type { AccountActivity, AccountOverview } from "@/features/account/types";
@@ -173,6 +175,10 @@ export default async function AccountPage({ searchParams }: AccountPageProps) {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div className="space-y-6">
+          <Suspense fallback={<KzMapsCardSkeleton />}>
+            <KzMapsCard steamId64={user.steamId64} />
+          </Suspense>
+
           <Card>
             <CardHeader>
               <CardTitle>最近活动</CardTitle>
