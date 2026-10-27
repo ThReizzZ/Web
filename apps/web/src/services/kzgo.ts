@@ -41,10 +41,17 @@ export function parseKzPage(value: string | string[] | undefined): number {
   return Number.isFinite(page) && page > 0 ? page : 1;
 }
 
+export function parseKzTier(value: string | string[] | undefined): number | null {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  const tier = Number.parseInt(candidate ?? "", 10);
+  return Number.isInteger(tier) && tier >= 1 && tier <= 7 ? tier : null;
+}
+
 interface KzTimerRecord {
   map_id: number;
   map_name: string;
   time: number;
+  points: number;
   created_on: string;
 }
 
@@ -70,6 +77,7 @@ interface MutableMapProgress {
   mapName: string;
   proTime: number | null;
   tpTime: number | null;
+  points: number;
   lastPlayedTimestamp: number;
 }
 
@@ -78,6 +86,7 @@ export interface KzMapProgress {
   mapName: string;
   proTime: number | null;
   tpTime: number | null;
+  points: number;
   lastPlayedAt: string;
 }
 
@@ -97,6 +106,8 @@ export interface KzPlayerMaps {
   recentMaps: KzMapProgress[];
   incompleteMaps: KzIncompleteMap[];
   incompleteCount: number;
+  incompleteFilteredCount: number;
+  incompleteTier: number | null;
   incompletePage: number;
   incompletePageCount: number;
   totalMapLibrary: number | null;
@@ -210,6 +221,7 @@ function mergeRecords(
         mapName: record.map_name,
         proTime: null,
         tpTime: null,
+        points: 0,
         lastPlayedTimestamp: 0,
       };
       maps.set(record.map_id, item);
@@ -220,6 +232,7 @@ function mergeRecords(
     } else {
       item.proTime = item.proTime === null ? record.time : Math.min(item.proTime, record.time);
     }
+    item.points = Math.max(item.points, record.points);
     const timestamp = Date.parse(normalizeTimestamp(record.created_on));
     if (timestamp > item.lastPlayedTimestamp) {
       item.lastPlayedTimestamp = timestamp;
@@ -232,6 +245,7 @@ export async function fetchKzgoPlayerMaps(
   mode: KzMode,
   view: KzMapView,
   page: number,
+  tier: number | null,
 ): Promise<KzPlayerMaps | null> {
   if (!/^\d{17}$/.test(steamId64)) {
     return null;
@@ -259,6 +273,8 @@ export async function fetchKzgoPlayerMaps(
 
     let incompleteMaps: KzIncompleteMap[] = [];
     let incompleteCount = 0;
+    let incompleteFilteredCount = 0;
+    let incompleteTier: number | null = null;
     let incompletePage = 1;
     let incompletePageCount = 1;
     let totalMapLibrary: number | null = null;
@@ -271,6 +287,7 @@ export async function fetchKzgoPlayerMaps(
       ) {
         return null;
       }
+      incompleteTier = tier;
       const modeMapIds = new Set(
         filterResult.value.map((filter) => filter.map_id).filter((mapId) => mapId > 0),
       );
@@ -289,10 +306,18 @@ export async function fetchKzgoPlayerMaps(
           difficulty: map.difficulty,
         }));
       incompleteCount = allIncomplete.length;
-      incompletePageCount = Math.max(1, Math.ceil(incompleteCount / KZ_INCOMPLETE_PAGE_SIZE));
+      const filtered =
+        incompleteTier === null
+          ? allIncomplete
+          : allIncomplete.filter((map) => map.difficulty === incompleteTier);
+      incompleteFilteredCount = filtered.length;
+      incompletePageCount = Math.max(
+        1,
+        Math.ceil(incompleteFilteredCount / KZ_INCOMPLETE_PAGE_SIZE),
+      );
       incompletePage = Math.min(Math.max(page, 1), incompletePageCount);
       const start = (incompletePage - 1) * KZ_INCOMPLETE_PAGE_SIZE;
-      incompleteMaps = allIncomplete.slice(start, start + KZ_INCOMPLETE_PAGE_SIZE);
+      incompleteMaps = filtered.slice(start, start + KZ_INCOMPLETE_PAGE_SIZE);
       totalMapLibrary = library.length;
     }
 
@@ -305,6 +330,7 @@ export async function fetchKzgoPlayerMaps(
         mapName: map.mapName,
         proTime: map.proTime,
         tpTime: map.tpTime,
+        points: map.points,
         lastPlayedAt: new Date(map.lastPlayedTimestamp).toISOString(),
       }));
 
@@ -318,6 +344,8 @@ export async function fetchKzgoPlayerMaps(
       recentMaps,
       incompleteMaps,
       incompleteCount,
+      incompleteFilteredCount,
+      incompleteTier,
       incompletePage,
       incompletePageCount,
       totalMapLibrary,
