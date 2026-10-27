@@ -51,6 +51,9 @@
   登录网站，下次进服后同 IP 的其他账号也会被拦截。
 - `ThRei_Players` 1.9.2 移除失效的 `sm_threi_ban`，统一使用 `sm_ban` / `!ban`；`!ban` 不带
   参数会打开选择玩家、时长和原因的交互菜单，带参数时保持原来的直接封禁行为。
+- `ThRei_Players` 1.9.3 移除 `sm_threi_addban` / `sm_threi_unban` / `sm_threi_banip` /
+  `sm_threi_unbanip`，统一使用标准命令 `sm_addban` / `sm_unban` / `sm_banip` / `sm_unbanip`；
+  只保留 `sm_threi_report` / `sm_threi_status` 诊断命令。
 - 白名单改为全服共享：玩家申请一次、管理员审核一次，所有开启白名单的服务器通用；
   新增 `global_whitelist` 并迁移旧的 `server_whitelist` 数据。
 - 游戏服务器封禁默认作用于全部服务器（`scope: "global"`），封禁弹窗可选择“仅本服”；

@@ -254,7 +254,7 @@ action 5c8b2d3e-... unbanip 203.0.113.10 网站解除 IP 封禁
 
 ### `POST /api/v1/plugin/ip-ban-report`
 
-供插件 `sm_threi_banip` 回传 IP 封禁。请求头与上报相同。
+供插件 `sm_banip` 回传 IP 封禁。请求头与上报相同。
 
 ```json
 {
@@ -270,7 +270,7 @@ action 5c8b2d3e-... unbanip 203.0.113.10 网站解除 IP 封禁
 
 ### `POST /api/v1/plugin/unban-report`
 
-供插件 `sm_threi_unban` / `sm_threi_unbanip` 在游戏内解封时同步网站。
+供插件 `sm_unban` / `sm_unbanip` 在游戏内解封时同步网站。
 
 ```json
 {

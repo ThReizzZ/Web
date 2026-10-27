@@ -31,7 +31,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.9.2"
+#define PLUGIN_VERSION "1.9.3"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -187,14 +187,6 @@ public void OnPluginStart() {
         "Send a ThRei_Players report immediately.");
     RegAdminCmd("sm_threi_status", Command_Status, ADMFLAG_ROOT,
         "Show ThRei_Players configuration and access-cache status without revealing tokens.");
-    RegAdminCmd("sm_threi_addban", Command_AddBan, ADMFLAG_BAN,
-        "按 SteamID64 封禁并同步网站：sm_threi_addban <SteamID64> <分钟> [原因]");
-    RegAdminCmd("sm_threi_unban", Command_Unban, ADMFLAG_BAN,
-        "解封并同步网站：sm_threi_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
-    RegAdminCmd("sm_threi_banip", Command_BanIp, ADMFLAG_BAN,
-        "封禁 IP 并同步网站：sm_threi_banip <IP> <分钟> [原因]");
-    RegAdminCmd("sm_threi_unbanip", Command_UnbanIp, ADMFLAG_BAN,
-        "解封 IP 并同步网站：sm_threi_unbanip <IP>");
 
     // basebans is intentionally removed on these servers; take over its
     // command names so !ban / sm_ban use the plugin-only ban store.
@@ -705,7 +697,7 @@ void ClearBanMenuState(int client, bool closeTimer = true) {
 public Action Command_AddBan(int client, int args) {
     if (args < 2) {
         ReplyToCommand(client,
-            "[ThRei] 用法：sm_threi_addban <SteamID64|STEAM_x:y:z|[U:1:account]> <分钟> [原因]");
+            "[ThRei] 用法：sm_addban <SteamID64|STEAM_x:y:z|[U:1:account]> <分钟> [原因]");
         return Plugin_Handled;
     }
     char input[64];
@@ -713,7 +705,7 @@ public Action Command_AddBan(int client, int args) {
     char reason[MAX_REASON_LENGTH];
     if (!ReadBanCommandArgs(input, sizeof(input), minutes, reason, sizeof(reason))) {
         ReplyToCommand(client,
-            "[ThRei] 用法：sm_threi_addban <SteamID64|STEAM_x:y:z|[U:1:account]> <分钟> [原因]");
+            "[ThRei] 用法：sm_addban <SteamID64|STEAM_x:y:z|[U:1:account]> <分钟> [原因]");
         return Plugin_Handled;
     }
     char steamId[32];
@@ -741,13 +733,13 @@ public Action Command_AddBan(int client, int args) {
 public Action Command_Unban(int client, int args) {
     if (args < 1) {
         ReplyToCommand(client,
-            "[ThRei] 用法：sm_threi_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
+            "[ThRei] 用法：sm_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
         return Plugin_Handled;
     }
     char arg[64];
     if (!ReadFirstArg(arg, sizeof(arg))) {
         ReplyToCommand(client,
-            "[ThRei] 用法：sm_threi_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
+            "[ThRei] 用法：sm_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
         return Plugin_Handled;
     }
 
@@ -772,7 +764,7 @@ public Action Command_Unban(int client, int args) {
 public Action Command_BanIp(int client, int args) {
     if (args < 2) {
         ReplyToCommand(client,
-            "[ThRei] 用法：sm_threi_banip <IP> <分钟> [原因]（0 = 永久）");
+            "[ThRei] 用法：sm_banip <IP> <分钟> [原因]（0 = 永久）");
         return Plugin_Handled;
     }
     char ip[64];
@@ -780,7 +772,7 @@ public Action Command_BanIp(int client, int args) {
     char reason[MAX_REASON_LENGTH];
     if (!ReadBanCommandArgs(ip, sizeof(ip), minutes, reason, sizeof(reason))) {
         ReplyToCommand(client,
-            "[ThRei] 用法：sm_threi_banip <IP> <分钟> [原因]（0 = 永久）");
+            "[ThRei] 用法：sm_banip <IP> <分钟> [原因]（0 = 永久）");
         return Plugin_Handled;
     }
     if (!LooksLikeIp(ip)) {
@@ -829,12 +821,12 @@ public Action Command_BanIp(int client, int args) {
 
 public Action Command_UnbanIp(int client, int args) {
     if (args < 1) {
-        ReplyToCommand(client, "[ThRei] 用法：sm_threi_unbanip <IP>");
+        ReplyToCommand(client, "[ThRei] 用法：sm_unbanip <IP>");
         return Plugin_Handled;
     }
     char ip[64];
     if (!ReadFirstArg(ip, sizeof(ip))) {
-        ReplyToCommand(client, "[ThRei] 用法：sm_threi_unbanip <IP>");
+        ReplyToCommand(client, "[ThRei] 用法：sm_unbanip <IP>");
         return Plugin_Handled;
     }
     if (!LooksLikeIp(ip)) {
