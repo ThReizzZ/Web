@@ -57,8 +57,8 @@ function KzMapsCardContent({ data, profileUrl }: { data: KzPlayerMaps; profileUr
             KZ 地图记录
           </CardTitle>
           <CardDescription>
-            已在 KZ:GO 记录 {data.uniqueMaps.toLocaleString("zh-CN")} 张地图
-            {data.points !== null ? ` · ${data.points.toLocaleString("zh-CN")} 分` : ""}
+            已过 {data.uniqueMaps.toLocaleString("zh-CN")} 张地图 · 总完成{" "}
+            {data.totalRuns.toLocaleString("zh-CN")} 次
           </CardDescription>
         </div>
         <Button asChild variant="outline" size="sm">
@@ -68,25 +68,21 @@ function KzMapsCardContent({ data, profileUrl }: { data: KzPlayerMaps; profileUr
           </a>
         </Button>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <KzStat label="已过地图" value={data.uniqueMaps} />
-          <KzStat label="PRO 完成" value={data.proMaps} />
-          <KzStat label="TP 完成" value={data.tpMaps} />
-          <KzStat label="总完成次数" value={data.totalRuns} />
-        </div>
-
+      <CardContent className="space-y-3">
         {data.recentMaps.length > 0 ? (
-          <div className="overflow-hidden rounded-xl border">
-            <div className="flex items-center justify-between border-b bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-              <span>最近完成的地图</span>
-              <span>最佳时间</span>
+          <>
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>最近完成</span>
+              <span>
+                PRO {data.proMaps.toLocaleString("zh-CN")} · TP{" "}
+                {data.tpMaps.toLocaleString("zh-CN")}
+              </span>
             </div>
-            <div className="divide-y">
+            <div className="divide-y overflow-hidden rounded-xl border">
               {data.recentMaps.map((map) => (
                 <div
                   key={map.mapId}
-                  className="flex items-center justify-between gap-3 px-3 py-2.5"
+                  className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div className="min-w-0">
                     <p className="truncate font-mono text-xs sm:text-sm">{map.mapName}</p>
@@ -94,56 +90,35 @@ function KzMapsCardContent({ data, profileUrl }: { data: KzPlayerMaps; profileUr
                       {formatRelativeTime(map.lastPlayedAt)}
                     </p>
                   </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     {map.proTime !== null ? (
-                      <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1.5 text-[11px]">
                         <Badge variant="success" className="h-4 px-1.5 text-[10px]">
                           PRO
                         </Badge>
-                        <span className="font-mono text-[11px]">{formatKzTime(map.proTime)}</span>
-                      </div>
+                        <span className="font-mono">{formatKzTime(map.proTime)}</span>
+                      </span>
                     ) : null}
                     {map.tpTime !== null ? (
-                      <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1.5 text-[11px]">
                         <Badge variant="muted" className="h-4 px-1.5 text-[10px]">
                           TP
                         </Badge>
-                        <span className="font-mono text-[11px]">{formatKzTime(map.tpTime)}</span>
-                      </div>
+                        <span className="font-mono">{formatKzTime(map.tpTime)}</span>
+                      </span>
                     ) : null}
                   </div>
                 </div>
               ))}
             </div>
-          </div>
+          </>
         ) : (
           <p className="rounded-xl border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
             还没有 KZ:GO 地图完成记录。
           </p>
         )}
-
-        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-          <span>
-            显示最近 {data.recentMaps.length} 张，共 {data.uniqueMaps.toLocaleString("zh-CN")}{" "}
-            张地图。
-          </span>
-          {data.rating !== null ? (
-            <span>
-              全球评级 <span className="font-mono text-foreground">{data.rating.toFixed(2)}</span>
-            </span>
-          ) : null}
-        </div>
       </CardContent>
     </Card>
-  );
-}
-
-function KzStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-xl border bg-muted/20 px-3 py-2.5">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="mt-0.5 text-lg font-semibold tabular-nums">{value.toLocaleString("zh-CN")}</p>
-    </div>
   );
 }
 
@@ -157,16 +132,15 @@ export function KzMapsCardSkeleton() {
         </CardTitle>
         <CardDescription>正在从 KZ:GO 读取地图记录…</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {Array.from({ length: 4 }, (_, index) => (
-            <div key={index} className="rounded-xl border bg-muted/20 px-3 py-2.5">
-              <div className="h-3 w-14 animate-pulse rounded bg-muted" />
-              <div className="mt-2 h-5 w-10 animate-pulse rounded bg-muted" />
+      <CardContent>
+        <div className="space-y-px overflow-hidden rounded-xl border bg-border">
+          {Array.from({ length: 5 }, (_, index) => (
+            <div key={index} className="bg-card px-4 py-3">
+              <div className="h-3.5 w-40 animate-pulse rounded bg-muted" />
+              <div className="mt-2 h-2.5 w-24 animate-pulse rounded bg-muted" />
             </div>
           ))}
         </div>
-        <div className="h-44 animate-pulse rounded-xl border bg-muted/20" />
       </CardContent>
     </Card>
   );

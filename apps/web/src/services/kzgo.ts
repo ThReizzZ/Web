@@ -2,7 +2,7 @@ const KZ_TIMER_API = "https://kztimerglobal.com/api/v2.0";
 const KZ_TIMER_TIMEOUT_MS = 15_000;
 const KZ_TIMER_REVALIDATE_SECONDS = 600;
 const KZ_RECORD_LIMIT = 9999;
-const KZ_RECENT_MAP_LIMIT = 12;
+const KZ_RECENT_MAP_LIMIT = 8;
 
 const STEAM_ID64_OFFSET = 76561197960265728n;
 
