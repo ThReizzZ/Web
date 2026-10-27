@@ -44,7 +44,7 @@ ThRei 是一个以 CS:GO KZ 攀爬、连跳和长跳玩法为核心的社区系�
 - 管理面板支持按 SteamID64 新增管理员、取消管理员、禁用/启用账号；不能操作自己，也不能移除最后一位可用管理员。
 - 封禁管理支持 SteamID64/IP 封禁、临时/永久封禁与解封；SteamID 封禁会自动查找该玩家的最近 IP 并创建 IP 封禁；IP 封禁会自动关联该 IP 下已知的非管理员账号，封禁会立即撤销目标网站会话并阻止再次登录。
 - 论坛管理支持编辑/删除/恢复主题和回复、置顶/热门/分类调整、论坛用户禁言和封禁。
-- 服务器管理支持添加/删除服务器、启用/停用、生成/轮换/撤销插件令牌、查看在线玩家、踢出或服务器封禁玩家；游戏内执行由 `ThRei_Players` 1.5.0+ 消费 `server_actions` 完成，1.6.0+ 还会把游戏内 `sm_ban` / `BanClient` 封禁回传网站并自动封禁玩家 IP，1.6.1+ 支持网站解封时自动删除服务器本地 SteamID 封禁；1.7.0+ 新增自己的 `sm_threi_ban` / `sm_threi_unban` / `sm_threi_banip` 等命令、本地引擎封禁和分组解封；1.7.1+ 的封禁/解封命令支持 SteamID64、SteamID2 和 SteamID3；1.7.2+ 过滤非法 UTF-8 并避免 4xx 上报堵塞队列。
+- 服务器管理支持添加/删除服务器、启用/停用、生成/轮换/撤销插件令牌、查看在线玩家、踢出或服务器封禁玩家；游戏内执行由 `ThRei_Players` 1.5.0+ 消费 `server_actions` 完成，1.6.0+ 还会把游戏内 `sm_ban` / `BanClient` 封禁回传网站并自动封禁玩家 IP，1.6.1+ 支持网站解封时自动删除服务器本地 SteamID 封禁；1.7.0+ 新增自己的 `sm_threi_ban` / `sm_threi_unban` / `sm_threi_banip` 等命令、本地引擎封禁和分组解封；1.7.1+ 的封禁/解封命令支持 SteamID64、SteamID2 和 SteamID3；1.7.2+ 过滤非法 UTF-8 并避免 4xx 上报堵塞队列；1.7.3+ 支持不加引号的 SteamID2/3/IPv6 参数。
 - 服务器状态由 SourceMod 插件 `ThRei_Players` 主动上报，API 不再使用 A2S/RCON 轮询。插件安装、配置和协议见 [plugins/ThRei_Players/README.md](plugins/ThRei_Players/README.md)。每个服务器使用独立令牌（`X-ThRei-Plugin-Token` 请求头）；超过 90 秒没有上报会自动标记离线并清空在线名单，`maintenance` 状态不会被覆盖。
 - 白名单为全服共享：玩家在用户中心提交一次申请，管理员审核通过或手动授权后，所有开启白名单的服务器通用；服务器管理保留每台服务器的 `requires_whitelist` 开关，`ThRei_Players` 在玩家连接时执行拦截。
 

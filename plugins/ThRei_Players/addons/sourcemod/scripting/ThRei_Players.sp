@@ -27,7 +27,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.7.2"
+#define PLUGIN_VERSION "1.7.3"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -411,21 +411,19 @@ public Action Command_Ban(int client, int args) {
         return Plugin_Handled;
     }
     char targetArg[64];
-    GetCmdArg(1, targetArg, sizeof(targetArg));
-    TrimString(targetArg);
+    int minutes;
+    char reason[MAX_REASON_LENGTH];
+    if (!ReadBanCommandArgs(targetArg, sizeof(targetArg), minutes, reason,
+            sizeof(reason))) {
+        ReplyToCommand(client,
+            "[ThRei] 用法：sm_threi_ban <目标|SteamID> <分钟> [原因]（0 = 永久）");
+        return Plugin_Handled;
+    }
 
     char normalized[32];
     if (TrySteamIdTo64(targetArg, normalized, sizeof(normalized))) {
         strcopy(targetArg, sizeof(targetArg), normalized);
     }
-
-    int minutes;
-    if (!ParseBanMinutes(2, minutes)) {
-        ReplyToCommand(client, "[ThRei] 分钟数必须是 0–52560000 的整数。");
-        return Plugin_Handled;
-    }
-    char reason[MAX_REASON_LENGTH];
-    ReadBanReason(3, reason, sizeof(reason));
 
     char steamId[32];
     char name[MAX_NAME_LENGTH];
@@ -447,21 +445,18 @@ public Action Command_AddBan(int client, int args) {
         return Plugin_Handled;
     }
     char input[64];
-    GetCmdArg(1, input, sizeof(input));
-    TrimString(input);
+    int minutes;
+    char reason[MAX_REASON_LENGTH];
+    if (!ReadBanCommandArgs(input, sizeof(input), minutes, reason, sizeof(reason))) {
+        ReplyToCommand(client,
+            "[ThRei] 用法：sm_threi_addban <SteamID64|STEAM_x:y:z|[U:1:account]> <分钟> [原因]");
+        return Plugin_Handled;
+    }
     char steamId[32];
     if (!TrySteamIdTo64(input, steamId, sizeof(steamId))) {
         ReplyToCommand(client, "[ThRei] 无法识别 SteamID：%s", input);
         return Plugin_Handled;
     }
-
-    int minutes;
-    if (!ParseBanMinutes(2, minutes)) {
-        ReplyToCommand(client, "[ThRei] 分钟数必须是 0–52560000 的整数。");
-        return Plugin_Handled;
-    }
-    char reason[MAX_REASON_LENGTH];
-    ReadBanReason(3, reason, sizeof(reason));
 
     char name[MAX_NAME_LENGTH];
     char ip[64];
@@ -486,12 +481,17 @@ public Action Command_Unban(int client, int args) {
         return Plugin_Handled;
     }
     char arg[64];
-    GetCmdArg(1, arg, sizeof(arg));
-    TrimString(arg);
+    if (!ReadFirstArg(arg, sizeof(arg))) {
+        ReplyToCommand(client,
+            "[ThRei] 用法：sm_threi_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
+        return Plugin_Handled;
+    }
 
     char steamId[32];
     if (!TrySteamIdTo64(arg, steamId, sizeof(steamId))) {
-        ReplyToCommand(client, "[ThRei] 无法识别 SteamID：%s", arg);
+        ReplyToCommand(client,
+            "[ThRei] 无法识别 SteamID：%s（SteamID2/3 可加引号，例如 \"STEAM_0:0:...\"）",
+            arg);
         return Plugin_Handled;
     }
 
@@ -512,19 +512,17 @@ public Action Command_BanIp(int client, int args) {
         return Plugin_Handled;
     }
     char ip[64];
-    GetCmdArg(1, ip, sizeof(ip));
-    TrimString(ip);
+    int minutes;
+    char reason[MAX_REASON_LENGTH];
+    if (!ReadBanCommandArgs(ip, sizeof(ip), minutes, reason, sizeof(reason))) {
+        ReplyToCommand(client,
+            "[ThRei] 用法：sm_threi_banip <IP> <分钟> [原因]（0 = 永久）");
+        return Plugin_Handled;
+    }
     if (!LooksLikeIp(ip)) {
         ReplyToCommand(client, "[ThRei] IP 地址格式不正确：%s", ip);
         return Plugin_Handled;
     }
-    int minutes;
-    if (!ParseBanMinutes(2, minutes)) {
-        ReplyToCommand(client, "[ThRei] 分钟数必须是 0–52560000 的整数。");
-        return Plugin_Handled;
-    }
-    char reason[MAX_REASON_LENGTH];
-    ReadBanReason(3, reason, sizeof(reason));
     if (!IsValidUtf8(reason)) {
         strcopy(reason, sizeof(reason), "管理员封禁");
     }
@@ -571,8 +569,10 @@ public Action Command_UnbanIp(int client, int args) {
         return Plugin_Handled;
     }
     char ip[64];
-    GetCmdArg(1, ip, sizeof(ip));
-    TrimString(ip);
+    if (!ReadFirstArg(ip, sizeof(ip))) {
+        ReplyToCommand(client, "[ThRei] 用法：sm_threi_unbanip <IP>");
+        return Plugin_Handled;
+    }
     if (!LooksLikeIp(ip)) {
         ReplyToCommand(client, "[ThRei] IP 地址格式不正确：%s", ip);
         return Plugin_Handled;
@@ -581,40 +581,77 @@ public Action Command_UnbanIp(int client, int args) {
     return Plugin_Handled;
 }
 
-bool ParseBanMinutes(int argIndex, int &minutes) {
-    char value[32];
-    GetCmdArg(argIndex, value, sizeof(value));
-    TrimString(value);
-    if (value[0] == '\0') {
+bool ParseMinutesText(const char[] value, int &minutes) {
+    char trimmed[32];
+    strcopy(trimmed, sizeof(trimmed), value);
+    TrimString(trimmed);
+    if (trimmed[0] == '\0') {
         return false;
     }
-    for (int i = 0; value[i] != '\0'; i++) {
-        if (!IsCharNumeric(value[i])) {
+    for (int i = 0; trimmed[i] != '\0'; i++) {
+        if (!IsCharNumeric(trimmed[i])) {
             return false;
         }
     }
-    minutes = StringToInt(value);
+    minutes = StringToInt(trimmed);
     return minutes >= 0 && minutes <= 52560000;
 }
 
-void ReadBanReason(int firstArg, char[] reason, int maxLength) {
+/**
+ * Reads `<target> <minutes> [reason]` from the raw argument string.
+ *
+ * Source's command tokenizer treats ':' as a break character, which would
+ * split STEAM_0:0:... into three arguments. Reading ArgS() and breaking only
+ * on whitespace preserves unquoted SteamID2/3 and IPv6 values.
+ */
+bool ReadBanCommandArgs(char[] target, int targetMax, int &minutes,
+        char[] reason, int reasonMax) {
+    char raw[512];
+    GetCmdArgString(raw, sizeof(raw));
+    TrimString(raw);
+    if (raw[0] == '\0') {
+        return false;
+    }
+
+    char minutesText[32];
+    int next = BreakString(raw, target, targetMax);
+    if (next == -1) {
+        return false;
+    }
+    int next2 = BreakString(raw[next], minutesText, sizeof(minutesText));
+    if (!ParseMinutesText(minutesText, minutes)) {
+        return false;
+    }
+
+    StripQuotes(target);
+    TrimString(target);
+    if (target[0] == '\0') {
+        return false;
+    }
+
     reason[0] = '\0';
-    int args = GetCmdArgs();
-    for (int i = firstArg; i <= args; i++) {
-        char part[256];
-        GetCmdArg(i, part, sizeof(part));
-        if (part[0] == '\0') {
-            continue;
-        }
-        if (reason[0] != '\0') {
-            StrCat(reason, maxLength, " ");
-        }
-        StrCat(reason, maxLength, part);
+    if (next2 != -1) {
+        strcopy(reason, reasonMax, raw[next2]);
+        StripQuotes(reason);
+        TrimString(reason);
     }
-    TrimString(reason);
     if (reason[0] == '\0') {
-        strcopy(reason, maxLength, "管理员封禁");
+        strcopy(reason, reasonMax, "管理员封禁");
     }
+    return true;
+}
+
+bool ReadFirstArg(char[] output, int maxLength) {
+    char raw[256];
+    GetCmdArgString(raw, sizeof(raw));
+    TrimString(raw);
+    if (raw[0] == '\0') {
+        return false;
+    }
+    BreakString(raw, output, maxLength);
+    StripQuotes(output);
+    TrimString(output);
+    return output[0] != '\0';
 }
 
 bool ResolveBanTarget(int adminClient, const char[] arg, char[] steamId, int steamIdMax,

@@ -17,6 +17,53 @@
 
 ---
 
+## 2026年10月28日 02时18分29秒 支持不加引号的 SteamID2/3 参数（1.7.3）
+
+### 背景
+
+用户在服务器执行：
+
+```text
+sm_threi_unban STEAM_0:0:914966745
+```
+
+得到 `[ThRei] 无法识别 SteamID：STEAM_0`。
+
+### 原因
+
+Source 引擎的 `CCommand` 分词器 break set 是 `{}()':`，包含冒号。未加引号时
+`STEAM_0:0:914966745` 被拆成 `STEAM_0`、`0`、`914966745` 三个参数，`GetCmdArg(1)` 只能
+拿到 `STEAM_0`。
+
+### 变更内容
+
+- 版本 1.7.3。
+- 新增 `ReadBanCommandArgs` / `ReadFirstArg`：读取 `GetCmdArgString()` 的原始参数串，再用
+  `BreakString` 只按空白（支持引号）拆分，保留 SteamID2/3 和 IPv6 中的冒号。
+- `sm_threi_ban`、`sm_threi_addban`、`sm_threi_unban`、`sm_threi_banip`、`sm_threi_unbanip`
+  全部改用原始参数解析；不加引号也可用，加引号仍兼容。
+- 错误提示补充“SteamID2/3 可加引号”。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+
+### 插件包
+
+- `ThRei_Players-1.7.3`：`/home/threi/ThRei_Players-1.7.3/`、`.zip`、`.tar.gz`，并复制到
+  `/mnt/c/Users/15155/Downloads/`。
+- `.smx` SHA-256：`1cdb0111bc2ae060135110405338129fb69b232f37fb0c51ca9811ba2d16adac`。
+
+### 测试与结果
+
+- SourcePawn Compiler 1.11.0.6970 编译通过，无警告。
+- 按 Source SDK `CCommand::Tokenize` 的 break set 确认问题来自引擎分词，不是插件 ID 解析。
+- **未执行**：真实游戏服务器 1.7.3 命令测试；需要用户在 1服 直接执行
+  `sm_threi_unban STEAM_0:0:914966745` 验证。
+- 无网站/API 变更。
+
 ## 2026年10月28日 02时14分29秒 修复封禁上报 400 与队列堵塞（1.7.2）
 
 ### 背景
@@ -107,7 +154,7 @@
 
 用户希望最终用 `ThRei_Players` 完全替代 `basebans.smx`。本阶段先实现 1.7.0：新增自己的
 封禁/解封/IP 封禁命令，同时写本地引擎封禁和网站记录；basebans 暂时保留，在 1服 验证后再
-于 1.7.3 提供 `sm_ban` / `sm_unban` 兼容命令并逐台卸载。
+于 1.7.4 提供 `sm_ban` / `sm_unban` 兼容命令并逐台卸载。
 
 ### 变更内容
 
