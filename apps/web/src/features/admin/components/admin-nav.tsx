@@ -11,12 +11,14 @@ import {
   MessageSquareText,
   Server,
   UserCog,
+  Users,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 const adminNav = [
   { label: "概览", href: "/admin", icon: LayoutDashboard },
+  { label: "登录玩家", href: "/admin/players", icon: Users },
   { label: "管理员", href: "/admin/admins", icon: UserCog },
   { label: "论坛管理", href: "/admin/forum", icon: MessageSquareText },
   { label: "服务器管理", href: "/admin/servers", icon: Server },

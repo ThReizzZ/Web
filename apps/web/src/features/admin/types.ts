@@ -51,6 +51,18 @@ export interface AdminAccount {
   lastLoginAt: string;
 }
 
+export interface AdminPlayer {
+  steamId64: string;
+  name: string;
+  avatarUrl: string | null;
+  role: string;
+  isDisabled: boolean;
+  createdAt: string;
+  lastLoginAt: string;
+  lastLoginIp: string | null;
+  activeSessions: number;
+}
+
 export interface WhitelistApplication {
   id: string;
   serverId: string | null;

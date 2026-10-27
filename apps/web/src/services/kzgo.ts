@@ -297,7 +297,7 @@ export async function fetchKzgoPlayerMaps(
         .filter((map) => !completedIds.has(map.id))
         .sort(
           (left, right) =>
-            right.difficulty - left.difficulty ||
+            left.difficulty - right.difficulty ||
             left.name.localeCompare(right.name, "en", { sensitivity: "base" }),
         )
         .map((map) => ({

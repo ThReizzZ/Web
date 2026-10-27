@@ -54,6 +54,9 @@
 - `ThRei_Players` 1.9.3 移除 `sm_threi_addban` / `sm_threi_unban` / `sm_threi_banip` /
   `sm_threi_unbanip`，统一使用标准命令 `sm_addban` / `sm_unban` / `sm_banip` / `sm_unbanip`；
   只保留 `sm_threi_report` / `sm_threi_status` 诊断命令。
+- 管理面板新增「登录玩家」页面：列出全部非系统账号、最近登录时间/IP、角色、禁用状态和活跃会话数。
+- 用户中心 KZ 地图卡片支持 KZT/SKZ/VNL 模式、已完成/未完成地图、T1–T7 筛选和分页；完成地图显示地图分数。
+- 顶部导航移除重复的「用户中心」入口，保留右上角头像入口。
 - 白名单改为全服共享：玩家申请一次、管理员审核一次，所有开启白名单的服务器通用；
   新增 `global_whitelist` 并迁移旧的 `server_whitelist` 数据。
 - 游戏服务器封禁默认作用于全部服务器（`scope: "global"`），封禁弹窗可选择“仅本服”；

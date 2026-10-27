@@ -45,6 +45,20 @@ pub struct LookupResponse {
     pub user: Option<LookupUser>,
 }
 
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminPlayer {
+    pub steam_id64: String,
+    pub name: String,
+    pub avatar_url: Option<String>,
+    pub role: String,
+    pub is_disabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub last_login_at: DateTime<Utc>,
+    pub last_login_ip: Option<String>,
+    pub active_sessions: i64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddAdminRequest {
@@ -60,6 +74,7 @@ pub struct DisableAdminRequest {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/admins", get(list_admins).post(add_admin))
+        .route("/admin/players", get(list_players))
         .route("/admin/users/lookup", get(lookup_user))
         .route("/admin/admins/{steam_id64}", delete(remove_admin))
         .route("/admin/admins/{steam_id64}/disable", post(disable_admin))
@@ -102,6 +117,27 @@ async fn list_admins(
     .fetch_all(&state.db)
     .await?;
     Ok(Json(admins))
+}
+
+async fn list_players(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AdminPlayer>>, AppError> {
+    require_admin(&state, &headers).await?;
+    let players = sqlx::query_as::<_, AdminPlayer>(
+        r"
+        SELECT u.steam_id64, u.persona_name AS name, u.avatar_url, u.role,
+               u.is_disabled, u.created_at, u.last_login_at, u.last_login_ip,
+               (SELECT count(*) FROM sessions s
+                WHERE s.user_id = u.id AND s.expires_at > now())::bigint AS active_sessions
+        FROM users u
+        WHERE u.is_system = false
+        ORDER BY u.last_login_at DESC
+        ",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(players))
 }
 
 async fn lookup_user(

@@ -145,7 +145,7 @@ Steam 是唯一登录方式：
 - 顶部导航在未登录时显示“使用Steam登录”，链接到 `/api/v1/auth/steam/login`。
 - “管理面板”入口只在当前用户角色为 `admin` 时加入顶部导航；匿名用户和普通成员不渲染该入口，页脚也不展示管理员入口。
 - `(admin)` layout 在服务端再次读取会话：匿名访问重定向到 `/account`，非管理员重定向到首页，只有管理员渲染管理面板。
-- 管理面板页面：`/admin` 运营概览、`/admin/admins` 管理员管理、`/admin/forum` 论坛管理、`/admin/servers` 服务器管理、`/admin/communities` 社区组管理、`/admin/bans` 封禁管理、`/admin/whitelist` 白名单审核；共享服务端角色门禁与响应式侧边导航。服务状态入口已移除，其信息由运营概览覆盖。
+- 管理面板页面：`/admin` 运营概览、`/admin/players` 登录玩家、`/admin/admins` 管理员管理、`/admin/forum` 论坛管理、`/admin/servers` 服务器管理、`/admin/communities` 社区组管理、`/admin/bans` 封禁管理、`/admin/whitelist` 白名单审核；共享服务端角色门禁与响应式侧边导航。服务状态入口已移除，其信息由运营概览覆盖。
 - API 跳转 Steam OpenID；Steam 回调到 `${WEB_URL}/api/v1/auth/steam/callback`。
 - API 向 Steam 校验断言，记录/更新 `users`，生成随机会话令牌；数据库只保存令牌的 SHA-256 哈希，浏览器收到 HttpOnly Cookie。
 - 服务端请求通过 `getServerApiClient()` 转发 Cookie；`/auth/me` 决定导航显示登录按钮还是用户头像。

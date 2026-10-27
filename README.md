@@ -194,6 +194,7 @@ cd apps/web && npm run build
 | GET | `/api/v1/community/overview` | 社区统计 | 否 |
 | GET | `/api/v1/account` | 当前用户资料与活动 | 需要 |
 | GET | `/api/v1/admin/overview` | 管理统计 | 管理员 |
+| GET | `/api/v1/admin/players` | 全部登录玩家、最近登录 IP 与活跃会话 | 管理员 |
 | GET | `/api/v1/admin/users/lookup` | 按 SteamID64 查询玩家资料 | 管理员 |
 | GET/POST | `/api/v1/admin/admins` | 管理员列表 / 新增管理员 | 管理员 |
 | GET/PATCH/DELETE | `/api/v1/admin/forum/*` | 主题、回复、用户禁言管理 | 管理员 |

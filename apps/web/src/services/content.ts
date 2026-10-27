@@ -8,6 +8,7 @@ import type {
   AdminForumUser,
   AdminLookupResponse,
   AdminOverview,
+  AdminPlayer,
   PluginTokenResponse,
   ServerAdminOverview,
   ServerBan,
@@ -97,6 +98,10 @@ export function fetchAdminOverview(client: ApiClient): Promise<AdminOverview> {
 
 export async function fetchAdminAccounts(client: ApiClient): Promise<AdminAccount[]> {
   return client.get<AdminAccount[]>("/api/v1/admin/admins", noStore);
+}
+
+export async function fetchAdminPlayers(client: ApiClient): Promise<AdminPlayer[]> {
+  return client.get<AdminPlayer[]>("/api/v1/admin/players", noStore);
 }
 
 export async function addAdminAccount(client: ApiClient, steamId64: string): Promise<AdminAccount> {
