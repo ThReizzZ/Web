@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { ArrowRight, Copy, Globe2, Map, Server, Terminal, Users } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/page-container";
@@ -11,6 +12,7 @@ import { ServerMapImage } from "@/features/servers/components/server-map-image";
 import { getMaxPlayerTotal, getOnlinePlayerTotal } from "@/features/servers/data/servers";
 import { getServerApiClient } from "@/lib/api/server";
 import { fetchMe, fetchServers } from "@/services/content";
+import { applyEstimatedLatencies, clientIpFromHeaders } from "@/services/latency";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +42,9 @@ const steps = [
 
 export default async function ServersPage() {
   const client = await getServerApiClient();
-  const [servers, me] = await Promise.all([fetchServers(client), fetchMe(client)]);
+  const [baseServers, me] = await Promise.all([fetchServers(client), fetchMe(client)]);
+  const clientIp = me.user ? clientIpFromHeaders(await headers()) : null;
+  const servers = await applyEstimatedLatencies(baseServers, clientIp);
   const featured = servers.find((server) => server.featured) ?? servers[0];
   const onlineTotal = getOnlinePlayerTotal(servers);
   const maxTotal = getMaxPlayerTotal(servers);

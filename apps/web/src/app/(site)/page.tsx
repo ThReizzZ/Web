@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { ArrowRight, Gamepad2, MessageSquareText, Server, Sparkles, Users } from "lucide-react";
 
 import { PageContainer } from "@/components/layout/page-container";
@@ -14,7 +15,8 @@ import { getMaxPlayerTotal, getOnlinePlayerTotal } from "@/features/servers/data
 import { getServerApiClient } from "@/lib/api/server";
 import { formatRelativeTime } from "@/lib/format";
 import { siteConfig } from "@/lib/site-config";
-import { fetchCommunityStats, fetchForumTopics, fetchServers } from "@/services/content";
+import { fetchCommunityStats, fetchForumTopics, fetchMe, fetchServers } from "@/services/content";
+import { applyEstimatedLatencies, clientIpFromHeaders } from "@/services/latency";
 
 export const dynamic = "force-dynamic";
 
@@ -26,12 +28,15 @@ export const metadata: Metadata = {
 
 export default async function HomePage() {
   const client = await getServerApiClient();
-  const [servers, stats, latestTopics, announcements] = await Promise.all([
+  const [baseServers, stats, latestTopics, announcements, me] = await Promise.all([
     fetchServers(client),
     fetchCommunityStats(client),
     fetchForumTopics(client, { limit: 5 }),
     fetchForumTopics(client, { category: "announcements", limit: 3 }),
+    fetchMe(client),
   ]);
+  const clientIp = me.user ? clientIpFromHeaders(await headers()) : null;
+  const servers = await applyEstimatedLatencies(baseServers, clientIp);
 
   const featuredServers = servers.filter((server) => server.featured).slice(0, 3);
   const displayedServers = featuredServers.length > 0 ? featuredServers : servers.slice(0, 3);

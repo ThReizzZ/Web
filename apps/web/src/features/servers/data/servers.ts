@@ -27,6 +27,7 @@ export interface KzServer {
   mapImage: string;
   mapImageFallback: string;
   mapTier: number | null;
+  estimatedLatencyMs: number | null;
   featured: boolean;
   requiresWhitelist: boolean;
 }

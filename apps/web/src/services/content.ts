@@ -70,6 +70,7 @@ export async function fetchServers(client: ApiClient): Promise<KzServer[]> {
       mapTier: tier,
       mapImage: server.mapImage || cdnImage || proxyImage,
       mapImageFallback: proxyImage,
+      estimatedLatencyMs: null,
     };
   });
 }

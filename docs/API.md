@@ -143,7 +143,7 @@ Steam 是唯一登录方式；没有密码、邮箱注册或其他登录入口�
 
 - `status`：`online` / `maintenance` / `offline` / `hibernating`。`hibernating` 表示空服休眠但进程仍可由可选的 RCON 状态探测确认存活。
 - `community`：可选的社区组名称，用于把同一台主机上的多个实例分组展示；空字符串表示未分组。
-- `latencyMs` 为插件上报的在线玩家平均延迟（毫秒）；没有在线玩家或旧插件未上报时为 `null`。
+- `latencyMs` 为插件上报的在线玩家平均延迟（毫秒）；没有在线玩家或旧插件未上报时为 `null`。网站服务器卡片对登录用户显示的是按访问 IP 与服务器位置计算的“预估延迟”，不是该字段。
 - 状态、地图、人数与在线玩家由游戏服务器上的 `ThRei_Players` 插件上报。API 不使用 A2S 轮询，也不会向游戏服务器发送任意 RCON 指令。
 - 没有配置 RCON 密码的插件服务器超过 90 秒未上报时，后台任务会把状态标记为 `offline`、人数清零并删除在线名单。配置了 RCON 密码且启用 `HIBERNATION_POLL_ENABLED` 时，后台只发送 `status` 判断存活：空服标记 `hibernating`，有玩家标记 `online`；连续 3 次 RCON 失败才标记 `offline`。`maintenance` 状态不会被插件上报或后台任务覆盖。
 - 在线名单只包含插件已通过 Steam 认证的玩家（SteamID64 非空）。插件安装与配置见 [../plugins/ThRei_Players/README.md](../plugins/ThRei_Players/README.md)。

@@ -49,7 +49,11 @@ export function ServerListRow({ server }: { server: KzServer }) {
               </span>
             </span>
             <span>{server.tickrate} tick</span>
-            {server.latencyMs !== null ? <span>平均 {server.latencyMs} ms</span> : null}
+            <span title="根据你的登录 IP 与服务器位置估算">
+              {server.estimatedLatencyMs !== null
+                ? `预估 ${server.estimatedLatencyMs} ms`
+                : "延迟未知"}
+            </span>
           </div>
           <div>
             <p className="text-[11px] text-muted-foreground">在线玩家</p>

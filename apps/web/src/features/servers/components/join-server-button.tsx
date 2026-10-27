@@ -152,9 +152,11 @@ export function JoinServerButton({
             </div>
 
             <p className="text-xs text-muted-foreground">
-              当前在线 {playerCount} / {server.maxPlayers} 人
-              {server.latencyMs !== null ? ` · 平均延迟约 ${server.latencyMs} ms` : ""} · KZ
-              计时器与检查点由服务器插件提供。
+              当前在线 {playerCount} / {server.maxPlayers} 人 ·{" "}
+              {server.estimatedLatencyMs !== null
+                ? `预估延迟约 ${server.estimatedLatencyMs} ms`
+                : "延迟未知"}{" "}
+              · KZ 计时器与检查点由服务器插件提供。
             </p>
           </div>
         </div>
