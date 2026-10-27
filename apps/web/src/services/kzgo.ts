@@ -6,18 +6,30 @@ const KZ_RECENT_MAP_LIMIT = 8;
 
 const STEAM_ID64_OFFSET = 76561197960265728n;
 
+export const KZ_MODES = [
+  { value: "kz_timer", label: "KZT", name: "KZTimer", rankModeId: 200 },
+  { value: "kz_simple", label: "SKZ", name: "SimpleKZ", rankModeId: 201 },
+  { value: "kz_vanilla", label: "VNL", name: "Vanilla", rankModeId: 202 },
+] as const;
+
+export type KzMode = (typeof KZ_MODES)[number]["value"];
+
+export function parseKzMode(value: string | string[] | undefined): KzMode {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  const matched = KZ_MODES.find((mode) => mode.value === candidate);
+  return matched?.value ?? "kz_timer";
+}
+
 interface KzTimerRecord {
   map_id: number;
   map_name: string;
   time: number;
-  points: number;
   created_on: string;
 }
 
 interface KzTimerRank {
   finishes: number;
   points: number;
-  average: number;
   rating: number;
 }
 
@@ -26,7 +38,6 @@ interface MutableMapProgress {
   mapName: string;
   proTime: number | null;
   tpTime: number | null;
-  points: number;
   lastPlayedTimestamp: number;
 }
 
@@ -35,7 +46,6 @@ export interface KzMapProgress {
   mapName: string;
   proTime: number | null;
   tpTime: number | null;
-  points: number;
   lastPlayedAt: string;
 }
 
@@ -66,10 +76,11 @@ function normalizeTimestamp(value: string): string {
 async function fetchKzTimerRecords(
   steamId64: string,
   hasTeleports: boolean,
+  mode: KzMode,
 ): Promise<KzTimerRecord[]> {
   const query = new URLSearchParams({
     steamid64: steamId64,
-    modes_list_string: "kz_timer",
+    modes_list_string: mode,
     stage: "0",
     tickrate: "128",
     has_teleports: String(hasTeleports),
@@ -86,8 +97,15 @@ async function fetchKzTimerRecords(
   return (await response.json()) as KzTimerRecord[];
 }
 
-async function fetchKzTimerRank(steamId64: string): Promise<KzTimerRank | null> {
-  const query = new URLSearchParams({ steamid64s: steamId64 });
+async function fetchKzTimerRank(steamId64: string, mode: KzMode): Promise<KzTimerRank | null> {
+  const modeId = KZ_MODES.find((item) => item.value === mode)?.rankModeId;
+  if (!modeId) {
+    return null;
+  }
+  const query = new URLSearchParams({
+    steamid64s: steamId64,
+    mode_ids: String(modeId),
+  });
   const response = await fetch(`${KZ_TIMER_API}/player_ranks?${query.toString()}`, {
     headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
     next: { revalidate: KZ_TIMER_REVALIDATE_SECONDS },
@@ -113,7 +131,6 @@ function mergeRecords(
         mapName: record.map_name,
         proTime: null,
         tpTime: null,
-        points: 0,
         lastPlayedTimestamp: 0,
       };
       maps.set(record.map_id, item);
@@ -124,7 +141,6 @@ function mergeRecords(
     } else {
       item.proTime = item.proTime === null ? record.time : Math.min(item.proTime, record.time);
     }
-    item.points = Math.max(item.points, record.points);
     const timestamp = Date.parse(normalizeTimestamp(record.created_on));
     if (timestamp > item.lastPlayedTimestamp) {
       item.lastPlayedTimestamp = timestamp;
@@ -132,16 +148,19 @@ function mergeRecords(
   }
 }
 
-export async function fetchKzgoPlayerMaps(steamId64: string): Promise<KzPlayerMaps | null> {
+export async function fetchKzgoPlayerMaps(
+  steamId64: string,
+  mode: KzMode,
+): Promise<KzPlayerMaps | null> {
   if (!/^\d{17}$/.test(steamId64)) {
     return null;
   }
 
   try {
     const [rankResult, proResult, tpResult] = await Promise.allSettled([
-      fetchKzTimerRank(steamId64),
-      fetchKzTimerRecords(steamId64, false),
-      fetchKzTimerRecords(steamId64, true),
+      fetchKzTimerRank(steamId64, mode),
+      fetchKzTimerRecords(steamId64, false, mode),
+      fetchKzTimerRecords(steamId64, true, mode),
     ]);
     if (proResult.status === "rejected" && tpResult.status === "rejected") {
       return null;
@@ -164,7 +183,6 @@ export async function fetchKzgoPlayerMaps(steamId64: string): Promise<KzPlayerMa
         mapName: map.mapName,
         proTime: map.proTime,
         tpTime: map.tpTime,
-        points: map.points,
         lastPlayedAt: new Date(map.lastPlayedTimestamp).toISOString(),
       }));
 

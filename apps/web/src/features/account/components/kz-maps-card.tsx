@@ -1,10 +1,18 @@
+import Link from "next/link";
 import { ExternalLink, Map as MapIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatRelativeTime } from "@/lib/format";
-import { fetchKzgoPlayerMaps, kzgoProfileUrl, type KzPlayerMaps } from "@/services/kzgo";
+import { cn } from "@/lib/utils";
+import {
+  fetchKzgoPlayerMaps,
+  KZ_MODES,
+  kzgoProfileUrl,
+  type KzMode,
+  type KzPlayerMaps,
+} from "@/services/kzgo";
 
 function formatKzTime(seconds: number): string {
   const totalMs = Math.round(seconds * 1000);
@@ -18,19 +26,23 @@ function formatKzTime(seconds: number): string {
   return `${wholeSeconds}.${fraction}`;
 }
 
-export async function KzMapsCard({ steamId64 }: { steamId64: string }) {
-  const data = await fetchKzgoPlayerMaps(steamId64);
+export async function KzMapsCard({ steamId64, mode }: { steamId64: string; mode: KzMode }) {
+  const data = await fetchKzgoPlayerMaps(steamId64, mode);
   const profileUrl = kzgoProfileUrl(steamId64);
+  const modeName = KZ_MODES.find((item) => item.value === mode)?.name ?? "KZTimer";
 
   if (!data) {
     return (
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <MapIcon className="size-4 text-primary" aria-hidden="true" />
-            KZ 地图记录
-          </CardTitle>
-          <CardDescription>暂时无法从 KZ:GO 获取地图记录，请稍后刷新。</CardDescription>
+        <CardHeader className="space-y-4">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <MapIcon className="size-4 text-primary" aria-hidden="true" />
+              KZ 地图记录
+            </CardTitle>
+            <CardDescription>暂时无法从 KZ:GO 获取 {modeName} 记录，请稍后刷新。</CardDescription>
+          </div>
+          <KzModeSelector mode={mode} />
         </CardHeader>
         <CardContent>
           <Button asChild variant="outline" size="sm">
@@ -44,29 +56,88 @@ export async function KzMapsCard({ steamId64 }: { steamId64: string }) {
     );
   }
 
-  return <KzMapsCardContent data={data} profileUrl={profileUrl} />;
+  return <KzMapsCardContent data={data} profileUrl={profileUrl} mode={mode} />;
 }
 
-function KzMapsCardContent({ data, profileUrl }: { data: KzPlayerMaps; profileUrl: string }) {
+function KzModeSelector({ mode }: { mode: KzMode }) {
+  return (
+    <div
+      role="group"
+      aria-label="KZ 模式"
+      className="flex w-fit items-center gap-1 rounded-lg border bg-muted/30 p-1"
+    >
+      {KZ_MODES.map((option) => (
+        <Link
+          key={option.value}
+          href={`/account?kz=${option.value}`}
+          scroll={false}
+          title={option.name}
+          aria-current={option.value === mode ? "page" : undefined}
+          className={cn(
+            "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+            option.value === mode
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {option.label}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function KzMapsCardContent({
+  data,
+  profileUrl,
+  mode,
+}: {
+  data: KzPlayerMaps;
+  profileUrl: string;
+  mode: KzMode;
+}) {
   return (
     <Card>
-      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
-        <div>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <MapIcon className="size-4 text-primary" aria-hidden="true" />
-            KZ 地图记录
-          </CardTitle>
-          <CardDescription>
-            已过 {data.uniqueMaps.toLocaleString("zh-CN")} 张地图 · 总完成{" "}
-            {data.totalRuns.toLocaleString("zh-CN")} 次
-          </CardDescription>
+      <CardHeader className="space-y-4">
+        <div className="flex flex-row flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <MapIcon className="size-4 text-primary" aria-hidden="true" />
+              KZ 地图记录
+            </CardTitle>
+            <CardDescription>
+              已过 {data.uniqueMaps.toLocaleString("zh-CN")} 张地图 · 总完成{" "}
+              {data.totalRuns.toLocaleString("zh-CN")} 次
+            </CardDescription>
+            {data.points !== null || data.rating !== null ? (
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                {data.points !== null ? (
+                  <span>
+                    总点数{" "}
+                    <span className="font-mono text-sm font-medium text-foreground">
+                      {data.points.toLocaleString("zh-CN")}
+                    </span>
+                  </span>
+                ) : null}
+                {data.rating !== null ? (
+                  <span>
+                    评级{" "}
+                    <span className="font-mono text-sm font-medium text-foreground">
+                      {data.rating.toFixed(2)}
+                    </span>
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+          <Button asChild variant="outline" size="sm">
+            <a href={profileUrl} target="_blank" rel="noopener noreferrer">
+              KZ:GO 档案
+              <ExternalLink aria-hidden="true" />
+            </a>
+          </Button>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <a href={profileUrl} target="_blank" rel="noopener noreferrer">
-            KZ:GO 档案
-            <ExternalLink aria-hidden="true" />
-          </a>
-        </Button>
+        <KzModeSelector mode={mode} />
       </CardHeader>
       <CardContent className="space-y-3">
         {data.recentMaps.length > 0 ? (
@@ -122,15 +193,16 @@ function KzMapsCardContent({ data, profileUrl }: { data: KzPlayerMaps; profileUr
   );
 }
 
-export function KzMapsCardSkeleton() {
+export function KzMapsCardSkeleton({ mode }: { mode: KzMode }) {
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="space-y-4">
         <CardTitle className="flex items-center gap-2 text-base">
           <MapIcon className="size-4 text-primary" aria-hidden="true" />
           KZ 地图记录
         </CardTitle>
         <CardDescription>正在从 KZ:GO 读取地图记录…</CardDescription>
+        <KzModeSelector mode={mode} />
       </CardHeader>
       <CardContent>
         <div className="space-y-px overflow-hidden rounded-xl border bg-border">

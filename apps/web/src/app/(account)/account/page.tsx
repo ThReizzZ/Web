@@ -30,6 +30,7 @@ import { getServerApiClient } from "@/lib/api/server";
 import { formatDate, formatRelativeTime } from "@/lib/format";
 import { roleLabel } from "@/lib/roles";
 import { fetchAccount, fetchMe, fetchServers } from "@/services/content";
+import { parseKzMode } from "@/services/kzgo";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,7 @@ interface AccountPageProps {
 export default async function AccountPage({ searchParams }: AccountPageProps) {
   const params = await searchParams;
   const steamError = typeof params.steam_error === "string" ? params.steam_error : undefined;
+  const kzMode = parseKzMode(params.kz);
   const client = await getServerApiClient();
   const me = await fetchMe(client);
 
@@ -175,8 +177,8 @@ export default async function AccountPage({ searchParams }: AccountPageProps) {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div className="space-y-6">
-          <Suspense fallback={<KzMapsCardSkeleton />}>
-            <KzMapsCard steamId64={user.steamId64} />
+          <Suspense fallback={<KzMapsCardSkeleton mode={kzMode} />}>
+            <KzMapsCard steamId64={user.steamId64} mode={kzMode} />
           </Suspense>
 
           <Card>
