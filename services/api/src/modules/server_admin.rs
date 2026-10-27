@@ -778,8 +778,8 @@ pub(crate) async fn find_recent_game_ip(
         FROM server_players
         WHERE steam_id64 = $1
           AND ip_address IS NOT NULL
-          AND ($2::text IS NULL OR server_id = $2)
-        ORDER BY last_seen_at DESC
+        ORDER BY (server_id IS NOT DISTINCT FROM $2::text) DESC,
+                 last_seen_at DESC
         LIMIT 1
         ",
     )

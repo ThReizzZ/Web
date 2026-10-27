@@ -19,7 +19,11 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use utoipa::ToSchema;
 
-use crate::{errors::AppError, modules::server_admin::IP_ACTION_PLACEHOLDER, state::AppState};
+use crate::{
+    errors::AppError,
+    modules::server_admin::{IP_ACTION_PLACEHOLDER, find_recent_game_ip},
+    state::AppState,
+};
 
 const TOKEN_HEADER: &str = "x-threi-plugin-token";
 const MAX_TOKEN_CHARS: usize = 128;
@@ -239,7 +243,7 @@ pub async fn ban_report(
     }
     let game_reason = validate_ban_reason(&request.reason)?;
     let expires_at = ban_expiry(request.duration_minutes)?;
-    let ip_address = normalize_player_ip(request.ip_address.as_deref());
+    let requested_ip = normalize_player_ip(request.ip_address.as_deref());
     let player_name = request
         .player_name
         .map(|value| value.trim().to_owned())
@@ -251,8 +255,15 @@ pub async fn ban_report(
         .collect();
     let ban_group_id = uuid::Uuid::new_v4();
 
-    let _server_id =
+    let server_id =
         resolve_server_for_token(&state.db, token, requested_server_id.as_deref()).await?;
+    // A ban command can name an offline SteamID, in which case the plugin has
+    // no IP to report. Fall back to the server roster or the account's last
+    // website IP so alt accounts on the same IP are still covered.
+    let ip_address = match requested_ip {
+        Some(ip) => Some(ip),
+        None => find_recent_game_ip(&state.db, steam_id64, Some(&server_id)).await?,
+    };
 
     let mut transaction = state.db.begin().await?;
 
