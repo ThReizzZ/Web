@@ -31,7 +31,7 @@ const steps = [
   {
     icon: Copy,
     title: "复制服务器地址",
-    description: "选择想去的 KZ 服务器，复制 IP:PORT，或直接点击加入游戏。",
+    description: "选择想去的 KZ 服务器，复制连接地址，或直接点击加入游戏。",
   },
   {
     icon: Terminal,
@@ -49,28 +49,44 @@ export default async function ServersPage() {
 
   return (
     <PageContainer className="space-y-10 py-10">
-      <section className="relative overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 text-white">
+      <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-slate-950 text-white shadow-2xl shadow-slate-950/20">
         <ServerMapImage
           src={featured?.mapImage ?? ""}
           fallbackSrc={featured?.mapImageFallback}
           alt=""
           loading="eager"
-          className="opacity-45"
+          className="scale-105 opacity-55"
         />
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/25" />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/55 to-slate-950/10"
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-[radial-gradient(80%_120%_at_0%_45%,rgba(2,6,23,0.94),rgba(2,6,23,0.5)_48%,transparent_74%)]"
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-[radial-gradient(45%_60%_at_92%_0%,rgba(16,185,129,0.18),transparent_65%)]"
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 opacity-45"
+          style={{
+            backgroundImage:
+              "linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px)",
+            backgroundSize: "56px 56px",
+            maskImage: "linear-gradient(to bottom, black, transparent 82%)",
+          }}
+        />
         <div className="relative max-w-4xl p-7 sm:p-10 lg:p-12">
           <Badge variant="success" className="bg-emerald-400/15 text-emerald-200">
             <span className="size-1.5 rounded-full bg-emerald-300" aria-hidden="true" />
             {servers.length > 0 ? `${servers.length} 个 KZ 服务器开放中` : "等待服务器接入"}
           </Badge>
-          <h1 className="mt-5 text-3xl font-semibold tracking-tight sm:text-4xl lg:text-5xl">
-            <span className="block">KZ 服务器目录</span>
-            <span className="block text-emerald-300">地图、玩家与地址。</span>
+          <h1 className="mt-5 text-3xl font-semibold tracking-tight text-balance sm:text-4xl lg:text-5xl">
+            服务器列表
           </h1>
-          <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/70 sm:text-base">
-            新手教学、连跳、长跳和进阶攀爬都有对应服务器。选择服务器后，可以查看完整玩家列表、复制地址或直接启动
-            CS:GO。
-          </p>
           <div className="mt-7 flex flex-wrap gap-3">
             <Button asChild size="lg" className="bg-white text-slate-950 hover:bg-white/90">
               <Link href="#servers">

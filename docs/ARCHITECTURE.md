@@ -112,7 +112,7 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 - `SystemStatusCard`：浏览器端 API 探测与刷新；
 - `ForumSearchForm`：React Hook Form + Zod + `useRouter`；
 - `ServerDirectory`：3 列卡片墙/列表显示模式切换、`localStorage` 偏好与 1/2/3 列响应式分配；
-- `CopyAddressButton` / `JoinServerButton`：剪贴板、原生 `<dialog>` 加入说明与交互状态；
+- `CopyAddressButton` / `JoinServerButton`：剪贴板与 `steam://connect/...` 直接启动 Steam 加入服务器；
 - `LogoutButton`：调用登出 API 并刷新导航；
 - `Modal` / `ConfirmDialog` / `ToastProvider` / `Tooltip`：管理面板弹窗、危险操作确认、操作反馈和悬浮提示；
 - `error.tsx` / `global-error.tsx`：错误边界需要交互；

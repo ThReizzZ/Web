@@ -23,6 +23,10 @@ import {
 } from "lucide-react";
 
 import { UserAvatar } from "@/components/shared/user-avatar";
+import {
+  BanPlayerDialog,
+  type BanPlayerSubmission,
+} from "@/features/admin/components/ban-player-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -116,6 +120,10 @@ export function ServerAdminManager({
   const [rconTarget, setRconTarget] = useState<AdminServer | null>(null);
   const [rconPassword, setRconPassword] = useState("");
   const [rconError, setRconError] = useState<string | null>(null);
+  const [banTarget, setBanTarget] = useState<{
+    server: AdminServer;
+    player: AdminServer["players"][number];
+  } | null>(null);
 
   const { toast } = useToast();
 
@@ -403,38 +411,25 @@ export function ServerAdminManager({
     }
   }
 
-  async function ban(server: AdminServer, player: AdminServer["players"][number]) {
-    const steamId64 = player.steamId64;
-    const reason = window.prompt(`封禁 ${player.name} 的原因`, "违反服务器规则");
-    if (!reason) {
+  async function submitBan(values: BanPlayerSubmission) {
+    const target = banTarget;
+    if (!target) {
       return;
     }
-    const scopeInput = window.prompt(
-      `封禁范围：输入 "global" 全服封禁，输入 "server" 仅本服\n（默认 global；取消则放弃封禁）`,
-      "global",
-    );
-    if (scopeInput === null) {
-      return;
-    }
-    const scope = scopeInput.trim().toLowerCase().startsWith("s") ? "server" : "global";
-    const scopeLabel = scope === "global" ? "全服" : `仅 ${server.name}`;
-    const ipNotice = player.ipAddress
-      ? `\n同时会自动封禁该玩家 IP ${player.ipAddress}（网站登录与已知关联账号）。`
-      : "\n如果该玩家有网站登录记录，也会自动封禁其最近 IP。";
-    if (!window.confirm(`确认对 ${player.name} 执行${scopeLabel}封禁？${ipNotice}`)) {
-      return;
-    }
-    setBusy(`ban-${server.id}-${steamId64}`);
+    const { server, player } = target;
+    setBusy(`ban-${server.id}-${player.steamId64}`);
     try {
-      await banServerPlayer(getBrowserApiClient(), server.id, steamId64, {
-        reason,
+      await banServerPlayer(getBrowserApiClient(), server.id, player.steamId64, {
+        reason: values.reason,
         playerName: player.name,
-        expiresInHours: null,
-        scope,
+        expiresInHours: values.expiresInHours,
+        scope: values.scope,
       });
+      const scopeLabel = values.scope === "global" ? "全服" : `仅 ${server.name}`;
       setFeedback(
         `${scopeLabel}封禁 ${player.name} 的指令已发送，通常 1 秒内执行；插件离线时会在恢复后执行。`,
       );
+      setBanTarget(null);
       await reload();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "封禁失败。");
@@ -819,7 +814,7 @@ export function ServerAdminManager({
                               size="sm"
                               variant="ghost"
                               disabled={busy === `ban-${server.id}-${player.steamId64}`}
-                              onClick={() => void ban(server, player)}
+                              onClick={() => setBanTarget({ server, player })}
                             >
                               <Ban /> 封禁
                             </Button>
@@ -1255,6 +1250,22 @@ export function ServerAdminManager({
           ) : null}
         </form>
       </Modal>
+
+      {banTarget ? (
+        <BanPlayerDialog
+          key={`${banTarget.server.id}-${banTarget.player.steamId64}`}
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              setBanTarget(null);
+            }
+          }}
+          serverName={banTarget.server.name}
+          player={banTarget.player}
+          pending={busy === `ban-${banTarget.server.id}-${banTarget.player.steamId64}`}
+          onConfirm={(values) => void submitBan(values)}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={deleteTarget !== null}
