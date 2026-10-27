@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, Gamepad2, MessageSquareText, Server, Sparkles, Users } from "lucide-react";
 
@@ -11,7 +10,12 @@ import { Separator } from "@/components/ui/separator";
 import { TopicRow } from "@/features/forum/components/topic-row";
 import type { ForumTopic } from "@/features/forum/types";
 import { ServerCard } from "@/features/servers/components/server-card";
-import { getMaxPlayerTotal, getOnlinePlayerTotal } from "@/features/servers/data/servers";
+import { ServerStatusBadge } from "@/features/servers/components/server-status-badge";
+import {
+  getMaxPlayerTotal,
+  getOnlinePlayerCount,
+  getOnlinePlayerTotal,
+} from "@/features/servers/data/servers";
 import { getServerApiClient } from "@/lib/api/server";
 import { formatRelativeTime } from "@/lib/format";
 import { siteConfig } from "@/lib/site-config";
@@ -42,104 +46,117 @@ export default async function HomePage() {
 
   return (
     <>
-      <section className="relative isolate overflow-hidden border-b border-slate-800 bg-slate-950 text-white">
-        {featured?.mapImage ? (
-          <Image
-            src={featured.mapImage}
-            alt=""
-            fill
-            priority
-            sizes="100vw"
-            className="object-cover opacity-35"
-            unoptimized
-          />
-        ) : null}
+      <section className="relative overflow-hidden border-b bg-background">
         <div
           aria-hidden="true"
-          className="absolute inset-0"
+          className="pointer-events-none absolute inset-0"
           style={{
             backgroundImage:
-              "radial-gradient(80% 120% at 12% -10%, rgba(16,185,129,0.32) 0%, transparent 58%), radial-gradient(50% 80% at 88% 0%, rgba(59,130,246,0.18) 0%, transparent 65%)",
+              "radial-gradient(55% 70% at 12% 0%, rgba(16,185,129,0.12) 0%, transparent 65%), radial-gradient(45% 65% at 90% 8%, rgba(59,130,246,0.1) 0%, transparent 70%)",
           }}
         />
-        <div
-          aria-hidden="true"
-          className="absolute inset-0"
-          style={{
-            backgroundImage:
-              "linear-gradient(90deg, #020617 0%, rgba(2,6,23,0.92) 38%, rgba(2,6,23,0.55) 72%, rgba(2,6,23,0.82) 100%)",
-          }}
-        />
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 opacity-40"
-          style={{
-            backgroundImage:
-              "linear-gradient(to right, rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.06) 1px, transparent 1px)",
-            backgroundSize: "44px 44px",
-            maskImage: "linear-gradient(to bottom, black, transparent 85%)",
-            WebkitMaskImage: "linear-gradient(to bottom, black, transparent 85%)",
-          }}
-        />
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute top-1/2 -right-28 hidden size-[32rem] -translate-y-1/2 rounded-full border border-white/[0.06] lg:block"
-        >
-          <div className="absolute inset-20 rounded-full border border-white/[0.05]" />
-          <div className="absolute inset-40 rounded-full border border-emerald-300/10" />
-        </div>
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute -right-3 -bottom-16 hidden text-[17rem] leading-none font-black tracking-[-0.1em] text-white/[0.025] select-none lg:block"
-        >
-          KZ
-        </span>
-        <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent" />
 
-        <PageContainer className="relative py-20 sm:py-28">
-          {announcements[0] ? (
-            <Link href={`/forum/topic/${announcements[0].slug}`} className="inline-flex">
-              <Badge variant="success" className="max-w-full bg-emerald-400/15 text-emerald-200">
-                <Sparkles className="shrink-0" aria-hidden="true" />
-                <span className="truncate">{announcements[0].title}</span>
-              </Badge>
-            </Link>
-          ) : (
-            <Badge variant="success" className="bg-emerald-400/15 text-emerald-200">
-              <Sparkles aria-hidden="true" />
-              ThRei KZ 社区
-            </Badge>
-          )}
-          <h1 className="mt-6 max-w-4xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl md:text-6xl lg:text-7xl">
-            欢迎来到<span className="text-emerald-300">最神权</span>的服务器
-          </h1>
-          <p className="mt-6 max-w-2xl text-base leading-relaxed text-white/70 sm:text-lg">
-            一个专注 KZ 的社区。找服务器、记录成绩，和玩家一起挑战每一条路线。
-          </p>
-          <div className="mt-9 flex flex-wrap gap-3">
-            <Button asChild size="lg" className="bg-white text-slate-950 hover:bg-white/90">
-              <Link href="/servers">
-                <Gamepad2 aria-hidden="true" />
-                浏览服务器
-                <ArrowRight aria-hidden="true" />
+        <PageContainer className="relative py-16 sm:py-20 lg:py-24">
+          <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
+            <div>
+              {announcements[0] ? (
+                <Link href={`/forum/topic/${announcements[0].slug}`} className="inline-flex">
+                  <Badge variant="success" className="max-w-full">
+                    <Sparkles className="shrink-0" aria-hidden="true" />
+                    <span className="truncate">{announcements[0].title}</span>
+                  </Badge>
+                </Link>
+              ) : (
+                <Badge variant="success">
+                  <Sparkles aria-hidden="true" />
+                  ThRei KZ 社区
+                </Badge>
+              )}
+              <h1 className="mt-6 max-w-2xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
+                欢迎来到<span className="text-emerald-600 dark:text-emerald-400">最神权</span>
+                的服务器
+              </h1>
+              <p className="mt-5 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg">
+                请遵守服务器规则
+              </p>
+              <div className="mt-8 flex flex-wrap gap-3">
+                <Button asChild size="lg">
+                  <Link href="/servers">
+                    <Gamepad2 aria-hidden="true" />
+                    浏览服务器
+                    <ArrowRight aria-hidden="true" />
+                  </Link>
+                </Button>
+                <Button asChild size="lg" variant="outline">
+                  <a href="/api/v1/auth/steam/login">使用Steam登录</a>
+                </Button>
+              </div>
+
+              <dl className="mt-10 grid max-w-xl grid-cols-2 gap-px overflow-hidden rounded-2xl border bg-border sm:grid-cols-4">
+                <Stat label="在线玩家" value={onlineTotal} detail={`/ ${maxTotal}`} />
+                <Stat label="开放服务器" value={servers.length} />
+                <Stat label="本周新主题" value={stats.newTopicsWeek} />
+                <Stat label="社区成员" value={stats.members} />
+              </dl>
+            </div>
+
+            {featured ? (
+              <Link
+                href="/servers"
+                className="group relative block overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 text-white shadow-2xl shadow-slate-900/20"
+              >
+                <div className="relative aspect-[4/3]">
+                  {featured.mapImage ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={featured.mapImage}
+                      alt={`${featured.map} 地图预览`}
+                      className="absolute inset-0 size-full object-cover transition-transform duration-700 group-hover:scale-[1.03]"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(16,185,129,0.45),transparent_60%)]" />
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/35 to-slate-950/10" />
+
+                  <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-3 p-5">
+                    <div className="flex flex-wrap gap-2">
+                      <ServerStatusBadge status={featured.status} />
+                      <Badge variant="secondary" className="bg-white/15 text-white backdrop-blur">
+                        {featured.community || "KZ"}
+                      </Badge>
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className="border-white/25 bg-slate-950/25 text-white backdrop-blur"
+                    >
+                      {featured.region}
+                    </Badge>
+                  </div>
+
+                  <div className="absolute inset-x-0 bottom-0 p-6">
+                    <p className="font-mono text-xs text-white/60">{featured.map}</p>
+                    <h2 className="mt-1 truncate text-2xl font-semibold tracking-tight">
+                      {featured.name}
+                    </h2>
+                    <div className="mt-5 flex items-end justify-between gap-4">
+                      <div>
+                        <p className="text-3xl font-semibold tabular-nums">
+                          {getOnlinePlayerCount(featured)}
+                          <span className="text-base font-normal text-white/55">
+                            /{featured.maxPlayers}
+                          </span>
+                        </p>
+                        <p className="text-[11px] text-white/55">在线玩家</p>
+                      </div>
+                      <span className="grid size-10 shrink-0 place-items-center rounded-full border border-white/20 bg-white/10 backdrop-blur transition-transform group-hover:translate-x-0.5">
+                        <ArrowRight className="size-4" aria-hidden="true" />
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </Link>
-            </Button>
-            <Button
-              asChild
-              size="lg"
-              variant="outline"
-              className="border-white/25 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-            >
-              <a href="/api/v1/auth/steam/login">使用Steam登录</a>
-            </Button>
+            ) : null}
           </div>
-
-          <dl className="mt-12 grid max-w-3xl grid-cols-2 gap-x-6 gap-y-5 border-t border-white/10 pt-8 sm:grid-cols-4">
-            <Stat label="在线玩家" value={onlineTotal} detail={`/ ${maxTotal}`} />
-            <Stat label="开放服务器" value={servers.length} />
-            <Stat label="本周新主题" value={stats.newTopicsWeek} />
-            <Stat label="社区成员" value={stats.members} />
-          </dl>
         </PageContainer>
       </section>
 
@@ -288,11 +305,13 @@ export default async function HomePage() {
 
 function Stat({ label, value, detail }: { label: string; value: number; detail?: string }) {
   return (
-    <div>
-      <dt className="text-xs text-white/55">{label}</dt>
-      <dd className="mt-1 text-2xl font-semibold tabular-nums">
+    <div className="bg-card px-4 py-4 sm:px-5">
+      <dt className="text-[11px] text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-xl font-semibold tabular-nums">
         {value.toLocaleString("zh-CN")}
-        {detail ? <span className="text-sm font-normal text-white/45"> {detail}</span> : null}
+        {detail ? (
+          <span className="text-xs font-normal text-muted-foreground"> {detail}</span>
+        ) : null}
       </dd>
     </div>
   );
