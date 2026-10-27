@@ -6,6 +6,7 @@ import { useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CopyAddressButton } from "@/features/servers/components/copy-address-button";
+import { ServerMapImage } from "@/features/servers/components/server-map-image";
 import { ServerStatusBadge } from "@/features/servers/components/server-status-badge";
 import {
   getOnlinePlayerCount,
@@ -59,16 +60,7 @@ export function JoinServerButton({
       >
         <div className="relative">
           <div className="relative h-36 overflow-hidden rounded-t-2xl">
-            {server.mapImage ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={server.mapImage}
-                alt={`${server.map} 地图`}
-                className="absolute inset-0 size-full object-cover"
-              />
-            ) : (
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(16,185,129,0.35),transparent_55%)]" />
-            )}
+            <ServerMapImage src={server.mapImage} alt={`${server.map} 地图`} />
             <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 to-transparent" />
             <div className="absolute inset-x-0 top-0 flex items-start justify-between p-4">
               <ServerStatusBadge status={server.status} />
@@ -94,6 +86,9 @@ export function JoinServerButton({
           <div className="space-y-5 p-5">
             <div className="flex flex-wrap gap-2">
               <Badge variant="secondary">CS:GO KZ</Badge>
+              {server.mapTier !== null ? (
+                <Badge variant="outline">Tier {server.mapTier}</Badge>
+              ) : null}
               <Badge variant="outline">{server.tickrate} tick</Badge>
               <Badge variant="outline">{server.region}</Badge>
               <Badge variant="outline">

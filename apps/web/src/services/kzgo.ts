@@ -96,6 +96,29 @@ export interface KzIncompleteMap {
   difficulty: number;
 }
 
+export interface KzMapInfo {
+  name: string;
+  difficulty: number;
+}
+
+export function kzMapImageUrl(mapName: string): string | null {
+  const normalized = mapName.trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(normalized)) {
+    return null;
+  }
+  return `https://raw.githubusercontent.com/KZGlobalTeam/map-images/public/mediums/${encodeURIComponent(normalized)}.jpg`;
+}
+
+export async function fetchKzTimerMapInfo(): Promise<Map<string, KzMapInfo>> {
+  const maps = await fetchKzTimerMaps();
+  return new Map(
+    maps.map((map) => [
+      map.name.trim().toLowerCase(),
+      { name: map.name, difficulty: map.difficulty },
+    ]),
+  );
+}
+
 export interface KzPlayerMaps {
   uniqueMaps: number;
   proMaps: number;

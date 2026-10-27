@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, Copy, Globe2, Map, Server, Terminal, Users } from "lucide-react";
 
@@ -8,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ServerDirectory } from "@/features/servers/components/server-directory";
+import { ServerMapImage } from "@/features/servers/components/server-map-image";
 import { getMaxPlayerTotal, getOnlinePlayerTotal } from "@/features/servers/data/servers";
 import { getServerApiClient } from "@/lib/api/server";
 import { fetchMe, fetchServers } from "@/services/content";
@@ -48,22 +48,12 @@ export default async function ServersPage() {
   return (
     <PageContainer className="space-y-10 py-10">
       <section className="relative overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 text-white">
-        {featured?.mapImage ? (
-          <Image
-            src={featured.mapImage}
-            alt=""
-            fill
-            priority
-            sizes="(min-width: 1024px) 72rem, 100vw"
-            className="object-cover opacity-45"
-            unoptimized
-          />
-        ) : (
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 bg-[radial-gradient(70%_120%_at_20%_0%,rgba(16,185,129,0.26),transparent_60%)]"
-          />
-        )}
+        <ServerMapImage
+          src={featured?.mapImage ?? ""}
+          alt=""
+          loading="eager"
+          className="opacity-45"
+        />
         <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/25" />
         <div className="relative max-w-4xl p-7 sm:p-10 lg:p-12">
           <Badge variant="success" className="bg-emerald-400/15 text-emerald-200">

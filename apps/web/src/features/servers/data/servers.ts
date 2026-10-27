@@ -25,6 +25,7 @@ export interface KzServer {
   tags: string[];
   players: KzPlayer[];
   mapImage: string;
+  mapTier: number | null;
   featured: boolean;
   requiresWhitelist: boolean;
 }

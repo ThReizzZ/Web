@@ -23,6 +23,7 @@ import type {
 } from "@/features/forum/types";
 import type { KzServer } from "@/features/servers/data/servers";
 import type { ApiClient } from "@/lib/api/client";
+import { fetchKzTimerMapInfo, kzMapImageUrl } from "@/services/kzgo";
 
 export interface CommunityStats {
   members: number;
@@ -51,8 +52,23 @@ export interface MeResponse {
 
 const noStore = { cache: "no-store" as const };
 
-export function fetchServers(client: ApiClient): Promise<KzServer[]> {
-  return client.get<KzServer[]>("/api/v1/servers", noStore);
+export async function fetchServers(client: ApiClient): Promise<KzServer[]> {
+  const servers = await client.get<KzServer[]>("/api/v1/servers", noStore);
+  let mapInfo = new Map<string, { name: string; difficulty: number }>();
+  try {
+    mapInfo = await fetchKzTimerMapInfo();
+  } catch {
+    // The directory still works when KZ:GO is temporarily unreachable.
+  }
+
+  return servers.map((server) => {
+    const tier = mapInfo.get(server.map.trim().toLowerCase())?.difficulty ?? null;
+    return {
+      ...server,
+      mapTier: tier,
+      mapImage: server.mapImage || kzMapImageUrl(server.map) || "",
+    };
+  });
 }
 
 export function fetchCommunityStats(client: ApiClient): Promise<CommunityStats> {

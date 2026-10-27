@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { CopyAddressButton } from "./copy-address-button";
 import { JoinServerButton } from "./join-server-button";
 import { PlayerRoster } from "./player-roster";
+import { ServerMapImage } from "./server-map-image";
 import { ServerStatusBadge } from "./server-status-badge";
 import { getOnlinePlayerCount, getServerAddress, type KzServer } from "../data/servers";
 
@@ -15,14 +16,7 @@ export function ServerListRow({ server }: { server: KzServer }) {
     <Card data-server-id={server.id} className="gap-0 overflow-hidden py-0">
       <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-stretch">
         <div className="relative h-32 w-full shrink-0 overflow-hidden rounded-lg bg-slate-900 sm:h-24 sm:w-44">
-          {server.mapImage ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={server.mapImage}
-              alt={`${server.map} 地图预览`}
-              className="absolute inset-0 size-full object-cover"
-            />
-          ) : null}
+          <ServerMapImage src={server.mapImage} alt={`${server.map} 地图预览`} />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 to-transparent" />
           <div className="absolute bottom-2 left-2 font-mono text-xs font-medium text-white">
             {server.map}
@@ -34,6 +28,9 @@ export function ServerListRow({ server }: { server: KzServer }) {
             <ServerStatusBadge status={server.status} />
             <h3 className="text-base font-semibold">{server.name}</h3>
             <Badge variant="muted">KZ</Badge>
+            {server.mapTier !== null ? (
+              <Badge variant="outline">Tier {server.mapTier}</Badge>
+            ) : null}
             {server.community ? <Badge variant="outline">{server.community}</Badge> : null}
             {server.requiresWhitelist ? <Badge variant="warning">白名单</Badge> : null}
             <Badge variant="outline">{server.region}</Badge>
