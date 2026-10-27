@@ -49,6 +49,8 @@
 - `ThRei_Players` 1.9.1 在 SteamID 封禁玩家重连时自动补抓 IP：本服立即加入本地 IP 封禁，
   并通过 `associateIpOnly` 上报网站，关联到原封禁并广播 `banip`。即使封禁时玩家离线且从未
   登录网站，下次进服后同 IP 的其他账号也会被拦截。
+- `ThRei_Players` 1.9.2 移除失效的 `sm_threi_ban`，统一使用 `sm_ban` / `!ban`；`!ban` 不带
+  参数会打开选择玩家、时长和原因的交互菜单，带参数时保持原来的直接封禁行为。
 - 白名单改为全服共享：玩家申请一次、管理员审核一次，所有开启白名单的服务器通用；
   新增 `global_whitelist` 并迁移旧的 `server_whitelist` 数据。
 - 游戏服务器封禁默认作用于全部服务器（`scope: "global"`），封禁弹窗可选择“仅本服”；

@@ -5,7 +5,7 @@
 - 向 threi API 上报服务器名称、地图、人数上限、SteamID64 在线玩家及其 IP；
 - 从 threi API 同步白名单与游戏封禁快照，在玩家连接时执行拦截；
 - 长轮询管理后台下发的踢出/封禁/解封/IP 封禁指令，通常 1 秒内执行，执行后向 API 确认；
-- 把游戏内通过 `sm_threi_ban` 等 ThRei 命令执行的封禁回传网站；游戏内封禁默认作用于全部服务器，并自动封禁玩家 IP；
+- 把游戏内通过 `sm_ban` / `!ban` 菜单等 ThRei 封禁命令执行的封禁回传网站；游戏内封禁默认作用于全部服务器，并自动封禁玩家 IP；
 - SteamID 封禁玩家再次连接时自动补抓其 IP：本服立即拦截同 IP 的其他账号，并把 IP 同步到全部服务器；
 - 网站解除游戏封禁或 IP 封禁时，立即清除服务器本地插件封禁；
 - 在最后一名玩家断开时立即补报一次，尽量让网站先清理名单再进入空服休眠。
@@ -60,13 +60,16 @@ sm_threi_status
 关联到原封禁记录；网站随后把 `banip` 下发到所有服务器。这样即使封禁时玩家离线、且从未登录网站，
 只要他再次进入任意服务器，同 IP 的其他账号也会被拦截。
 
+1.9.2 起移除 `sm_threi_ban`（请使用 `sm_ban` / `!ban`）；`!ban` 不带参数会打开选择玩家、时长和
+原因的封禁菜单，带参数时仍可直接执行封禁。
+
 1.7.0 新增 `sm_threi_*` 封禁命令和网站分组解封；1.7.1 支持 SteamID64/2/3；1.7.2 修复
 非法 UTF-8 与 4xx 队列堵塞；1.7.3 支持不加引号的 SteamID2/3 参数。1.6.1 增加了网站
 解封时的本地 `unban` 指令。1.6.0 增加了在线玩家 IP 上报与游戏内封禁回传。1.5.0 使用
 `/plugin/actions?wait=20` 长轮询，新指令通常 1 秒内到达；旧 API 会返回 404，此时插件仍会
 上报状态，但不会执行访问控制。
 
-> 1.9.1 的封禁只存在于插件和 `configs/threi_bans.cfg` 中；插件未加载时封禁不会生效。
+> 1.9.2 的封禁只存在于插件和 `configs/threi_bans.cfg` 中；插件未加载时封禁不会生效。
 > 网站仍然是权威来源，插件会定期从访问快照刷新 SteamID/IP 封禁。
 
 ## 获取服务器令牌
@@ -252,16 +255,28 @@ CS:GO 的 `sv_hibernate_when_empty` 会在空服时暂停游戏帧与 SourceMod 
 
 | 命令 | 说明 |
 | --- | --- |
-| `sm_threi_ban` | 封禁在线目标或 SteamID<br>`sm_threi_ban <目标\|SteamID64\|STEAM_x:y:z\|[U:1:account]> <分钟> [原因]` |
+| `sm_ban` / `!ban` | 封禁玩家<br>`!ban` 不带参数打开菜单；`sm_ban <目标\|SteamID64\|STEAM_x:y:z\|[U:1:account]> <分钟> [原因]` 直接封禁 |
 | `sm_threi_addban` | 按 SteamID 封禁（可离线）<br>`sm_threi_addban <SteamID64\|STEAM_x:y:z\|[U:1:account]> <分钟> [原因]` |
-| `sm_threi_unban` | 解封 SteamID 并同步网站<br>`sm_threi_unban <SteamID64\|STEAM_x:y:z\|[U:1:account]>` |
-| `sm_threi_banip` | 封禁 IP 并同步网站<br>`sm_threi_banip <IP> <分钟> [原因]` |
-| `sm_threi_unbanip` | 解封 IP 并同步网站<br>`sm_threi_unbanip <IP>` |
+| `sm_threi_unban` / `sm_unban` | 解封 SteamID 并同步网站<br>`sm_unban <SteamID64\|STEAM_x:y:z\|[U:1:account]>` |
+| `sm_threi_banip` / `sm_banip` | 封禁 IP 并同步网站<br>`sm_banip <IP> <分钟> [原因]` |
+| `sm_threi_unbanip` / `sm_unbanip` | 解封 IP 并同步网站<br>`sm_unbanip <IP>` |
 | `sm_threi_report` | 立即发送一次状态上报 |
 | `sm_threi_status` | 显示端口匹配、访问缓存与指令队列状态（隐藏令牌） |
 
-`sm_threi_ban`、`sm_threi_addban`、`sm_threi_unban`、`sm_threi_banip`、`sm_threi_unbanip`
+`sm_ban`、`sm_threi_addban`、`sm_unban`、`sm_threi_banip`、`sm_unbanip`
 需要 `ADMFLAG_BAN`；`sm_threi_report`、`sm_threi_status` 需要 `ADMFLAG_ROOT`。
+
+### `!ban` 封禁菜单
+
+在聊天框输入 `!ban`（不带参数）会依次显示：
+
+1. 选择在线玩家（排除自己、bot、SourceTV 和 immunity 更高的管理员）；
+2. 选择时长：永久 / 1 小时 / 1 天 / 7 天 / 30 天；
+3. 选择原因：作弊 / 刷屏广告 / 辱骂 / 挂机 / 自定义原因。
+
+选择“自定义原因”后，在聊天框输入原因即可；输入“取消”或等待 60 秒会中止。菜单封禁与
+`sm_ban <目标> <分钟> [原因]` 命令使用完全相同的本地封禁和网站同步逻辑。`sm_threi_ban`
+已在 1.9.2 移除，避免和 `sm_ban` 重复。
 
 1.8.1 起不再检测 basebans，始终注册 `sm_ban` / `sm_addban` / `sm_unban` / `sm_banip` /
 `sm_unbanip`。请先删除 `basebans.smx`，否则两个插件会争用同名命令并产生注册错误。删除后
@@ -269,13 +284,13 @@ CS:GO 的 `sv_hibernate_when_empty` 会在空服时暂停游戏帧与 SourceMod 
 
 ### 封禁行为
 
-- 1.9.1 的封禁只写入插件内存和 `configs/threi_bans.cfg`，**不写 basebans/引擎封禁**。
+- 1.9.2 的封禁只写入插件内存和 `configs/threi_bans.cfg`，**不写 basebans/引擎封禁**。
   玩家连接时由 `CheckClientAccess` 用 `sm_threi_ban_kick_message` + 具体原因踢出，因此重连
   也能看到自定义提示。
 - SteamID 封禁玩家再次连接时，插件在踢出前读取其 IP，立即写入本地 IP 封禁（同服的其他账号
   马上无法进入），并上报网站把该 IP 关联到原封禁记录。网站随后向所有服务器下发 `banip`。
   因此“秋后算账”时玩家离线、且从未登录网站，也能在他下次进服时补封 IP。
-- `sm_threi_ban` / `sm_threi_addban` 立即写插件封禁、保存文件、踢出在线目标，并异步上报
+- `sm_ban` / `!ban` 菜单 / `sm_threi_addban` 立即写插件封禁、保存文件、踢出在线目标，并异步上报
   网站；网站记录是一条**全服**游戏封禁（所有服务器同步生效）和一条在线玩家 IP 封禁。
   **不会封禁网站账号，也不会撤销网站登录会话。** 网站不可达时本地插件封禁先生效，上报进入
   重试队列。
@@ -285,10 +300,10 @@ CS:GO 的 `sv_hibernate_when_empty` 会在空服时暂停游戏帧与 SourceMod 
 - 网站「封禁管理」解除某条游戏封禁时，会一并解除同一次封禁产生的游戏 IP 封禁，并下发
   `unban` + `unbanip`；插件收到后立即删除本地插件封禁。若发现旧版 1.7.x 写入的引擎封禁，
   也会顺带执行 `RemoveBan` 清理。
-- `sm_threi_ban` 的原因默认“管理员封禁”，最长 400 字符；分钟数 `0` 表示永久。在线目标解析
+- `sm_ban` / `!ban` 的原因默认“管理员封禁”，最长 400 字符；分钟数 `0` 表示永久。在线目标解析
   遵循 SourceMod immunity；离线 SteamID 直接封禁。
 - SteamID64、SteamID2（`STEAM_0:0:...` 或 `STEAM_1:...`）和 SteamID3（`[U:1:...]` 或
-  `U:1:...`）都可以用于 `sm_threi_ban` / `sm_threi_addban` / `sm_threi_unban`；内部统一
+  `U:1:...`）都可以用于 `sm_ban` / `sm_threi_addban` / `sm_unban`；内部统一
   转成 SteamID64 再匹配。1.7.3+ 直接读取原始参数串，因此这些格式不加引号也可以；加引号
   仍然兼容。
 - 上报前会校验玩家名/原因的 UTF-8；非法名字回退为 SteamID，非法原因回退为“管理员封禁”，
@@ -352,7 +367,7 @@ Content-Type: application/json
 
 ### 游戏内封禁回传
 
-插件 1.9.0 的 `sm_threi_ban` / `sm_threi_addban` 会将封禁异步上报：
+插件 1.9.2 的 `sm_ban` / `!ban` 菜单 / `sm_threi_addban` 会将封禁异步上报：
 
 ```http
 POST /api/v1/plugin/ban-report
@@ -534,9 +549,9 @@ sm_threi_instance 10001 "该服务器的令牌"
 
 **网站解封后游戏内仍然被封**
 
-1.9.1+ 会在网站解除「游戏封禁」时自动下发 `unban`，删除插件封禁文件/缓存中的 SteamID
+1.9.2+ 会在网站解除「游戏封禁」时自动下发 `unban`，删除插件封禁文件/缓存中的 SteamID
 条目，玩家无需等待引擎解封即可重连；同组游戏 IP 封禁也会解除并下发 `unbanip`。如果仍然
-被封，确认 `sm_threi_status` 显示 `version=1.9.1`，并确认解除的是「游戏封禁」而不是只解除了
+被封，确认 `sm_threi_status` 显示 `version=1.9.2`，并确认解除的是「游戏封禁」而不是只解除了
 单独的 IP 封禁记录。
 
 如果是从 1.7.x 升级，旧版写入的引擎封禁会在首次快照加载时清理；basebans 自己遗留的、
@@ -548,13 +563,13 @@ sm_unban "STEAM_1:1:12345678"
 sm_unban "[U:1:24691356]"
 ```
 
-1.9.1 安装并卸载 basebans 后，直接使用 `sm_unban` / `sm_threi_unban` 即可，不再依赖
+1.9.2 安装并卸载 basebans 后，直接使用 `sm_unban` / `sm_threi_unban` 即可，不再依赖
 `sm_banlist`；游戏封禁与 IP 封禁在网站「封禁管理」中统一管理。
 
 **游戏内封禁没有出现在网站**
 
-- 确认插件版本为 1.9.1 或更高：`sm_threi_status` 应显示 `version=1.9.1`。
-- `sm_threi_ban` / `sm_threi_addban` / `sm_threi_banip` 会主动上报；控制台原始 `banid` /
+- 确认插件版本为 1.9.2 或更高：`sm_threi_status` 应显示 `version=1.9.2`。
+- `sm_ban` / `!ban` 菜单 / `sm_threi_addban` / `sm_threi_banip` 会主动上报；控制台原始 `banid` /
   `addip` 不会回传。
 - 查看 `addons/sourcemod/logs/` 中是否出现 `Queued in-game ban report`；出现
   `Ban report failed` 时检查 API 连通性、令牌和 `sm_threi_api_url`。

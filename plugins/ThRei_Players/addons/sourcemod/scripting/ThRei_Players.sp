@@ -31,7 +31,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.9.1"
+#define PLUGIN_VERSION "1.9.2"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -114,6 +114,12 @@ bool g_bEngineBansMigrated;
 char g_sBody[BODY_BUFFER_SIZE];
 char g_sErrorBody[ERROR_BODY_SIZE + 1];
 
+// State for the interactive !ban / sm_ban menu.
+int g_iBanTargetUserId[MAXPLAYERS + 1];
+int g_iBanMinutes[MAXPLAYERS + 1];
+bool g_bBanAwaitingReason[MAXPLAYERS + 1];
+Handle g_hBanReasonTimer[MAXPLAYERS + 1];
+
 // Per-instance values loaded from sm_threi_instance lines in the shared
 // cfg/sourcemod/threi_players.cfg. Only the entry matching hostport is used.
 int g_iHostPort;
@@ -181,8 +187,6 @@ public void OnPluginStart() {
         "Send a ThRei_Players report immediately.");
     RegAdminCmd("sm_threi_status", Command_Status, ADMFLAG_ROOT,
         "Show ThRei_Players configuration and access-cache status without revealing tokens.");
-    RegAdminCmd("sm_threi_ban", Command_Ban, ADMFLAG_BAN,
-        "封禁玩家并同步网站：sm_threi_ban <目标|SteamID64> <分钟> [原因]");
     RegAdminCmd("sm_threi_addban", Command_AddBan, ADMFLAG_BAN,
         "按 SteamID64 封禁并同步网站：sm_threi_addban <SteamID64> <分钟> [原因]");
     RegAdminCmd("sm_threi_unban", Command_Unban, ADMFLAG_BAN,
@@ -237,6 +241,7 @@ public void OnClientPostAdminCheck(int client) {
 }
 
 public void OnClientDisconnect(int client) {
+    ClearBanMenuState(client);
     // Report immediately when the server becomes empty. CS:GO may hibernate
     // as soon as the last player leaves, which would stop all SourceMod timers.
     g_iSkipUserId = GetClientUserId(client);
@@ -440,9 +445,18 @@ public Action Command_Status(int client, int args) {
 }
 
 public Action Command_Ban(int client, int args) {
+    if (args == 0) {
+        if (client == 0) {
+            ReplyToCommand(client,
+                "[ThRei] 控制台用法：sm_ban <目标|SteamID> <分钟> [原因]（0 = 永久）");
+            return Plugin_Handled;
+        }
+        ShowBanPlayerMenu(client);
+        return Plugin_Handled;
+    }
     if (args < 2) {
         ReplyToCommand(client,
-            "[ThRei] 用法：sm_threi_ban <目标|SteamID64> <分钟> [原因]（0 = 永久）");
+            "[ThRei] 用法：sm_ban <目标|SteamID> <分钟> [原因]（0 = 永久）；不带参数打开封禁菜单");
         return Plugin_Handled;
     }
     char targetArg[64];
@@ -451,7 +465,7 @@ public Action Command_Ban(int client, int args) {
     if (!ReadBanCommandArgs(targetArg, sizeof(targetArg), minutes, reason,
             sizeof(reason))) {
         ReplyToCommand(client,
-            "[ThRei] 用法：sm_threi_ban <目标|SteamID> <分钟> [原因]（0 = 永久）");
+            "[ThRei] 用法：sm_ban <目标|SteamID> <分钟> [原因]（0 = 永久）");
         return Plugin_Handled;
     }
 
@@ -471,6 +485,221 @@ public Action Command_Ban(int client, int args) {
 
     ApplySteamBan(client, steamId, name, ip, minutes, reason);
     return Plugin_Handled;
+}
+
+void ShowBanPlayerMenu(int client) {
+    ClearBanMenuState(client);
+    Menu menu = new Menu(MenuHandler_BanPlayers);
+    menu.SetTitle("选择要封禁的玩家");
+    int count = 0;
+    for (int target = 1; target <= MaxClients; target++) {
+        if (target == client || !IsClientInGame(target) || IsFakeClient(target)
+                || IsClientSourceTV(target) || IsClientReplay(target)
+                || !IsClientAuthorized(target) || !CanUserTarget(client, target)) {
+            continue;
+        }
+        char name[MAX_NAME_LENGTH];
+        GetClientName(target, name, sizeof(name));
+        char info[16];
+        IntToString(GetClientUserId(target), info, sizeof(info));
+        menu.AddItem(info, name);
+        count++;
+    }
+    if (count == 0) {
+        delete menu;
+        ReplyToCommand(client, "[ThRei] 当前没有可封禁的玩家。");
+        return;
+    }
+    menu.Display(client, 30);
+}
+
+public int MenuHandler_BanPlayers(Menu menu, MenuAction action, int client, int item) {
+    if (action == MenuAction_Select) {
+        char info[16];
+        menu.GetItem(item, info, sizeof(info));
+        int target = GetClientOfUserId(StringToInt(info));
+        if (target <= 0 || !IsClientInGame(target)) {
+            ReplyToCommand(client, "[ThRei] 该玩家已经离线。");
+        } else {
+            g_iBanTargetUserId[client] = GetClientUserId(target);
+            ShowBanDurationMenu(client, target);
+        }
+    } else if (action == MenuAction_End) {
+        delete menu;
+    }
+    return 0;
+}
+
+void ShowBanDurationMenu(int client, int target) {
+    char title[128];
+    Format(title, sizeof(title), "封禁 %N 多长时间？", target);
+    Menu menu = new Menu(MenuHandler_BanDuration);
+    menu.SetTitle(title);
+    menu.AddItem("0", "永久");
+    menu.AddItem("60", "1 小时");
+    menu.AddItem("1440", "1 天");
+    menu.AddItem("10080", "7 天");
+    menu.AddItem("43200", "30 天");
+    menu.AddItem("back", "返回玩家选择");
+    menu.Display(client, 30);
+}
+
+public int MenuHandler_BanDuration(Menu menu, MenuAction action, int client, int item) {
+    if (action == MenuAction_Select) {
+        char info[16];
+        menu.GetItem(item, info, sizeof(info));
+        if (StrEqual(info, "back")) {
+            ShowBanPlayerMenu(client);
+            return 0;
+        }
+        int target = GetClientOfUserId(g_iBanTargetUserId[client]);
+        if (target <= 0 || !IsClientInGame(target)) {
+            ClearBanMenuState(client);
+            ReplyToCommand(client, "[ThRei] 该玩家已经离线。");
+            return 0;
+        }
+        g_iBanMinutes[client] = StringToInt(info);
+        ShowBanReasonMenu(client, target);
+    } else if (action == MenuAction_Cancel) {
+        ClearBanMenuState(client);
+    } else if (action == MenuAction_End) {
+        delete menu;
+    }
+    return 0;
+}
+
+void ShowBanReasonMenu(int client, int target) {
+    char title[128];
+    Format(title, sizeof(title), "封禁 %N：选择原因", target);
+    Menu menu = new Menu(MenuHandler_BanReason);
+    menu.SetTitle(title);
+    menu.AddItem("作弊", "作弊");
+    menu.AddItem("刷屏/广告", "刷屏/广告");
+    menu.AddItem("辱骂/不当言论", "辱骂/不当言论");
+    menu.AddItem("挂机/消极游戏", "挂机/消极游戏");
+    menu.AddItem("custom", "自定义原因（聊天输入）");
+    menu.AddItem("back", "返回时长选择");
+    menu.Display(client, 30);
+}
+
+public int MenuHandler_BanReason(Menu menu, MenuAction action, int client, int item) {
+    if (action == MenuAction_Select) {
+        char info[MAX_REASON_LENGTH];
+        menu.GetItem(item, info, sizeof(info));
+        if (StrEqual(info, "back")) {
+            int target = GetClientOfUserId(g_iBanTargetUserId[client]);
+            if (target <= 0 || !IsClientInGame(target)) {
+                ClearBanMenuState(client);
+                ReplyToCommand(client, "[ThRei] 该玩家已经离线。");
+            } else {
+                ShowBanDurationMenu(client, target);
+            }
+            return 0;
+        }
+        if (StrEqual(info, "custom")) {
+            g_bBanAwaitingReason[client] = true;
+            if (g_hBanReasonTimer[client] != null) {
+                KillTimer(g_hBanReasonTimer[client]);
+            }
+            g_hBanReasonTimer[client] = CreateTimer(60.0, Timer_BanReasonTimeout,
+                GetClientUserId(client));
+            ReplyToCommand(client,
+                "[ThRei] 请在聊天框输入封禁原因，输入“取消”中止（60 秒内有效）。");
+            return 0;
+        }
+        ExecuteMenuBan(client, info);
+    } else if (action == MenuAction_Cancel) {
+        ClearBanMenuState(client);
+    } else if (action == MenuAction_End) {
+        delete menu;
+    }
+    return 0;
+}
+
+public Action Timer_BanReasonTimeout(Handle timer, any userId) {
+    int client = GetClientOfUserId(userId);
+    if (client > 0 && client <= MaxClients) {
+        g_hBanReasonTimer[client] = null;
+        if (g_bBanAwaitingReason[client]) {
+            ClearBanMenuState(client, false);
+            ReplyToCommand(client, "[ThRei] 封禁原因输入超时，已取消。");
+        }
+    }
+    return Plugin_Stop;
+}
+
+public Action OnClientSayCommand(int client, const char[] command, const char[] sArgs) {
+    if (client <= 0 || client > MaxClients || !g_bBanAwaitingReason[client]) {
+        return Plugin_Continue;
+    }
+
+    char reason[MAX_REASON_LENGTH];
+    strcopy(reason, sizeof(reason), sArgs);
+    TrimString(reason);
+    if (StrEqual(reason, "取消", false) || StrEqual(reason, "cancel", false)) {
+        ClearBanMenuState(client);
+        ReplyToCommand(client, "[ThRei] 已取消封禁。");
+        return Plugin_Handled;
+    }
+    if (reason[0] == '\0') {
+        ReplyToCommand(client, "[ThRei] 原因不能为空，请重新输入或输入“取消”。");
+        return Plugin_Handled;
+    }
+    if (reason[0] == '!' || reason[0] == '/') {
+        ReplyToCommand(client, "[ThRei] 请输入封禁原因，或输入“取消”中止。");
+        return Plugin_Handled;
+    }
+    ExecuteMenuBan(client, reason);
+    return Plugin_Handled;
+}
+
+void ExecuteMenuBan(int client, const char[] reason) {
+    int target = GetClientOfUserId(g_iBanTargetUserId[client]);
+    int minutes = g_iBanMinutes[client];
+    if (target <= 0 || !IsClientInGame(target) || !IsClientAuthorized(target)) {
+        ClearBanMenuState(client);
+        ReplyToCommand(client, "[ThRei] 该玩家已经离线。");
+        return;
+    }
+    if (target == client || !CanUserTarget(client, target)) {
+        ClearBanMenuState(client);
+        ReplyToCommand(client, "[ThRei] 你不能封禁该玩家。");
+        return;
+    }
+
+    char steamId[32];
+    if (!GetClientAuthId(target, AuthId_SteamID64, steamId, sizeof(steamId), true)
+            || !IsSteamId64(steamId)) {
+        ClearBanMenuState(client);
+        ReplyToCommand(client, "[ThRei] 无法读取目标 SteamID。");
+        return;
+    }
+    char name[MAX_NAME_LENGTH];
+    char ip[64];
+    GetClientName(target, name, sizeof(name));
+    GetClientIP(target, ip, sizeof(ip), true);
+
+    char safeReason[MAX_REASON_LENGTH];
+    strcopy(safeReason, sizeof(safeReason), reason);
+    if (safeReason[0] == '\0') {
+        strcopy(safeReason, sizeof(safeReason), "管理员封禁");
+    }
+
+    ClearBanMenuState(client);
+    ApplySteamBan(client, steamId, name, ip, minutes, safeReason);
+}
+
+void ClearBanMenuState(int client, bool closeTimer = true) {
+    if (client <= 0 || client > MaxClients) {
+        return;
+    }
+    g_bBanAwaitingReason[client] = false;
+    g_iBanTargetUserId[client] = 0;
+    g_iBanMinutes[client] = 0;
+    if (closeTimer && g_hBanReasonTimer[client] != null) {
+        KillTimer(g_hBanReasonTimer[client]);
+        g_hBanReasonTimer[client] = null;
+    }
 }
 
 public Action Command_AddBan(int client, int args) {
