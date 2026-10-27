@@ -6,6 +6,7 @@ export const siteConfig = {
   nav: [
     { title: "官网", href: "/" },
     { title: "服务器", href: "/servers" },
+    { title: "下载站", href: "https://cdn.threi.cn/csgo/", external: true },
     { title: "论坛", href: "/forum" },
     { title: "用户中心", href: "/account" },
   ],

@@ -35,12 +35,23 @@ export async function SiteHeader() {
           <ul className="flex flex-wrap items-center gap-1 text-sm">
             {navItems.map((item) => (
               <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className="inline-flex h-8 items-center rounded-md px-3 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                >
-                  {item.title}
-                </Link>
+                {"external" in item && item.external ? (
+                  <a
+                    href={item.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex h-8 items-center rounded-md px-3 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  >
+                    {item.title}
+                  </a>
+                ) : (
+                  <Link
+                    href={item.href}
+                    className="inline-flex h-8 items-center rounded-md px-3 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  >
+                    {item.title}
+                  </Link>
+                )}
               </li>
             ))}
           </ul>
