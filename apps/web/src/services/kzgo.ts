@@ -106,7 +106,7 @@ export function kzMapImageUrl(mapName: string): string | null {
   if (!/^[A-Za-z0-9_.-]+$/.test(normalized)) {
     return null;
   }
-  return `https://raw.githubusercontent.com/KZGlobalTeam/map-images/public/mediums/${encodeURIComponent(normalized)}.jpg`;
+  return `/map-images/${encodeURIComponent(normalized)}`;
 }
 
 export async function fetchKzTimerMapInfo(): Promise<Map<string, KzMapInfo>> {
