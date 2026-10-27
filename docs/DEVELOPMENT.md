@@ -17,6 +17,64 @@
 
 ---
 
+## 2026年10月27日 22时51分14秒 网站解封自动清除服务器本地封禁
+
+### 背景
+
+用户反馈：游戏内 `sm_ban` 封禁玩家后，网站虽然能解封网站侧记录，但服务器本地 SourceMod
+封禁仍在，仍需进服务器执行 `sm_unban`。希望网站解除游戏服务器封禁时自动清理本地封禁。
+
+### 变更内容
+
+- 新增迁移 `20261027224300_server_unban_actions.sql`：
+  `server_actions.action` 约束从 `kick`/`ban` 扩展为 `kick`/`ban`/`unban`。
+- `POST /admin/server-bans/{id}/lift` 在解除封禁的事务中：
+  - 继续把尚未执行的 `ban` 指令标记完成；
+  - 单服封禁向对应服务器写入一条 `unban` 指令；
+  - 全服封禁向所有配置了插件令牌的服务器写入 `unban` 指令。
+- `ThRei_Players` 1.6.1：
+  - 解析 `unban` 指令，先清除插件本地封禁缓存；
+  - 把 SteamID64 转成 `STEAM_1:Y:Z`，再调用 `RemoveBan(BANFLAG_AUTHID)` 执行引擎
+    `removeid`，删除 `sm_ban` / `BanClient` 写入的本地 SteamID 封禁；
+  - 无法识别的动作会确认并跳过，避免旧插件/新 API 组合把队列卡住。
+- 管理面板「游戏服务器封禁」解封提示更新：说明会下发本地解封指令，需要插件 1.6.1+。
+- 手动在游戏内添加的 IP 封禁不会被自动 `unban` 删除；仍可在服务器用 `sm_unban <IP>`
+  或 `removeip` 处理。
+
+### 涉及文件
+
+- `services/api/migrations/20261027224300_server_unban_actions.sql`
+- `services/api/src/modules/server_admin.rs`
+- `services/api/src/modules/plugin_access.rs`（动作渲染测试）
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+- `README.md`、`docs/API.md`、`docs/ARCHITECTURE.md`、`docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- `server_actions.action` 允许 `unban`。
+- 动作协议新增 `action <id> unban <steamid64> <reason>`；旧插件不识别，需要 1.6.1+。
+
+### 插件包
+
+- `/home/threi/ThRei_Players-1.6.1/`、`.zip`、`.tar.gz`，并复制到
+  `/mnt/c/Users/15155/Downloads/`。
+- `.smx` SHA-256：`624a6bdc56e36737b4e75365ba0c4518dbcd9d743e8fe2b97966688fbc2171f0`。
+
+### 测试与结果
+
+- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：47 个单元测试 + 14 个 HTTP 合约测试通过。
+- `npm run typecheck`、`npm run lint`、`npm run format:check`、`npm run build`：通过。
+- SourcePawn Compiler 1.11.0.6970 编译插件 1.6.1：通过，无警告。
+- 生产部署：迁移 `20261027224300` 成功；`api`、`web`、`nginx`、`postgres`、`redis` 均健康。
+- 生产 API 测试：创建临时 `server_bans` 记录并调用解封接口，返回 204，`server_actions`
+  生成 `unban` 指令（`网站解除封禁`）；测试数据已清理。
+- **未执行**：真实游戏服务器上的插件 1.6.1 解封验证（本机无法访问游戏服务器）；需要用户
+  安装 1.6.1 后在 1服 做一次封禁/网站解封测试。
+
 ## 2026年10月27日 14时56分40秒 自动 IP 封禁生产部署与验证
 
 ### 背景

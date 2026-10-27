@@ -213,10 +213,14 @@ ban 76561198000000001 1792914155 临时封禁
 # ThRei actions v1
 action 7e4f0d8a-... kick 76561199125125759 管理员踢出
 action 8a1d2c3b-... ban 76561198000000000 1792914155 临时封禁
+action 9c2e3d4f-... unban 76561198000000000 网站解除封禁
 ```
 
 - 最多返回 100 条未确认指令，按创建时间排序。
 - `kick` 不带到期时间；`ban` 的到期时间用于插件本地拦截临时封禁。
+- `unban` 在网站解除游戏服务器封禁时下发；插件 1.6.1+ 会把它转换为 SteamID2 并执行
+  `RemoveBan(BANFLAG_AUTHID)`，删除 `sm_ban` / `BanClient` 写入服务器本地的 SteamID 封禁，
+  同时清除插件缓存。旧插件不识别该指令，需要升级到 1.6.1+。
 - 原因中的控制字符会替换为空格并限制为 400 字符，防止注入额外协议行。
 
 ### `POST /api/v1/plugin/actions/{id}/ack`
@@ -385,7 +389,7 @@ Query：
 - `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions`，由 `ThRei_Players` 1.5.0+ 通过 long-poll 通常在 1 秒内执行；插件离线时恢复后执行。
 - `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "...", "scope": "global" }`：原子写入 `server_bans` 与 `server_actions`。`scope` 为 `global`（默认，`server_id = NULL`，对所有启用服务器生效）或 `server`（仅路径指定的服务器）；全局封禁会为每台启用服务器写入一条指令，插件立即踢出在线目标并阻止重连。若已知玩家 IP（插件 1.6.0+ 上报的服务器 IP，或网站最近登录 IP），还会自动创建 IP 封禁；管理员当前 IP 不会被自动封禁。
 - `GET /admin/server-bans`：返回所有游戏服务器封禁（含全服封禁），每项带 `scope`（`global` / `server`）和 `serverName`（全服封禁为 `全服`）。
-- `POST /admin/server-bans/{id}/lift` 解除服务器封禁；全服封禁会同时把该玩家在所有服务器上尚未执行的封禁指令标记为已处理，避免解封后旧指令再次生效。
+- `POST /admin/server-bans/{id}/lift` 解除服务器封禁；会同时把该玩家尚未执行的封禁指令标记为已处理，避免解封后旧指令再次生效，并写入 `unban` 指令：单服封禁写入对应服务器，全服封禁写入所有配置了插件令牌的服务器。插件 1.6.1+ 收到后删除服务器本地 SteamID 封禁；旧插件不识别该指令。
 - 踢出/封禁指令由插件确认后写入 `processed_at`；`pendingActions` 是尚未确认的指令数。封禁到期或已解除时，插件不会执行对应指令，但仍会确认队列项。
 - RCON 只发送 `status` 用于休眠/存活判断，白名单、踢出与封禁都不依赖 RCON。
 

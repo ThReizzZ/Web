@@ -169,7 +169,7 @@ export function BansManager({
             : item,
         ),
       );
-      setFeedback("游戏服务器封禁已解除。");
+      setFeedback("游戏服务器封禁已解除，并已下发服务器本地解封指令（插件 1.6.1+ 生效）。");
       refresh();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "解封失败，请稍后重试。");
@@ -193,7 +193,8 @@ export function BansManager({
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">封禁管理</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             网站账号封禁会立即撤销该 Steam 账号的网站会话，并自动尝试封禁其最近 IP；IP 封禁会拦截该
-            IP 的网站登录并自动关联普通账号。游戏服务器封禁显示在下方，由插件在游戏内执行。
+            IP
+            的网站登录并自动关联普通账号。游戏服务器封禁显示在下方，由插件在游戏内执行；解封会通知插件删除服务器本地封禁。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -315,7 +316,8 @@ export function BansManager({
           <div className="border-b px-5 py-4">
             <h2 className="font-semibold">游戏服务器封禁</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              全服封禁对所有服务器生效；单服封禁只影响对应服务器。游戏内封禁由服务器插件执行。
+              全服封禁对所有服务器生效；单服封禁只影响对应服务器。游戏内封禁由服务器插件执行；
+              解封会下发指令，由插件 1.6.1+ 删除服务器本地 SteamID 封禁。
             </p>
           </div>
           <div className="divide-y">

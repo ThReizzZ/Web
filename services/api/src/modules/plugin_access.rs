@@ -383,13 +383,20 @@ mod tests {
                 reason: "刷屏".to_owned(),
                 expires_at_unix: 1_800_000_000,
             },
+            ActionRow {
+                id: Uuid::from_u128(2),
+                action: "unban".to_owned(),
+                steam_id64: "76561198000000001".to_owned(),
+                reason: "网站解除封禁".to_owned(),
+                expires_at_unix: 0,
+            },
         ];
 
         let body = render_actions(&actions);
 
         assert_eq!(
             body,
-            "# ThRei actions v1\naction 00000000-0000-0000-0000-000000000000 kick 76561199125125759 测试\naction 00000000-0000-0000-0000-000000000001 ban 76561198000000000 1800000000 刷屏\n"
+            "# ThRei actions v1\naction 00000000-0000-0000-0000-000000000000 kick 76561199125125759 测试\naction 00000000-0000-0000-0000-000000000001 ban 76561198000000000 1800000000 刷屏\naction 00000000-0000-0000-0000-000000000002 unban 76561198000000001 网站解除封禁\n"
         );
     }
 

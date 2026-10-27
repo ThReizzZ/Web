@@ -1132,6 +1132,38 @@ async fn lift_server_ban(
         .await?;
     }
 
+    // Ask the plugin to remove the local SourceMod/engine ban created by
+    // sm_ban. Website-created bans do not have a local engine ban, but the
+    // same idempotent action also clears the plugin's local cache.
+    if let Some(server_id) = &lifted.0 {
+        sqlx::query(
+            r"
+            INSERT INTO server_actions (server_id, steam_id64, action, reason, created_by)
+            VALUES ($1, $2, 'unban', $3, $4)
+            ",
+        )
+        .bind(server_id)
+        .bind(&lifted.1)
+        .bind("网站解除封禁")
+        .bind(admin.id)
+        .execute(&mut *transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            r"
+            INSERT INTO server_actions (server_id, steam_id64, action, reason, created_by)
+            SELECT id, $1, 'unban', $2, $3
+            FROM servers
+            WHERE plugin_token IS NOT NULL
+            ",
+        )
+        .bind(&lifted.1)
+        .bind("网站解除封禁")
+        .bind(admin.id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
     transaction.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

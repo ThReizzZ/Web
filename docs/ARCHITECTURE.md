@@ -299,7 +299,7 @@ modules/<name>/
 - **管理状态**：`pluginState` 由 `plugin_token` 与 `last_reported_at` 派生：`disabled`（无令牌）、`waiting`（有令牌但没有最近上报）、`connected`（90 秒内有上报）。
 - **令牌生命周期**：生成/轮换会清空在线快照并标记离线；撤销令牌执行同样的清理。旧令牌立即失效。
 - **访问控制**：`GET /api/v1/plugin/access-snapshot` 返回纯文本 `server`、`requires_whitelist`、全服 `whitelist` 与带过期时间的 `ban` 行；插件每 30 秒缓存一次，在 `OnClientPostAdminCheck` 与快照刷新时检查在线玩家。白名单仅在服务器开启 `requires_whitelist` 时拦截，封禁始终生效。快照成功加载后即使 API 暂时不可达也继续使用最后一次规则；首次加载前由插件配置决定是否放行。
-- **管理指令**：踢出/封禁写入 `server_actions`；`GET /api/v1/plugin/actions` 返回待执行纯文本（封禁附带到期时间），插件执行后 `POST /api/v1/plugin/actions/{id}/ack` 写入 `processed_at`。解封会同时把未执行的封禁指令标记完成；过期封禁不会被插件执行但会确认。
+- **管理指令**：踢出/封禁写入 `server_actions`；`GET /api/v1/plugin/actions` 返回待执行纯文本（封禁附带到期时间），插件执行后 `POST /api/v1/plugin/actions/{id}/ack` 写入 `processed_at`。解除服务器封禁会同时把未执行的封禁指令标记完成，并写入 `unban` 指令；插件 1.6.1+ 将 SteamID64 转为 SteamID2 后调用 `RemoveBan` 删除服务器本地封禁。过期封禁不会被插件执行但会确认。
 - **休眠兜底**：`server_hibernation` 只对启用、非维护、有 RCON 密码且插件上报已过期的服务器执行 `status`。成功时 0 人标记 `hibernating`、有玩家标记 `online`；连续 3 次失败标记 `offline`。不会更新 `last_reported_at`，因此管理面板仍能区分插件失联与进程死亡。该任务不提供任意 RCON 执行面。
 
 ### 6.7 OpenAPI
@@ -328,7 +328,7 @@ modules/<name>/
 - `server_communities` 保存管理员创建的社区组（名称大小写不敏感唯一、可选描述）；`servers.community_id` 可为空并外键引用该表，删除组时自动置空，一个实例最多属于一个组。
 - `server_players` 的 SteamID64 非空，插件上报时按 `(server_id, steam_id64)` upsert，并保存插件 1.6.0+ 上报的 `ip_address`；不再保存 A2S 匿名槽位。
 - `global_whitelist` 保存全服白名单（SteamID64 唯一）；`whitelist_applications` 保存全服申请与审核；`servers.requires_whitelist` 标记该服务器是否使用全服白名单。旧的 `server_whitelist` 已迁移并标记为 deprecated。
-- `forum_mutes` 记录论坛禁言；`server_bans` 记录服务器级封禁；`server_actions` 保存待游戏服务器插件消费的踢出/封禁指令。
+- `forum_mutes` 记录论坛禁言；`server_bans` 记录服务器级封禁；`server_actions` 保存待游戏服务器插件消费的踢出/封禁/解封指令（`kick` / `ban` / `unban`）。
 - 迁移只新增，不修改已应用迁移。
 - 禁止应用启动时删除/重建数据库；禁止容器启动时无条件清空卷。
 - 备份/恢复流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。

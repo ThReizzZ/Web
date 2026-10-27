@@ -12,6 +12,8 @@
  * API outage does not block normal play. Kick/ban commands from the website
  * are consumed from the action queue and acknowledged after execution.
  * Bans executed in game through BanClient are reported back to the website.
+ * Website lifts also enqueue an `unban` action that removes the local
+ * SourceMod/engine ban created by sm_ban.
  *
  * Requirements:
  *   - SourceMod 1.11+
@@ -25,7 +27,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.6.0"
+#define PLUGIN_VERSION "1.6.1"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -1237,7 +1239,15 @@ void ParseAndExecuteActions(const char[] body) {
             }
             CopyRest(rest, cursor, reason, sizeof(reason));
             ExecuteBanAction(steamId, StringToInt(expiryText), reason);
+        } else if (StrEqual(action, "unban")) {
+            CopyRest(rest, cursor, reason, sizeof(reason));
+            ExecuteUnbanAction(steamId, reason);
         } else {
+            // Acknowledge unsupported actions so a newer API action cannot
+            // remain at the head of the queue forever.
+            if (g_aAckQueue.Length < MAX_ACK_QUEUE) {
+                g_aAckQueue.PushString(id);
+            }
             continue;
         }
 
@@ -1286,6 +1296,44 @@ void ExecuteBanAction(const char[] steamId, int expiresAt, const char[] reason) 
     if (target > 0) {
         KickForBan(target, steamId, reason);
     }
+}
+
+void ExecuteUnbanAction(const char[] steamId, const char[] reason) {
+    // Drop the website-enforced cache immediately so a reconnect cannot be
+    // blocked before the next access snapshot arrives.
+    g_smBans.Remove(steamId);
+    g_smBanReasons.Remove(steamId);
+
+    // RemoveBan(BANFLAG_AUTHID) issues the engine `removeid` command. Convert
+    // SteamID64 to SteamID2 because basebans' numeric-argument handling treats
+    // a raw SteamID64 as an IP address.
+    char steamId2[64];
+    BuildSteamId2From64(steamId, steamId2, sizeof(steamId2));
+    if (!RemoveBan(steamId2, BANFLAG_AUTHID, "threi_unban", 0)) {
+        LogError("[ThRei_Players] Could not remove the local ban for %s.", steamId);
+        return;
+    }
+
+    if (reason[0] != '\0') {
+        LogMessage("[ThRei_Players] Removed local ban for %s (%s).", steamId, reason);
+    } else {
+        LogMessage("[ThRei_Players] Removed local ban for %s.", steamId);
+    }
+}
+
+/**
+ * Converts an individual SteamID64 (7656119...) to STEAM_1:Y:Z so the engine's
+ * `removeid` command can match its stored ban identity.
+ */
+void BuildSteamId2From64(const char[] steamId64, char[] output, int maxLength) {
+    int parts[2];
+    if (StringToInt64(steamId64, parts) == 17
+            && parts[1] == 0x1100001
+            && parts[0] >= 0) {
+        Format(output, maxLength, "STEAM_1:%d:%d", parts[0] & 1, parts[0] / 2);
+        return;
+    }
+    strcopy(output, maxLength, steamId64);
 }
 
 int FindClientBySteamId(const char[] steamId) {
