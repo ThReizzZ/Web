@@ -22,6 +22,12 @@ use crate::{
     state::AppState,
 };
 
+/// Plugins before 1.9.0 skip actions whose target is not a 17-digit `SteamID`
+/// without acknowledging them. IP actions use this reserved numeric target so
+/// legacy plugins acknowledge the unsupported action instead of blocking their
+/// queue; 1.9.0+ reads `ip_address` and ignores this placeholder.
+pub(crate) const IP_ACTION_PLACEHOLDER: &str = "00000000000000000";
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)]
@@ -679,14 +685,17 @@ async fn lift_server_ip_ban(
 
     sqlx::query(
         r"
-        INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
-        SELECT id, $1, 'unbanip', '网站解除 IP 封禁', $2
+        INSERT INTO server_actions (
+            server_id, steam_id64, ip_address, action, reason, created_by
+        )
+        SELECT id, $3, $1, 'unbanip', '网站解除 IP 封禁', $2
         FROM servers
         WHERE is_active = true AND plugin_token IS NOT NULL
         ",
     )
     .bind(&lifted_ip)
     .bind(admin.id)
+    .bind(IP_ACTION_PLACEHOLDER)
     .execute(&state.db)
     .await?;
 
@@ -739,8 +748,10 @@ pub(crate) async fn create_server_ip_ban_row(
 
     sqlx::query(
         r"
-        INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
-        SELECT id, $1, 'banip', $2, $3
+        INSERT INTO server_actions (
+            server_id, steam_id64, ip_address, action, reason, created_by
+        )
+        SELECT id, $4, $1, 'banip', $2, $3
         FROM servers
         WHERE is_active = true
         ",
@@ -748,6 +759,7 @@ pub(crate) async fn create_server_ip_ban_row(
     .bind(&ip)
     .bind(&reason)
     .bind(created_by)
+    .bind(IP_ACTION_PLACEHOLDER)
     .execute(&mut *transaction)
     .await?;
 
@@ -1567,14 +1579,17 @@ async fn lift_server_ban(
         for ip in group_ips {
             sqlx::query(
                 r"
-                INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
-                SELECT id, $1, 'unbanip', '网站解除服务器封禁', $2
+                INSERT INTO server_actions (
+                    server_id, steam_id64, ip_address, action, reason, created_by
+                )
+                SELECT id, $3, $1, 'unbanip', '网站解除服务器封禁', $2
                 FROM servers
                 WHERE is_active = true AND plugin_token IS NOT NULL
                 ",
             )
             .bind(&ip)
             .bind(admin.id)
+            .bind(IP_ACTION_PLACEHOLDER)
             .execute(&mut *transaction)
             .await?;
         }

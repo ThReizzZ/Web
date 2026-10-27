@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use utoipa::ToSchema;
 
-use crate::{errors::AppError, state::AppState};
+use crate::{errors::AppError, modules::server_admin::IP_ACTION_PLACEHOLDER, state::AppState};
 
 const TOKEN_HEADER: &str = "x-threi-plugin-token";
 const MAX_TOKEN_CHARS: usize = 128;
@@ -529,14 +529,17 @@ pub async fn unban_report(
         for ip in group_ips {
             sqlx::query(
                 r"
-                INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
-                SELECT id, $1, 'unbanip', $2, NULL
+                INSERT INTO server_actions (
+                    server_id, steam_id64, ip_address, action, reason, created_by
+                )
+                SELECT id, $3, $1, 'unbanip', $2, NULL
                 FROM servers
                 WHERE is_active = true AND plugin_token IS NOT NULL
                 ",
             )
             .bind(&ip)
             .bind(lift_reason)
+            .bind(IP_ACTION_PLACEHOLDER)
             .execute(&mut *transaction)
             .await?;
         }
@@ -603,14 +606,17 @@ pub async fn unban_report(
         if lifted.rows_affected() > 0 {
             sqlx::query(
                 r"
-                INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
-                SELECT id, $1, 'unbanip', $2, NULL
+                INSERT INTO server_actions (
+                    server_id, steam_id64, ip_address, action, reason, created_by
+                )
+                SELECT id, $3, $1, 'unbanip', $2, NULL
                 FROM servers
                 WHERE is_active = true AND plugin_token IS NOT NULL
                 ",
             )
             .bind(&ip)
             .bind(lift_reason)
+            .bind(IP_ACTION_PLACEHOLDER)
             .execute(&mut *transaction)
             .await?;
         }
