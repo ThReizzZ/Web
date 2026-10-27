@@ -94,7 +94,9 @@ export function JoinServerButton({
                 <Badge variant="outline">Tier {server.mapTier}</Badge>
               ) : null}
               <Badge variant="outline">{server.tickrate} tick</Badge>
-              <Badge variant="outline">{server.region}</Badge>
+              {server.region && server.region !== "未知" ? (
+                <Badge variant="outline">{server.region}</Badge>
+              ) : null}
               <Badge variant="outline">
                 {playerCount}/{server.maxPlayers} 在线
               </Badge>
@@ -112,8 +114,7 @@ export function JoinServerButton({
             ) : null}
 
             <div className="rounded-xl border bg-muted/30 p-4">
-              <p className="text-xs text-muted-foreground">服务器地址（IP : PORT）</p>
-              <p className="mt-1 font-mono text-sm font-medium break-all">{address}</p>
+              <p className="text-xs text-muted-foreground">连接服务器</p>
               <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <Button asChild>
                   <a href={`steam://connect/${address}`}>

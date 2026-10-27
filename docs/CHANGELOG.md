@@ -58,6 +58,7 @@
 - 用户中心 KZ 地图卡片支持 KZT/SKZ/VNL 模式、已完成/未完成地图、T1–T7 筛选和分页；完成地图显示地图分数。
 - 顶部导航移除重复的「用户中心」入口，保留右上角头像入口。
 - 服务器卡片和服务器目录从 KZ:GO 地图库补全地图预览图与 Tier 等级；图片加载失败时显示渐变兜底。
+- 服务器卡片隐藏社区组名称和未知地区标识；不再直接展示 IP:PORT，仅保留复制地址和加入游戏按钮。
 - 地图预览改为下载站优先：先请求 `cdn.threi.cn/csgo/map-images-v1/{map}.jpg`，失败后回退到站点 `/map-images/{map}` 代理（GitHub raw → jsDelivr），最终再显示渐变兜底。图片已同步到 files.threi.cn 的 `map-images-v1` 目录。
 - 白名单改为全服共享：玩家申请一次、管理员审核一次，所有开启白名单的服务器通用；
   新增 `global_whitelist` 并迁移旧的 `server_whitelist` 数据。

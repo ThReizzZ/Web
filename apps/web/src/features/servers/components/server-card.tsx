@@ -45,26 +45,20 @@ export function ServerCard({
                 Tier {server.mapTier}
               </Badge>
             ) : null}
-            {server.community ? (
-              <Badge
-                variant="secondary"
-                className="max-w-[12rem] truncate bg-white/15 text-white backdrop-blur"
-              >
-                {server.community}
-              </Badge>
-            ) : null}
             {server.requiresWhitelist ? (
               <Badge variant="warning" className="bg-amber-400/20 text-amber-100 backdrop-blur">
                 白名单
               </Badge>
             ) : null}
           </div>
-          <Badge
-            variant="outline"
-            className="border-white/25 bg-slate-950/25 text-white backdrop-blur"
-          >
-            {server.region}
-          </Badge>
+          {server.region && server.region !== "未知" ? (
+            <Badge
+              variant="outline"
+              className="border-white/25 bg-slate-950/25 text-white backdrop-blur"
+            >
+              {server.region}
+            </Badge>
+          ) : null}
         </div>
         <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-4 p-4 text-white">
           <div className="min-w-0">
@@ -113,20 +107,9 @@ export function ServerCard({
           </div>
         </div>
 
-        <div className="mt-auto space-y-3">
-          <div className="rounded-lg border bg-background p-3">
-            <p className="text-[10px] tracking-wide text-muted-foreground uppercase">IP : PORT</p>
-            <p className="mt-0.5 font-mono text-xs break-all sm:text-sm">{address}</p>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <CopyAddressButton
-              address={address}
-              label="复制地址"
-              size="default"
-              className="w-full"
-            />
-            <JoinServerButton server={server} className="w-full" />
-          </div>
+        <div className="mt-auto grid grid-cols-2 gap-2">
+          <CopyAddressButton address={address} label="复制地址" size="default" className="w-full" />
+          <JoinServerButton server={server} className="w-full" />
         </div>
       </CardContent>
     </Card>

@@ -35,9 +35,10 @@ export function ServerListRow({ server }: { server: KzServer }) {
             {server.mapTier !== null ? (
               <Badge variant="outline">Tier {server.mapTier}</Badge>
             ) : null}
-            {server.community ? <Badge variant="outline">{server.community}</Badge> : null}
             {server.requiresWhitelist ? <Badge variant="warning">白名单</Badge> : null}
-            <Badge variant="outline">{server.region}</Badge>
+            {server.region && server.region !== "未知" ? (
+              <Badge variant="outline">{server.region}</Badge>
+            ) : null}
           </div>
           <p className="line-clamp-1 text-sm text-muted-foreground">{server.description}</p>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -56,11 +57,7 @@ export function ServerListRow({ server }: { server: KzServer }) {
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-col gap-2 lg:w-64 lg:justify-between">
-          <div className="rounded-md border bg-muted/25 px-2.5 py-2">
-            <p className="text-[10px] tracking-wide text-muted-foreground uppercase">IP : PORT</p>
-            <p className="mt-0.5 font-mono text-xs break-all">{address}</p>
-          </div>
+        <div className="flex shrink-0 flex-col gap-2 lg:w-64 lg:justify-end">
           <div className="grid grid-cols-2 gap-2">
             <CopyAddressButton address={address} label="复制" size="sm" className="w-full" />
             <JoinServerButton server={server} size="sm" className="w-full" />
