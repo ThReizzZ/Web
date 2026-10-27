@@ -143,7 +143,7 @@ Steam 是唯一登录方式；没有密码、邮箱注册或其他登录入口�
 
 - `status`：`online` / `maintenance` / `offline` / `hibernating`。`hibernating` 表示空服休眠但进程仍可由可选的 RCON 状态探测确认存活。
 - `community`：可选的社区组名称，用于把同一台主机上的多个实例分组展示；空字符串表示未分组。
-- `latencyMs` 为插件上报的在线玩家平均延迟（毫秒）；没有在线玩家或旧插件未上报时为 `null`。网站服务器卡片对登录用户显示的是按访问 IP 与服务器位置计算的“预估延迟”，不是该字段。
+- `latencyMs`、`playerCount` 可为 `null`；`mapImage` 可为空字符串。服务器卡片对登录用户显示的“预估延迟”由网站按登录 IP 和服务器位置计算，不从此接口读取。
 - 状态、地图、人数与在线玩家由游戏服务器上的 `ThRei_Players` 插件上报。API 不使用 A2S 轮询，也不会向游戏服务器发送任意 RCON 指令。
 - 没有配置 RCON 密码的插件服务器超过 90 秒未上报时，后台任务会把人数清零并删除在线名单：上次人数为 0 时标记 `hibernating`，否则标记 `offline`。这是空服休眠的推断；配置了 RCON 密码且启用 `HIBERNATION_POLL_ENABLED` 时，后台只发送 `status` 判断存活：空服标记 `hibernating`，有玩家标记 `online`；连续 3 次 RCON 失败才标记 `offline`。`maintenance` 状态不会被插件上报或后台任务覆盖。
 - 在线名单只包含插件已通过 Steam 认证的玩家（SteamID64 非空）。插件安装与配置见 [../plugins/ThRei_Players/README.md](../plugins/ThRei_Players/README.md)。
@@ -163,7 +163,6 @@ X-ThRei-Plugin-Token: <server plugin token>
   "name": "KZ | 新手服",
   "map": "kz_beginner",
   "maxPlayers": 32,
-  "latencyMs": 42,
   "players": [
     {
       "steamId64": "76561199125125759",
@@ -180,7 +179,6 @@ X-ThRei-Plugin-Token: <server plugin token>
 - `players` 中无效或重复的 SteamID64 会被跳过，响应里的 `skipped` 表示跳过数量。
 - `ipAddress` 由插件 1.6.0+ 通过 `GetClientIP` 上报，非法或空值按 `NULL` 保存；用于服务器封禁时自动创建 IP 封禁。
 - `connectedSeconds` 用于恢复 `connected_at`，超出 0–2592000 秒会被截断。
-- `latencyMs` 由插件 1.9.4+ 计算在线真人玩家的平均 RTT；无在线玩家时省略，服务器延迟显示为空。
 - 成功返回 `{ "serverId": "...", "playerCount": 1, "skipped": 0, "reportedAt": "..." }`。
 - 令牌缺失、错误、服务器不存在或 `serverId` 与令牌不匹配统一返回 `401 unauthorized`，避免枚举服务器。
 - 字段超出限制或 JSON 非法返回 `422`。

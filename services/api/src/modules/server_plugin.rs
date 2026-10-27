@@ -51,9 +51,6 @@ pub struct PluginReportRequest {
     pub map: Option<String>,
     #[serde(default)]
     pub max_players: Option<i32>,
-    /// Average ping of connected human players in milliseconds.
-    #[serde(default)]
-    pub latency_ms: Option<i32>,
     #[serde(default)]
     pub players: Vec<PluginPlayer>,
 }
@@ -174,7 +171,6 @@ pub async fn report(
     let name = normalize_server_name(request.name);
     let map = normalize_map(request.map)?;
     validate_max_players(request.max_players)?;
-    let latency_ms = normalize_latency(request.latency_ms);
     let (players, skipped) = normalize_players(&request.players, Utc::now());
 
     persist_report(
@@ -185,7 +181,6 @@ pub async fn report(
             name: name.as_deref(),
             map: map.as_deref(),
             max_players: request.max_players,
-            latency_ms,
             players: &players,
             skipped,
         },
@@ -835,10 +830,6 @@ fn validate_max_players(value: Option<i32>) -> Result<(), AppError> {
     Ok(())
 }
 
-fn normalize_latency(value: Option<i32>) -> Option<i32> {
-    value.filter(|latency| (1..=10_000).contains(latency))
-}
-
 fn normalize_players(players: &[PluginPlayer], now: DateTime<Utc>) -> (Vec<NormalizedPlayer>, i32) {
     let mut seen = HashSet::with_capacity(players.len().min(MAX_PLAYERS));
     let mut normalized = Vec::with_capacity(players.len().min(MAX_PLAYERS));
@@ -921,7 +912,6 @@ struct ReportPayload<'a> {
     name: Option<&'a str>,
     map: Option<&'a str>,
     max_players: Option<i32>,
-    latency_ms: Option<i32>,
     players: &'a [NormalizedPlayer],
     skipped: i32,
 }
@@ -944,7 +934,7 @@ async fn persist_report(
             map = COALESCE($3, map),
             max_players = COALESCE($4, max_players),
             player_count = $5,
-            latency_ms = $7,
+            latency_ms = NULL,
             last_reported_at = now(),
             updated_at = now()
         WHERE plugin_token = $2
@@ -958,7 +948,6 @@ async fn persist_report(
     .bind(report.max_players)
     .bind(player_count)
     .bind(report.name)
-    .bind(report.latency_ms)
     .fetch_optional(&mut *transaction)
     .await?
     .ok_or(AppError::Unauthorized)?;
@@ -1153,15 +1142,6 @@ mod tests {
         assert_eq!(validate_ban_reason("  挂机  ").unwrap(), "挂机");
         assert!(validate_ban_reason("   ").is_err());
         assert!(validate_ban_reason(&"理".repeat(1001)).is_err());
-    }
-
-    #[test]
-    fn latency_is_optional_and_bounded() {
-        assert_eq!(normalize_latency(None), None);
-        assert_eq!(normalize_latency(Some(0)), None);
-        assert_eq!(normalize_latency(Some(42)), Some(42));
-        assert_eq!(normalize_latency(Some(10_000)), Some(10_000));
-        assert_eq!(normalize_latency(Some(10_001)), None);
     }
 
     #[test]
