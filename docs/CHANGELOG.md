@@ -25,6 +25,11 @@
   `BanClient` / `sm_ban` 封禁；网站记录账号封禁、该服务器游戏封禁并自动创建 IP 封禁。
 - 网站解除游戏服务器封禁时写入 `unban` 指令；`ThRei_Players` 1.6.1 会把 SteamID64 转为
   SteamID2 并调用 `RemoveBan`，删除服务器本地由 `sm_ban` 写入的 SteamID 封禁。
+- `ThRei_Players` 1.7.0 新增 `sm_threi_ban` / `sm_threi_addban` / `sm_threi_unban` /
+  `sm_threi_banip` / `sm_threi_unbanip`，同时写本地引擎封禁和网站记录；网站下发的封禁也写
+  本地引擎封禁。新增 `ban_group_id` 把一次游戏内封禁产生的账号、服务器、IP 记录关联起来，
+  网站解除服务器封禁时按组清理；新增 `/plugin/ip-ban-report` 与 `/plugin/unban-report`。
+  basebans 暂时保留，1.7.1 再提供兼容命令名并逐台卸载。
 - 白名单改为全服共享：玩家申请一次、管理员审核一次，所有开启白名单的服务器通用；
   新增 `global_whitelist` 并迁移旧的 `server_whitelist` 数据。
 - 游戏服务器封禁默认作用于全部服务器（`scope: "global"`），封禁弹窗可选择“仅本服”；

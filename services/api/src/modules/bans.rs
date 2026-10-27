@@ -116,6 +116,7 @@ pub(crate) async fn create_ip_ban(
     player_name: Option<&str>,
     reason: &str,
     expires_at: Option<DateTime<Utc>>,
+    ban_group_id: Option<uuid::Uuid>,
 ) -> Result<Option<uuid::Uuid>, AppError> {
     let parsed: IpAddr = ip.parse().map_err(|_| {
         AppError::Validation("ipAddress must be a valid IPv4 or IPv6 address".to_owned())
@@ -153,8 +154,11 @@ pub(crate) async fn create_ip_ban(
     let mut transaction = db.begin().await?;
     let ban_id = sqlx::query_scalar::<_, uuid::Uuid>(
         r"
-        INSERT INTO bans (ban_type, ip_address, player_name, reason, expires_at, created_by)
-        VALUES ('ip', $1, $2, $3, $4, $5)
+        INSERT INTO bans (
+            ban_type, ip_address, player_name, reason, expires_at,
+            created_by, ban_group_id
+        )
+        VALUES ('ip', $1, $2, $3, $4, $5, $6)
         RETURNING id
         ",
     )
@@ -163,6 +167,7 @@ pub(crate) async fn create_ip_ban(
     .bind(&reason)
     .bind(expires_at)
     .bind(created_by)
+    .bind(ban_group_id)
     .fetch_one(&mut *transaction)
     .await?;
 
@@ -399,6 +404,7 @@ async fn create_ban(
                     None,
                     &auto_reason,
                     expires_at,
+                    None,
                 )
                 .await
                 {
@@ -439,6 +445,7 @@ async fn create_ban(
                 request.player_name.as_deref(),
                 &reason,
                 expires_at,
+                None,
             )
             .await?
             .ok_or(AppError::Conflict)?;

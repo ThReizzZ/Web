@@ -27,7 +27,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.6.1"
+#define PLUGIN_VERSION "1.7.0"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -77,12 +77,19 @@ Handle g_hAccessRequest;
 Handle g_hActionRequest;
 Handle g_hAckRequest;
 Handle g_hBanReportRequest;
+Handle g_hUnbanRequest;
 float g_fNextReport;
 float g_fNextAccess;
 float g_fNextActions;
+float g_fNextBanReport;
 int g_iSkipUserId;
 int g_iAccessFailures;
 int g_iActionFailures;
+int g_iBanReportFailures;
+int g_iUnbanClientUserId;
+bool g_bUnbanIsIp;
+char g_sUnbanSteamId[32];
+char g_sUnbanIp[64];
 bool g_bConfigWarned;
 bool g_bControlUrlWarned;
 bool g_bSteamWorksWarned;
@@ -94,6 +101,7 @@ StringMap g_smBans;
 StringMap g_smBanReasons;
 ArrayList g_aAckQueue;
 ArrayList g_aBanReportQueue;
+ArrayList g_aBanReportKinds;
 
 char g_sBody[BODY_BUFFER_SIZE];
 char g_sErrorBody[ERROR_BODY_SIZE + 1];
@@ -146,6 +154,7 @@ public void OnPluginStart() {
     g_smBanReasons = new StringMap();
     g_aAckQueue = new ArrayList(ByteCountToCells(64));
     g_aBanReportQueue = new ArrayList(ByteCountToCells(BAN_REPORT_BODY_SIZE));
+    g_aBanReportKinds = new ArrayList();
 
     ResolveHostPort();
 
@@ -160,6 +169,16 @@ public void OnPluginStart() {
         "Send a ThRei_Players report immediately.");
     RegAdminCmd("sm_threi_status", Command_Status, ADMFLAG_ROOT,
         "Show ThRei_Players configuration and access-cache status without revealing tokens.");
+    RegAdminCmd("sm_threi_ban", Command_Ban, ADMFLAG_BAN,
+        "封禁玩家并同步网站：sm_threi_ban <目标|SteamID64> <分钟> [原因]");
+    RegAdminCmd("sm_threi_addban", Command_AddBan, ADMFLAG_BAN,
+        "按 SteamID64 封禁并同步网站：sm_threi_addban <SteamID64> <分钟> [原因]");
+    RegAdminCmd("sm_threi_unban", Command_Unban, ADMFLAG_BAN,
+        "解封并同步网站：sm_threi_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
+    RegAdminCmd("sm_threi_banip", Command_BanIp, ADMFLAG_BAN,
+        "封禁 IP 并同步网站：sm_threi_banip <IP> <分钟> [原因]");
+    RegAdminCmd("sm_threi_unbanip", Command_UnbanIp, ADMFLAG_BAN,
+        "解封 IP 并同步网站：sm_threi_unbanip <IP>");
 
     float now = GetGameTime();
     g_fNextReport = now + 5.0;
@@ -255,16 +274,7 @@ public Action OnBanClient(int client, int time, int flags, const char[] reason,
         ... "\"reason\":\"%s\",\"durationMinutes\":%d}",
         steamId, ipJson, nameJson, reasonJson, time);
 
-    if (g_aBanReportQueue.Length >= MAX_ACK_QUEUE) {
-        LogError("[ThRei_Players] Ban report queue is full; dropping report for %s.", steamId);
-        return Plugin_Continue;
-    }
-    g_aBanReportQueue.PushString(body);
-    LogMessage("[ThRei_Players] Queued in-game ban report for %s.", steamId);
-
-    if (g_hBanReportRequest == null) {
-        SendNextBanReport();
-    }
+    QueueBanReport(1, body);
     return Plugin_Continue;
 }
 
@@ -278,11 +288,13 @@ public void OnPluginEnd() {
     CloseRequest(g_hActionRequest);
     CloseRequest(g_hAckRequest);
     CloseRequest(g_hBanReportRequest);
+    CloseRequest(g_hUnbanRequest);
     g_hReportRequest = null;
     g_hAccessRequest = null;
     g_hActionRequest = null;
     g_hAckRequest = null;
     g_hBanReportRequest = null;
+    g_hUnbanRequest = null;
 
     if (g_smWhitelist != null) {
         delete g_smWhitelist;
@@ -304,6 +316,10 @@ public void OnPluginEnd() {
         delete g_aBanReportQueue;
         g_aBanReportQueue = null;
     }
+    if (g_aBanReportKinds != null) {
+        delete g_aBanReportKinds;
+        g_aBanReportKinds = null;
+    }
 }
 
 public Action Timer_Poll(Handle timer) {
@@ -322,7 +338,7 @@ public Action Timer_Poll(Handle timer) {
         SendNextAck();
     }
     if (g_aBanReportQueue != null && g_aBanReportQueue.Length > 0
-            && g_hBanReportRequest == null) {
+            && g_hBanReportRequest == null && now >= g_fNextBanReport) {
         SendNextBanReport();
     }
     return Plugin_Continue;
@@ -380,6 +396,431 @@ public Action Command_Status(int client, int args) {
         g_cvActionsInterval.IntValue,
         g_aAckQueue != null ? g_aAckQueue.Length : 0);
     return Plugin_Handled;
+}
+
+public Action Command_Ban(int client, int args) {
+    if (args < 2) {
+        ReplyToCommand(client,
+            "[ThRei] 用法：sm_threi_ban <目标|SteamID64> <分钟> [原因]（0 = 永久）");
+        return Plugin_Handled;
+    }
+    char targetArg[64];
+    GetCmdArg(1, targetArg, sizeof(targetArg));
+    TrimString(targetArg);
+
+    int minutes;
+    if (!ParseBanMinutes(2, minutes)) {
+        ReplyToCommand(client, "[ThRei] 分钟数必须是 0–52560000 的整数。");
+        return Plugin_Handled;
+    }
+    char reason[MAX_REASON_LENGTH];
+    ReadBanReason(3, reason, sizeof(reason));
+
+    char steamId[32];
+    char name[MAX_NAME_LENGTH];
+    char ip[64];
+    if (!ResolveBanTarget(client, targetArg, steamId, sizeof(steamId),
+            name, sizeof(name), ip, sizeof(ip))) {
+        ReplyToCommand(client, "[ThRei] 找不到目标：%s", targetArg);
+        return Plugin_Handled;
+    }
+
+    ApplySteamBan(client, steamId, name, ip, minutes, reason);
+    return Plugin_Handled;
+}
+
+public Action Command_AddBan(int client, int args) {
+    if (args < 2) {
+        ReplyToCommand(client,
+            "[ThRei] 用法：sm_threi_addban <SteamID64> <分钟> [原因]（0 = 永久）");
+        return Plugin_Handled;
+    }
+    char steamId[32];
+    GetCmdArg(1, steamId, sizeof(steamId));
+    TrimString(steamId);
+    if (!IsSteamId64(steamId)) {
+        ReplyToCommand(client, "[ThRei] SteamID64 必须是 17 位数字。");
+        return Plugin_Handled;
+    }
+
+    int minutes;
+    if (!ParseBanMinutes(2, minutes)) {
+        ReplyToCommand(client, "[ThRei] 分钟数必须是 0–52560000 的整数。");
+        return Plugin_Handled;
+    }
+    char reason[MAX_REASON_LENGTH];
+    ReadBanReason(3, reason, sizeof(reason));
+
+    char name[MAX_NAME_LENGTH];
+    char ip[64];
+    name[0] = '\0';
+    ip[0] = '\0';
+    int target = FindClientBySteamId(steamId);
+    if (target > 0) {
+        GetClientName(target, name, sizeof(name));
+        GetClientIP(target, ip, sizeof(ip), true);
+    } else {
+        strcopy(name, sizeof(name), steamId);
+    }
+
+    ApplySteamBan(client, steamId, name, ip, minutes, reason);
+    return Plugin_Handled;
+}
+
+public Action Command_Unban(int client, int args) {
+    if (args < 1) {
+        ReplyToCommand(client,
+            "[ThRei] 用法：sm_threi_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
+        return Plugin_Handled;
+    }
+    char arg[64];
+    GetCmdArg(1, arg, sizeof(arg));
+    TrimString(arg);
+
+    char steamId[32];
+    if (!TrySteamIdTo64(arg, steamId, sizeof(steamId))) {
+        ReplyToCommand(client, "[ThRei] 无法识别 SteamID：%s", arg);
+        return Plugin_Handled;
+    }
+
+    char ip[64];
+    ip[0] = '\0';
+    int target = FindClientBySteamId(steamId);
+    if (target > 0) {
+        GetClientIP(target, ip, sizeof(ip), true);
+    }
+    SendUnbanRequest(client, steamId, ip);
+    return Plugin_Handled;
+}
+
+public Action Command_BanIp(int client, int args) {
+    if (args < 2) {
+        ReplyToCommand(client,
+            "[ThRei] 用法：sm_threi_banip <IP> <分钟> [原因]（0 = 永久）");
+        return Plugin_Handled;
+    }
+    char ip[64];
+    GetCmdArg(1, ip, sizeof(ip));
+    TrimString(ip);
+    if (!LooksLikeIp(ip)) {
+        ReplyToCommand(client, "[ThRei] IP 地址格式不正确：%s", ip);
+        return Plugin_Handled;
+    }
+    int minutes;
+    if (!ParseBanMinutes(2, minutes)) {
+        ReplyToCommand(client, "[ThRei] 分钟数必须是 0–52560000 的整数。");
+        return Plugin_Handled;
+    }
+    char reason[MAX_REASON_LENGTH];
+    ReadBanReason(3, reason, sizeof(reason));
+
+    if (!BanIdentity(ip, minutes, BANFLAG_IP, reason, "threi_banip", 0)) {
+        LogError("[ThRei_Players] Could not write local IP ban for %s.", ip);
+    }
+    for (int i = 1; i <= MaxClients; i++) {
+        if (!IsClientInGame(i) || IsFakeClient(i) || IsClientSourceTV(i)
+                || IsClientReplay(i)) {
+            continue;
+        }
+        char clientIp[64];
+        if (!GetClientIP(i, clientIp, sizeof(clientIp), true)
+                || !StrEqual(clientIp, ip, false)) {
+            continue;
+        }
+        char message[512];
+        Format(message, sizeof(message), "你已被服务器封禁。原因：%s", reason);
+        KickClient(i, "%s", message);
+    }
+
+    char ipJson[256];
+    char reasonJson[FRAGMENT_BUFFER_SIZE];
+    JsonEscape(ip, ipJson, sizeof(ipJson));
+    JsonEscape(reason, reasonJson, sizeof(reasonJson));
+    char body[1024];
+    Format(body, sizeof(body),
+        "{\"ipAddress\":\"%s\",\"reason\":\"%s\",\"durationMinutes\":%d}",
+        ipJson, reasonJson, minutes);
+    QueueBanReport(2, body);
+
+    if (minutes == 0) {
+        ReplyToCommand(client, "[ThRei] 已永久封禁 IP %s，并提交网站同步。", ip);
+    } else {
+        ReplyToCommand(client, "[ThRei] 已封禁 IP %s %d 分钟，并提交网站同步。", ip, minutes);
+    }
+    return Plugin_Handled;
+}
+
+public Action Command_UnbanIp(int client, int args) {
+    if (args < 1) {
+        ReplyToCommand(client, "[ThRei] 用法：sm_threi_unbanip <IP>");
+        return Plugin_Handled;
+    }
+    char ip[64];
+    GetCmdArg(1, ip, sizeof(ip));
+    TrimString(ip);
+    if (!LooksLikeIp(ip)) {
+        ReplyToCommand(client, "[ThRei] IP 地址格式不正确：%s", ip);
+        return Plugin_Handled;
+    }
+    SendUnbanRequest(client, "", ip);
+    return Plugin_Handled;
+}
+
+bool ParseBanMinutes(int argIndex, int &minutes) {
+    char value[32];
+    GetCmdArg(argIndex, value, sizeof(value));
+    TrimString(value);
+    if (value[0] == '\0') {
+        return false;
+    }
+    for (int i = 0; value[i] != '\0'; i++) {
+        if (!IsCharNumeric(value[i])) {
+            return false;
+        }
+    }
+    minutes = StringToInt(value);
+    return minutes >= 0 && minutes <= 52560000;
+}
+
+void ReadBanReason(int firstArg, char[] reason, int maxLength) {
+    reason[0] = '\0';
+    int args = GetCmdArgs();
+    for (int i = firstArg; i <= args; i++) {
+        char part[256];
+        GetCmdArg(i, part, sizeof(part));
+        if (part[0] == '\0') {
+            continue;
+        }
+        if (reason[0] != '\0') {
+            StrCat(reason, maxLength, " ");
+        }
+        StrCat(reason, maxLength, part);
+    }
+    TrimString(reason);
+    if (reason[0] == '\0') {
+        strcopy(reason, maxLength, "管理员封禁");
+    }
+}
+
+bool ResolveBanTarget(int adminClient, const char[] arg, char[] steamId, int steamIdMax,
+        char[] name, int nameMax, char[] ip, int ipMax) {
+    steamId[0] = '\0';
+    name[0] = '\0';
+    ip[0] = '\0';
+
+    int target;
+    if (IsSteamId64(arg)) {
+        strcopy(steamId, steamIdMax, arg);
+        target = FindClientBySteamId(steamId);
+    } else {
+        target = FindTarget(adminClient, arg, true, false);
+        if (target <= 0) {
+            return false;
+        }
+        if (!GetClientAuthId(target, AuthId_SteamID64, steamId, steamIdMax, true)
+                || !IsSteamId64(steamId)) {
+            return false;
+        }
+    }
+
+    if (target > 0) {
+        GetClientName(target, name, nameMax);
+        GetClientIP(target, ip, ipMax, true);
+    } else {
+        strcopy(name, nameMax, steamId);
+    }
+    return true;
+}
+
+void ApplySteamBan(int adminClient, const char[] steamId, const char[] name,
+        const char[] ip, int minutes, const char[] reason) {
+    int expiresAt = minutes > 0 ? GetTime() + minutes * 60 : 0;
+    if (g_smBans != null) {
+        g_smBans.SetValue(steamId, expiresAt, true);
+        g_smBanReasons.SetString(steamId, reason, true);
+    }
+
+    char steamId2[64];
+    BuildSteamId2From64(steamId, steamId2, sizeof(steamId2));
+    if (!BanIdentity(steamId2, minutes, BANFLAG_AUTHID, reason, "threi_ban", 0)) {
+        LogError("[ThRei_Players] Could not write local ban for %s.", steamId);
+    }
+
+    int target = FindClientBySteamId(steamId);
+    if (target > 0) {
+        char message[512];
+        Format(message, sizeof(message), "你已被服务器封禁。原因：%s", reason);
+        KickClient(target, "%s", message);
+    }
+
+    char nameJson[FRAGMENT_BUFFER_SIZE];
+    char ipJson[256];
+    char reasonJson[FRAGMENT_BUFFER_SIZE];
+    JsonEscape(name, nameJson, sizeof(nameJson));
+    JsonEscape(ip, ipJson, sizeof(ipJson));
+    JsonEscape(reason, reasonJson, sizeof(reasonJson));
+
+    char body[BAN_REPORT_BODY_SIZE];
+    Format(body, sizeof(body),
+        "{\"steamId64\":\"%s\",\"ipAddress\":\"%s\",\"playerName\":\"%s\","
+        ... "\"reason\":\"%s\",\"durationMinutes\":%d}",
+        steamId, ipJson, nameJson, reasonJson, minutes);
+    QueueBanReport(1, body);
+
+    if (minutes == 0) {
+        ReplyToCommand(adminClient, "[ThRei] 已永久封禁 %s，并提交网站同步。", steamId);
+    } else {
+        ReplyToCommand(adminClient, "[ThRei] 已封禁 %s %d 分钟，并提交网站同步。",
+            steamId, minutes);
+    }
+}
+
+void SendUnbanRequest(int client, const char[] steamId, const char[] ip) {
+    if (g_hUnbanRequest != null) {
+        ReplyToCommand(client, "[ThRei] 已有解封请求进行中，请稍后再试。");
+        return;
+    }
+    if (!SteamWorks_IsLoaded()) {
+        ReplyToCommand(client, "[ThRei] SteamWorks 未加载，无法同步网站解封。");
+        return;
+    }
+
+    char reportUrl[512];
+    char serverId[128];
+    char token[256];
+    char apiUrl[512];
+    if (!ResolveConfig(reportUrl, sizeof(reportUrl), serverId, sizeof(serverId), token,
+            sizeof(token))) {
+        ReplyToCommand(client, "[ThRei] 插件配置不完整，无法同步网站解封。");
+        return;
+    }
+    if (!BuildControlUrl(reportUrl, "/plugin/unban-report", apiUrl, sizeof(apiUrl))) {
+        ReplyToCommand(client, "[ThRei] 无法推导解封接口地址。");
+        return;
+    }
+
+    char body[1024];
+    if (steamId[0] != '\0') {
+        char ipJson[256];
+        ipJson[0] = '\0';
+        if (ip[0] != '\0') {
+            JsonEscape(ip, ipJson, sizeof(ipJson));
+        }
+        Format(body, sizeof(body),
+            "{\"steamId64\":\"%s\",\"ipAddress\":\"%s\",\"reason\":\"游戏内解封\"}",
+            steamId, ipJson);
+    } else if (ip[0] != '\0') {
+        char ipJson[256];
+        JsonEscape(ip, ipJson, sizeof(ipJson));
+        Format(body, sizeof(body),
+            "{\"ipAddress\":\"%s\",\"reason\":\"游戏内解封\"}", ipJson);
+    } else {
+        ReplyToCommand(client, "[ThRei] 缺少 SteamID 或 IP。");
+        return;
+    }
+
+    Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, apiUrl);
+    if (!PrepareRequest(request, token)) {
+        CloseRequest(request);
+        ReplyToCommand(client, "[ThRei] 无法创建解封请求。");
+        return;
+    }
+    if (!SteamWorks_SetHTTPRequestRawPostBody(request, "application/json", body,
+            strlen(body))) {
+        CloseRequest(request);
+        ReplyToCommand(client, "[ThRei] 无法设置解封请求内容。");
+        return;
+    }
+    if (!SteamWorks_SetHTTPCallbacks(request, OnUnbanReportComplete)) {
+        CloseRequest(request);
+        ReplyToCommand(client, "[ThRei] 无法设置解封回调。");
+        return;
+    }
+
+    g_hUnbanRequest = request;
+    g_bUnbanIsIp = steamId[0] == '\0';
+    g_iUnbanClientUserId = client > 0 ? GetClientUserId(client) : 0;
+    strcopy(g_sUnbanSteamId, sizeof(g_sUnbanSteamId), steamId);
+    strcopy(g_sUnbanIp, sizeof(g_sUnbanIp), ip);
+
+    if (!SteamWorks_SendHTTPRequest(request)) {
+        if (g_hUnbanRequest == request) {
+            g_hUnbanRequest = null;
+            CloseHandle(request);
+        }
+        g_iUnbanClientUserId = 0;
+        g_sUnbanSteamId[0] = '\0';
+        g_sUnbanIp[0] = '\0';
+        ReplyToCommand(client, "[ThRei] 解封请求发送失败，本地封禁保持不变。");
+        return;
+    }
+    ReplyToCommand(client, "[ThRei] 已提交网站解封请求，等待服务器确认...");
+}
+
+bool TrySteamIdTo64(const char[] input, char[] output, int maxLength) {
+    if (IsSteamId64(input)) {
+        strcopy(output, maxLength, input);
+        return true;
+    }
+
+    int accountId = -1;
+    if (StrContains(input, "STEAM_", false) == 0) {
+        char parts[3][32];
+        if (ExplodeString(input, ":", parts, 3, sizeof(parts[])) != 3) {
+            return false;
+        }
+        int y = StringToInt(parts[1]);
+        int z = StringToInt(parts[2]);
+        if (y < 0 || y > 1 || z < 0) {
+            return false;
+        }
+        accountId = 2 * z + y;
+    } else if (input[0] == '[') {
+        char trimmed[64];
+        strcopy(trimmed, sizeof(trimmed), input);
+        ReplaceString(trimmed, sizeof(trimmed), "[", "", false);
+        ReplaceString(trimmed, sizeof(trimmed), "]", "", false);
+        char parts[3][32];
+        if (ExplodeString(trimmed, ":", parts, 3, sizeof(parts[])) != 3) {
+            return false;
+        }
+        accountId = StringToInt(parts[2]);
+    } else {
+        return false;
+    }
+
+    if (accountId < 0) {
+        return false;
+    }
+    int cells[2];
+    cells[0] = accountId;
+    cells[1] = 0x1100001;
+    return Int64ToString(cells, output, maxLength) > 0;
+}
+
+bool LooksLikeIp(const char[] value) {
+    if (StrContains(value, ":") != -1) {
+        return true;
+    }
+    char parts[4][4];
+    if (ExplodeString(value, ".", parts, 4, sizeof(parts[])) != 4) {
+        return false;
+    }
+    for (int i = 0; i < 4; i++) {
+        if (parts[i][0] == '\0') {
+            return false;
+        }
+        for (int j = 0; parts[i][j] != '\0'; j++) {
+            if (!IsCharNumeric(parts[i][j])) {
+                return false;
+            }
+        }
+        int octet = StringToInt(parts[i]);
+        if (octet < 0 || octet > 255) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void ResolveHostPort() {
@@ -756,15 +1197,20 @@ void SendNextAck() {
 }
 
 void SendNextBanReport() {
-    if (g_aBanReportQueue == null || g_aBanReportQueue.Length == 0) {
+    if (g_hBanReportRequest != null || g_aBanReportQueue == null
+            || g_aBanReportQueue.Length == 0 || g_aBanReportKinds == null
+            || g_aBanReportKinds.Length == 0) {
+        return;
+    }
+    if (GetGameTime() < g_fNextBanReport) {
         return;
     }
     if (!SteamWorks_IsLoaded()) {
         if (!g_bSteamWorksWarned) {
-            LogError("[ThRei_Players] SteamWorks extension is not loaded; skipping ban report.");
+            LogError("[ThRei_Players] SteamWorks extension is not loaded; ban reports will retry.");
             g_bSteamWorksWarned = true;
         }
-        g_aBanReportQueue.Clear();
+        g_fNextBanReport = GetGameTime() + 30.0;
         return;
     }
     g_bSteamWorksWarned = false;
@@ -775,45 +1221,76 @@ void SendNextBanReport() {
     char token[256];
     if (!ResolveConfig(reportUrl, sizeof(reportUrl), serverId, sizeof(serverId), token,
             sizeof(token))) {
-        g_aBanReportQueue.Clear();
+        g_fNextBanReport = GetGameTime() + 60.0;
         return;
     }
-    if (!BuildControlUrl(reportUrl, "/plugin/ban-report", apiUrl, sizeof(apiUrl))) {
-        g_aBanReportQueue.Clear();
+
+    int kind = g_aBanReportKinds.Get(0);
+    char endpoint[32];
+    if (kind == 2) {
+        strcopy(endpoint, sizeof(endpoint), "/plugin/ip-ban-report");
+    } else {
+        strcopy(endpoint, sizeof(endpoint), "/plugin/ban-report");
+    }
+    if (!BuildControlUrl(reportUrl, endpoint, apiUrl, sizeof(apiUrl))) {
+        g_fNextBanReport = GetGameTime() + 60.0;
         return;
     }
 
     char body[BAN_REPORT_BODY_SIZE];
     g_aBanReportQueue.GetString(0, body, sizeof(body));
-    g_aBanReportQueue.Erase(0);
     if (body[0] == '\0') {
+        g_aBanReportQueue.Erase(0);
+        g_aBanReportKinds.Erase(0);
         return;
     }
 
     Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, apiUrl);
     if (!PrepareRequest(request, token)) {
         CloseRequest(request);
+        g_fNextBanReport = GetGameTime() + 15.0;
         return;
     }
     if (!SteamWorks_SetHTTPRequestRawPostBody(request, "application/json", body,
             strlen(body))) {
         LogError("[ThRei_Players] Could not set the ban report body.");
         CloseRequest(request);
+        g_fNextBanReport = GetGameTime() + 30.0;
         return;
     }
     if (!SteamWorks_SetHTTPCallbacks(request, OnBanReportComplete)) {
         LogError("[ThRei_Players] Could not set ban report callbacks.");
         CloseRequest(request);
+        g_fNextBanReport = GetGameTime() + 30.0;
         return;
     }
 
     g_hBanReportRequest = request;
     if (!SteamWorks_SendHTTPRequest(request)) {
-        LogError("[ThRei_Players] Could not send the ban report.");
+        LogError("[ThRei_Players] Could not send the ban report; will retry.");
         if (g_hBanReportRequest == request) {
             g_hBanReportRequest = null;
             CloseHandle(request);
         }
+        g_fNextBanReport = GetGameTime() + 15.0;
+    }
+}
+
+void QueueBanReport(int kind, const char[] body) {
+    if (g_aBanReportQueue == null || g_aBanReportKinds == null) {
+        return;
+    }
+    if (g_aBanReportQueue.Length >= MAX_ACK_QUEUE) {
+        LogError("[ThRei_Players] Ban report queue is full; dropping report.");
+        return;
+    }
+    g_aBanReportQueue.PushString(body);
+    g_aBanReportKinds.Push(kind);
+    g_fNextBanReport = 0.0;
+    LogMessage("[ThRei_Players] Queued ban report (kind=%d, pending=%d).", kind,
+        g_aBanReportQueue.Length);
+    if (g_hBanReportRequest == null) {
+        SendNextBanReport();
     }
 }
 
@@ -936,11 +1413,41 @@ public void OnBanReportComplete(Handle request, bool failure, bool requestSucces
         g_hBanReportRequest = null;
     }
 
-    if (failure || !requestSuccessful) {
-        LogError("[ThRei_Players] Ban report failed: network error or timeout.");
-    } else if (statusCode != k_EHTTPStatusCode204NoContent
-            && statusCode != k_EHTTPStatusCode200OK) {
-        LogHttpStatus("ban report", request, statusCode);
+    bool success = !failure && requestSuccessful
+        && (statusCode == k_EHTTPStatusCode204NoContent
+            || statusCode == k_EHTTPStatusCode200OK);
+    if (success) {
+        if (g_aBanReportQueue != null && g_aBanReportQueue.Length > 0) {
+            g_aBanReportQueue.Erase(0);
+        }
+        if (g_aBanReportKinds != null && g_aBanReportKinds.Length > 0) {
+            g_aBanReportKinds.Erase(0);
+        }
+        g_iBanReportFailures = 0;
+        g_fNextBanReport = 0.0;
+    } else {
+        if (view_as<int>(statusCode) == 422) {
+            // Invalid payload: retrying cannot succeed. Keep the server-side
+            // local ban, but drop the report.
+            LogError("[ThRei_Players] Ban report rejected with 422; dropping it.");
+            if (g_aBanReportQueue != null && g_aBanReportQueue.Length > 0) {
+                g_aBanReportQueue.Erase(0);
+            }
+            if (g_aBanReportKinds != null && g_aBanReportKinds.Length > 0) {
+                g_aBanReportKinds.Erase(0);
+            }
+            g_iBanReportFailures = 0;
+            g_fNextBanReport = 0.0;
+        } else {
+            g_iBanReportFailures++;
+            g_fNextBanReport = GetGameTime()
+                + BackoffDelay(15, g_iBanReportFailures);
+            if (failure || !requestSuccessful) {
+                LogError("[ThRei_Players] Ban report failed; will retry.");
+            } else {
+                LogHttpStatus("ban report", request, statusCode);
+            }
+        }
     }
 
     CloseHandle(request);
@@ -948,6 +1455,56 @@ public void OnBanReportComplete(Handle request, bool failure, bool requestSucces
     if (g_aBanReportQueue != null && g_aBanReportQueue.Length > 0) {
         SendNextBanReport();
     }
+}
+
+public void OnUnbanReportComplete(Handle request, bool failure, bool requestSuccessful,
+        EHTTPStatusCode statusCode) {
+    if (g_hUnbanRequest == request) {
+        g_hUnbanRequest = null;
+    }
+    int client = g_iUnbanClientUserId > 0 ? GetClientOfUserId(g_iUnbanClientUserId) : 0;
+
+    bool success = !failure && requestSuccessful
+        && (statusCode == k_EHTTPStatusCode204NoContent
+            || statusCode == k_EHTTPStatusCode200OK);
+    if (success) {
+        if (g_bUnbanIsIp) {
+            if (!RemoveBan(g_sUnbanIp, BANFLAG_IP, "threi_unbanip", 0)) {
+                LogError("[ThRei_Players] Could not remove local IP ban for %s.",
+                    g_sUnbanIp);
+            }
+        } else {
+            g_smBans.Remove(g_sUnbanSteamId);
+            g_smBanReasons.Remove(g_sUnbanSteamId);
+            char steamId2[64];
+            BuildSteamId2From64(g_sUnbanSteamId, steamId2, sizeof(steamId2));
+            if (!RemoveBan(steamId2, BANFLAG_AUTHID, "threi_unban", 0)) {
+                LogError("[ThRei_Players] Could not remove local ban for %s.",
+                    g_sUnbanSteamId);
+            }
+        }
+        ReplyToCommand(client, "[ThRei] 已解封并同步网站。");
+        if (g_bUnbanIsIp) {
+            LogMessage("[ThRei_Players] Website unban synced for IP %s.", g_sUnbanIp);
+        } else {
+            LogMessage("[ThRei_Players] Website unban synced for %s.", g_sUnbanSteamId);
+        }
+    } else if (statusCode == k_EHTTPStatusCode409Conflict) {
+        ReplyToCommand(client, "[ThRei] 网站仍存在管理员封禁，未在本地解封。");
+        LogMessage("[ThRei_Players] Unban refused: an administrator ban is still active.");
+    } else if (failure || !requestSuccessful) {
+        ReplyToCommand(client, "[ThRei] 网站解封失败，本地封禁保持不变。");
+        LogError("[ThRei_Players] Unban report failed: network error or timeout.");
+    } else {
+        ReplyToCommand(client, "[ThRei] 网站解封失败，本地封禁保持不变。");
+        LogHttpStatus("unban report", request, statusCode);
+    }
+
+    CloseHandle(request);
+    g_iUnbanClientUserId = 0;
+    g_bUnbanIsIp = false;
+    g_sUnbanSteamId[0] = '\0';
+    g_sUnbanIp[0] = '\0';
 }
 
 public void OnAccessComplete(Handle request, bool failure, bool requestSuccessful,
@@ -1284,6 +1841,23 @@ void ExecuteBanAction(const char[] steamId, int expiresAt, const char[] reason) 
     // poll. A zero expiry means permanent.
     if (expiresAt > 0 && expiresAt <= GetTime()) {
         return;
+    }
+
+    // Persist website-issued bans in the local SourceMod ban list too. This
+    // keeps them effective across plugin reloads and API outages; the website
+    // unban action removes the same identity.
+    int minutes = 0;
+    if (expiresAt > 0) {
+        int remaining = expiresAt - GetTime();
+        minutes = (remaining + 59) / 60;
+        if (minutes < 1) {
+            minutes = 1;
+        }
+    }
+    char steamId2[64];
+    BuildSteamId2From64(steamId, steamId2, sizeof(steamId2));
+    if (!BanIdentity(steamId2, minutes, BANFLAG_AUTHID, reason, "threi_website_ban", 0)) {
+        LogError("[ThRei_Players] Could not write local ban for website action %s.", steamId);
     }
 
     // Cache the ban immediately so a reconnect cannot slip through before the

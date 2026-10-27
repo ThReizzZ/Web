@@ -1068,6 +1068,7 @@ async fn ban_player(
             None,
             &auto_reason,
             expires_at,
+            None,
         )
         .await
         {
@@ -1078,6 +1079,7 @@ async fn ban_player(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn lift_server_ban(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1085,12 +1087,12 @@ async fn lift_server_ban(
 ) -> Result<StatusCode, AppError> {
     let admin = require_admin(&state, &headers).await?;
     let mut transaction = state.db.begin().await?;
-    let lifted = sqlx::query_as::<_, (Option<String>, String)>(
+    let lifted = sqlx::query_as::<_, (Option<String>, String, Option<Uuid>, Option<Uuid>)>(
         r"
         UPDATE server_bans
-        SET lifted_at = now(), lifted_by = $2
+        SET lifted_at = now(), lifted_by = $2, lift_reason = '网站解除服务器封禁'
         WHERE id = $1 AND lifted_at IS NULL
-        RETURNING server_id, steam_id64
+        RETURNING server_id, steam_id64, ban_group_id, created_by
         ",
     )
     .bind(id)
@@ -1128,6 +1130,58 @@ async fn lift_server_ban(
             ",
         )
         .bind(&lifted.1)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    // In-game bans are written as one group (website account ban, server ban,
+    // optional IP ban). Lifting the server ban should clear the whole group
+    // when it was created by the plugin, not by a website administrator.
+    if let Some(group_id) = lifted.2
+        && lifted.3.is_none()
+    {
+        sqlx::query(
+            r"
+            UPDATE server_bans
+            SET lifted_at = now(), lifted_by = $2,
+                lift_reason = '网站解除服务器封禁'
+            WHERE ban_group_id = $1 AND lifted_at IS NULL
+            ",
+        )
+        .bind(group_id)
+        .bind(admin.id)
+        .execute(&mut *transaction)
+        .await?;
+
+        sqlx::query(
+            r"
+            UPDATE bans
+            SET lifted_at = now(), lifted_by = $2,
+                lift_reason = '网站解除服务器封禁'
+            WHERE ban_group_id = $1
+              AND created_by IS NULL
+              AND lifted_at IS NULL
+            ",
+        )
+        .bind(group_id)
+        .bind(admin.id)
+        .execute(&mut *transaction)
+        .await?;
+
+        sqlx::query(
+            r"
+            UPDATE bans
+            SET lifted_at = now(), lifted_by = $2,
+                lift_reason = '源 IP 封禁已解除'
+            WHERE source_ban_id IN (
+                SELECT id FROM bans
+                WHERE ban_group_id = $1 AND ban_type = 'ip'
+            )
+              AND lifted_at IS NULL
+            ",
+        )
+        .bind(group_id)
+        .bind(admin.id)
         .execute(&mut *transaction)
         .await?;
     }

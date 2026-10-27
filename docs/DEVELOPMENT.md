@@ -17,6 +17,75 @@
 
 ---
 
+## 2026年10月27日 23时17分08秒 插件内置封禁命令与分组解封（1.7.0）
+
+### 背景
+
+用户希望最终用 `ThRei_Players` 完全替代 `basebans.smx`。本阶段先实现 1.7.0：新增自己的
+封禁/解封/IP 封禁命令，同时写本地引擎封禁和网站记录；basebans 暂时保留，在 1服 验证后再
+于 1.7.1 提供 `sm_ban` / `sm_unban` 兼容命令并逐台卸载。
+
+### 变更内容
+
+- 新增迁移 `20261027230400_ban_groups.sql`：`bans`、`server_bans` 增加 `ban_group_id` 与索引。
+- 插件新增命令（`ADMFLAG_BAN`）：
+  - `sm_threi_ban <目标|SteamID64> <分钟> [原因]`
+  - `sm_threi_addban <SteamID64> <分钟> [原因]`
+  - `sm_threi_unban <SteamID64|STEAM_x:y:z|[U:1:account]>`
+  - `sm_threi_banip <IP> <分钟> [原因]`
+  - `sm_threi_unbanip <IP>`
+- 封禁命令同时调用 `BanIdentity` 写本地 SourceMod 引擎封禁，并上报网站；上报失败进入带退避
+  的重试队列，本地封禁不依赖网站可达。
+- 网站下发的 `ban` 动作在 1.7.0 中也会调用 `BanIdentity` 写本地引擎封禁（不触发
+  `OnBanClient`，不会回环），使网站在插件重载/API 故障时仍有效；`unban` 动作删除它。
+- `ban-report` 为账号封禁、服务器封禁、IP 封禁生成同一个 `ban_group_id`；新增
+  `POST /plugin/ip-ban-report` 和 `POST /plugin/unban-report`。
+- `sm_threi_unban` / `sm_threi_unbanip` 先请求网站，成功后才删除本地封禁；网站存在管理员
+  手动封禁时 API 返回 `409`，插件保持本地封禁，避免误解除。
+- 网站解除游戏服务器封禁时，若记录为插件来源且带分组，会同时解除同组账号/IP 封禁和 IP
+  关联账号封禁，并写入 `unban` 指令。
+- 管理面板解除服务器封禁后重新拉取封禁列表，立即显示分组解除结果。
+
+### 涉及文件
+
+- `services/api/migrations/20261027230400_ban_groups.sql`
+- `services/api/src/modules/bans.rs`
+- `services/api/src/modules/server_admin.rs`
+- `services/api/src/modules/server_plugin.rs`
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+- `README.md`、`docs/API.md`、`docs/ARCHITECTURE.md`、`docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- `bans.ban_group_id`、`server_bans.ban_group_id`。
+- 新增 `POST /api/v1/plugin/ip-ban-report`、`POST /api/v1/plugin/unban-report`。
+- `ban-report` 产生的三类记录共享分组。
+
+### 插件包
+
+- `/home/threi/ThRei_Players-1.7.0/`、`.zip`、`.tar.gz`，并复制到
+  `/mnt/c/Users/15155/Downloads/`。
+- `.smx` SHA-256：`1541c80a3e5591ff7467930f7e3c0d8558ee99be04dae4dbe068ff6df5e285f0`。
+
+### 测试与结果
+
+- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：47 个单元测试 + 14 个 HTTP 合约测试通过。
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- SourcePawn Compiler 1.11.0.6970 编译 1.7.0：通过，无警告。
+- 生产迁移 `20261027230400` 成功；所有容器健康。
+- 生产 API 测试（测试数据均已清理）：
+  - `ban-report` 返回 204，账号/服务器/IP 记录共享同一 `ban_group_id`；
+  - 网站解除服务器封禁返回 204，同组账号/IP/服务器封禁全部解除，并生成 `unban` 指令；
+  - `unban-report` 用 SteamID 解除插件来源分组返回 204；
+  - `ip-ban-report` + IP `unban-report` 返回 204；
+  - 管理员手动封禁调用 `unban-report` 返回 409，封禁保持不变。
+- **未执行**：真实游戏服务器上的 1.7.0 命令测试。需要用户在 1服 安装 1.7.0 后测试
+  `sm_threi_ban` / `sm_threi_unban` / `sm_threi_banip`，确认本地引擎封禁和网站同步。
+
 ## 2026年10月27日 22时51分14秒 网站解封自动清除服务器本地封禁
 
 ### 背景

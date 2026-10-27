@@ -41,8 +41,9 @@ sm plugins reload ThRei_Players
 sm_threi_status
 ```
 
-1.6.1 在 1.6.0 的基础上增加了网站解封时的本地 `unban` 指令：网站解除服务器封禁后，
-插件会删除服务器本地由 `sm_ban` 写入的 SteamID 封禁，不必再手动执行 `sm_unban`。
+1.7.0 新增 `sm_threi_ban` / `sm_threi_addban` / `sm_threi_unban` / `sm_threi_banip` /
+`sm_threi_unbanip`，把本地引擎封禁和网站同步合并到自己的命令中；网站解封会按分组清理
+同一次游戏内封禁产生的账号、服务器和 IP 记录。1.6.1 增加了网站解封时的本地 `unban` 指令。
 1.6.0 增加了在线玩家 IP 上报与游戏内封禁回传。1.5.0 使用 `/plugin/actions?wait=20`
 长轮询，新指令通常 1 秒内到达；1.4.0 的白名单/封禁同步仍依赖本仓库带
 `plugin/access-snapshot` 与 `plugin/actions` 接口的 API。旧 API 会返回 404，此时插件仍会
@@ -227,10 +228,35 @@ CS:GO 的 `sv_hibernate_when_empty` 会在空服时暂停游戏帧与 SourceMod 
 
 | 命令 | 说明 |
 | --- | --- |
+| `sm_threi_ban` | 封禁在线目标或 SteamID64<br>`sm_threi_ban <目标\|SteamID64> <分钟> [原因]` |
+| `sm_threi_addban` | 按 SteamID64 封禁（可离线）<br>`sm_threi_addban <SteamID64> <分钟> [原因]` |
+| `sm_threi_unban` | 解封 SteamID 并同步网站<br>`sm_threi_unban <SteamID64\|STEAM_x:y:z\|[U:1:account]>` |
+| `sm_threi_banip` | 封禁 IP 并同步网站<br>`sm_threi_banip <IP> <分钟> [原因]` |
+| `sm_threi_unbanip` | 解封 IP 并同步网站<br>`sm_threi_unbanip <IP>` |
 | `sm_threi_report` | 立即发送一次状态上报 |
 | `sm_threi_status` | 显示端口匹配、访问缓存与指令队列状态（隐藏令牌） |
 
-两个命令都需要 `ADMFLAG_ROOT`。
+`sm_threi_ban`、`sm_threi_addban`、`sm_threi_unban`、`sm_threi_banip`、`sm_threi_unbanip`
+需要 `ADMFLAG_BAN`；`sm_threi_report`、`sm_threi_status` 需要 `ADMFLAG_ROOT`。
+
+1.7.0 仍建议保留 `basebans.smx`：上述命令使用 `sm_threi_*` 名称，不会与 basebans 冲突。
+basebans 的 `sm_ban` 仍会被 `OnBanClient` 捕获并回传网站。等 1.7.0 在 1服 验证稳定后，
+1.7.1 再提供 `sm_ban` / `sm_unban` 兼容名称并逐台卸载 basebans。
+
+### 封禁行为
+
+- `sm_threi_ban` / `sm_threi_addban` 同时写入服务器本地 SourceMod 封禁（`BanIdentity`，
+  重启后仍有效）和网站记录；网站记录包含账号封禁、该服务器游戏封禁，在线目标还会带 IP
+  自动封禁。网站不可达时本地封禁先生效，上报进入重试队列。
+- `sm_threi_unban` / `sm_threi_unbanip` 先请求网站解除插件来源的记录，成功返回后才会删除
+  服务器本地封禁。网站仍有管理员手动封禁时返回 `409`，插件会提示并且**不会**在本地解封。
+- 网站「封禁管理」解除某条游戏服务器封禁时，会一并解除同一次游戏内封禁产生的网站账号/IP
+  封禁（插件 1.7.0+ 写入的分组），并下发 `unban` 删除本地 SteamID 封禁。
+- `sm_threi_ban` 的原因默认“管理员封禁”，最长 400 字符；分钟数 `0` 表示永久。
+- `sm_threi_banip` 只写本地 IP 封禁和网站 IP 封禁，不会自动封禁该 IP 下已登录的网站账号；
+  网站 `create_ip_ban` 会自动关联已知普通账号。
+- 手动用 basebans `sm_ban` 产生的封禁仍可通过 `sm_threi_unban` 同步解除；旧版插件产生的
+  历史封禁没有分组时，网站解封可能只能清理服务器封禁，IP 封禁需要单独处理。
 
 `sm_threi_instance` 不是管理命令，而是供 `threi_players.cfg` 调用的服务器控制台命令，由插件
 在加载配置时解析。
@@ -303,16 +329,55 @@ Content-Type: application/json
 ```
 
 - `durationMinutes` 为 SourceMod 的封禁分钟数，`0` 表示永久。
-- 网站会写入一条账号封禁和一条该服务器的游戏封禁记录；如果该玩家有 IP，还会自动创建 IP
-  封禁，并关联该 IP 下已知的普通账号。
-- 上报失败只写日志，不影响 SourceMod 本地封禁；服务器仍会在本地执行封禁。
-- 原始控制台 `banid` / `addip` 不会触发 `OnBanClient`，因此不会回传。使用 `sm_ban` 或
-  `BanClient` 才能同步。
-- 网站下发的封禁指令使用本地封禁缓存和踢出，不会调用 `BanClient`，因此不会产生回环上报。
-- 游戏内 `sm_unban` / `removeid` **不会**回传；解除封禁需要在网站「封禁管理」中分别解除
-  账号封禁和游戏服务器封禁。
-- 一次游戏内封禁会在网站产生账号封禁和该服务器的游戏封禁两条记录；如果同时存在 IP 封禁，
-  三条记录需要分别检查。网站账号封禁不会自动解除游戏服务器封禁。
+- 网站会写入一条账号封禁、一条该服务器的游戏封禁；如果该玩家有 IP，还会自动创建 IP 封禁。
+  三条记录共享 `ban_group_id`，网站解除服务器封禁时会按分组一起解除（插件来源）。
+- 上报失败会按退避间隔重试；服务器本地封禁已经生效，不依赖网站是否可达。
+- 原始控制台 `banid` / `addip` 不会触发 `OnBanClient`，因此不会回传。使用 `sm_ban`、
+  `sm_threi_ban` 或 `BanClient` 才能同步。
+- 网站下发的封禁指令现在也会写入本地 SourceMod 封禁（`BanIdentity`，不触发
+  `OnBanClient`），因此在插件重载和 API 故障时仍然有效；网站 `unban` 指令会删除它。
+- 游戏内 `sm_threi_unban` 会先调用 `POST /plugin/unban-report`，成功后删除本地封禁。网站仍有
+  管理员手动封禁时返回 `409`，不会在本地解封。直接使用 basebans `sm_unban` 不会同步网站。
+- 一次游戏内封禁在网站产生分组记录；通过网站解除「游戏服务器封禁」会同时解除同组账号/IP
+  封禁。没有分组的历史记录需要分别检查。
+
+### IP 封禁回传
+
+```http
+POST /api/v1/plugin/ip-ban-report
+Content-Type: application/json
+```
+
+```json
+{
+  "ipAddress": "203.0.113.10",
+  "reason": "恶意刷屏",
+  "durationMinutes": 0
+}
+```
+
+插件 `sm_threi_banip` 使用该接口写入网站 IP 封禁。网站会关联该 IP 下已知的普通账号；
+`sm_threi_unbanip` 调用 `/plugin/unban-report` 并只解除插件来源的 IP 封禁。
+
+### 游戏内解封回传
+
+```http
+POST /api/v1/plugin/unban-report
+Content-Type: application/json
+```
+
+```json
+{
+  "steamId64": "76561198000000000",
+  "ipAddress": "203.0.113.10",
+  "reason": "游戏内解封"
+}
+```
+
+- `steamId64` 和 `ipAddress` 至少提供一个。
+- API 只解除 `created_by IS NULL` 的插件来源记录；如果该服务器或网站仍有管理员手动封禁，
+  返回 `409`，插件保持本地封禁。
+- 成功后插件删除本地 SteamID/IP 封禁和访问缓存。
 
 ### 访问快照
 
@@ -343,8 +408,8 @@ POST /api/v1/plugin/actions/{uuid}/ack
 
 - 生产环境必须使用 HTTPS：令牌在 HTTP 请求头中传输，明文 HTTP 会让令牌暴露在网络中。
 - 令牌只写入游戏服务器的 `cfg/sourcemod/threi_players.cfg`，不要提交到 Git。
-- 1.6.0 起令牌还可回传游戏内封禁（会写入账号封禁、服务器封禁和 IP 封禁）；令牌泄露等同于
-  允许伪造封禁，应立即在管理后台轮换。
+- 1.6.0 起令牌还可回传游戏内封禁（会写入账号封禁、服务器封禁和 IP 封禁）；1.7.0 起还可
+  解封插件来源记录。令牌泄露等同于允许伪造封禁/解封，应立即在管理后台轮换。
 - 令牌使用 `FCVAR_PROTECTED | FCVAR_UNLOGGED`，不会下发给游戏客户端。
 - 定期在管理后台重新生成令牌，尤其是在管理员变动或配置文件泄露后。
 - 游戏服务器只需要能访问 threi 的 API 地址；白名单、踢出与封禁不依赖 RCON，也不要求开放
@@ -421,8 +486,9 @@ sm_threi_instance 10001 "该服务器的令牌"
 
 **网站解封后游戏内仍然被封**
 
-1.6.1+ 会在网站解除「游戏服务器封禁」时自动下发 `unban`，清除服务器本地 SteamID 封禁。
-如果仍然被封，先确认 `sm_threi_status` 显示 `version=1.6.1`，并确认解除的是「游戏服务器封禁」
+1.7.0+ 会在网站解除「游戏服务器封禁」时自动下发 `unban`，清除服务器本地 SteamID 封禁，
+并解除同组的插件来源账号/IP 封禁。如果仍然被封，先确认 `sm_threi_status` 显示
+`version=1.7.0`，并确认解除的是「游戏服务器封禁」
 而不是只解除了网站账号/IP 封禁。旧插件或手动添加的 IP 封禁仍需在服务器处理。
 
 手动解封时不要用 `sm_unban <SteamID64>`：SourceMod 的 basebans 会根据参数首字符判断类型，
@@ -439,8 +505,8 @@ sm_unban "[U:1:24691356]"
 
 **游戏内封禁没有出现在网站**
 
-- 确认插件版本为 1.6.0 或更高：`sm_threi_status` 应显示 `version=1.6.1`（网站解封需要
-  1.6.1+；1.6.0 只支持封禁回传）。
+- 确认插件版本为 1.7.0 或更高：`sm_threi_status` 应显示 `version=1.7.0`。网站解封和分组
+  清理需要 1.7.0+；1.6.0 只支持封禁回传。
 - 只有通过 `BanClient` 执行的封禁（如 `sm_ban`）会回传；控制台原始 `banid` / `addip`
   不会触发 `OnBanClient`。
 - 查看 `addons/sourcemod/logs/` 中是否出现 `Queued in-game ban report`；出现

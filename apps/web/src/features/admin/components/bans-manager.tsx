@@ -157,19 +157,31 @@ export function BansManager({
     setBusy(ban.id);
     setFeedback(null);
     try {
-      await liftServerBan(getBrowserApiClient(), ban.id);
-      setServerBans((current) =>
-        current.map((item) =>
-          item.id === ban.id
-            ? {
-                ...item,
-                isActive: false,
-                liftedAt: new Date().toISOString(),
-              }
-            : item,
-        ),
+      const client = getBrowserApiClient();
+      await liftServerBan(client, ban.id);
+      try {
+        const [freshBans, freshServerBans] = await Promise.all([
+          fetchBans(client),
+          fetchServerBans(client),
+        ]);
+        setBans(freshBans);
+        setServerBans(freshServerBans);
+      } catch {
+        setServerBans((current) =>
+          current.map((item) =>
+            item.id === ban.id
+              ? {
+                  ...item,
+                  isActive: false,
+                  liftedAt: new Date().toISOString(),
+                }
+              : item,
+          ),
+        );
+      }
+      setFeedback(
+        "游戏服务器封禁已解除，并已下发服务器本地解封指令；如为游戏内产生的封禁，同组网站账号/IP 封禁也已一并解除（插件 1.7.0+ 生效）。",
       );
-      setFeedback("游戏服务器封禁已解除，并已下发服务器本地解封指令（插件 1.6.1+ 生效）。");
       refresh();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "解封失败，请稍后重试。");
@@ -317,7 +329,8 @@ export function BansManager({
             <h2 className="font-semibold">游戏服务器封禁</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               全服封禁对所有服务器生效；单服封禁只影响对应服务器。游戏内封禁由服务器插件执行；
-              解封会下发指令，由插件 1.6.1+ 删除服务器本地 SteamID 封禁。
+              解封会下发指令，由插件 1.7.0+ 删除服务器本地 SteamID 封禁；游戏内产生的封禁会连同
+              同组网站账号/IP 封禁一起解除。
             </p>
           </div>
           <div className="divide-y">
