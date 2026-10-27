@@ -15,9 +15,9 @@ ThRei 是一个长期运营的 CS:GO KZ 社区系统，统一承载官网、服�
 - 为后续用户、权限、论坛、通知、审核、审计和系统配置模块预留扩展点；
 - 不提前引入微服务、消息队列等尚无实际需求的基础设施。
 
-当前已实现 Steam OpenID 登录、数据库会话、真实业务表、服务器/论坛/社区/用户中心/管理统计的只读 API、管理面板的服务端角色校验，以及由 `ThRei_Players` SourceMod 插件主动上报的服务器状态与玩家名单。前端不再使用模拟数据。
+当前已实现 Steam OpenID 登录、数据库会话、真实业务表、服务器/社区/用户中心/管理统计 API、论坛主题与回复读写、管理面板的服务端角色校验，以及由 `ThRei_Players` SourceMod 插件主动上报的服务器状态与玩家名单。前端不再使用模拟数据。
 
-尚未实现：论坛发帖/回复、资料与收藏写接口、审核/审计写流程、登录限流与 CSRF 令牌、CI 和自动化部署验证。相关能力在本文中明确标记为“规划”。
+尚未实现：资料与收藏写接口、审核/审计写流程、登录限流与 CSRF 令牌、CI 和自动化部署验证。相关能力在本文中明确标记为“规划”。
 
 ## 2. 技术选型
 
@@ -83,7 +83,7 @@ compose.dev.yaml         本地开发用的基础设施端口覆盖
 ### 与初始规划的差异
 
 - **`apps/web/public/` 保留为空静态资源目录**（`.gitkeep`）；图标和 manifest 由 `src/app/icon.svg`、`src/app/manifest.ts` 生成。
-- **`services/api/src/modules/` 已有真实业务模块**：`auth`、`servers`、`forum`、`community`、`account`、`admin`。没有为了抽象而创建空目录。
+- **`services/api/src/modules/` 已有真实业务模块**：`auth`、`servers`、`players`、`forum`、`community`、`account`、`admin`。没有为了抽象而创建空目录。
 - **没有独立的通用 `models/`、`services/`、`repositories/` 顶层目录**。未来每个业务模块内部按 `routes / service / repository / dto` 组织，减少跨模块耦合。
 - **健康检查放在根路径 `/health/*`**，不纳入 `/api/v1`，因为它们属于基础设施探针；Nginx 会隐藏这些路径。
 - **`routes/system.rs` 属于基础设施元信息**，不是业务模块，因此没有放入 `modules/`。
@@ -95,9 +95,9 @@ compose.dev.yaml         本地开发用的基础设施端口覆盖
 
 ```text
 src/app/layout.tsx                根布局：html/body、全局样式、QueryProvider
-src/app/(site)/                   官网布局（/）
+src/app/(site)/                   官网布局（/、/players、/players/[id]）
 src/app/(servers)/                服务器布局（/servers）
-src/app/(forum)/                  论坛布局（/forum、/forum/[category]、/forum/topic/[id]）
+src/app/(forum)/                  论坛布局（/forum、/forum/[category]、/forum/new、/forum/topic/[id]）
 src/app/(account)/                用户中心布局（/account）
 src/app/(admin)/                  独立管理面板布局（/admin）
 ```
@@ -125,8 +125,8 @@ src/app/(admin)/                  独立管理面板布局（/admin）
 - `src/lib/api/client.ts`：与框架无关的 `ApiClient`，统一处理 base URL、超时、`credentials`、JSON 解析和错误归一化；错误类型为 `ApiError`，包含 HTTP 状态、业务错误码和 `x-request-id`。
 - `src/lib/api/browser.ts`：浏览器客户端。`NEXT_PUBLIC_API_BASE_URL` 为空时使用同源 `/api/v1`（生产由 Nginx 转发；本地由 Next rewrite 转发）。
 - `src/lib/api/server.ts`：仅服务端使用（`server-only`），通过 `API_INTERNAL_URL` 访问容器内 API，并转发 Cookie、请求 ID；Steam 会话就是这样在 Server Components 中读取的。服务端密钥不进入客户端 bundle。
-- `src/services/content.ts`：按资源封装服务器、论坛、社区、用户中心、管理员与 `/auth/me` 端点；`src/services/system.ts` 保留系统信息校验。
-- `src/hooks/*.ts`：TanStack Query hooks，统一 key 和刷新策略。
+- `src/services/content.ts`：按资源封装服务器、社区玩家、论坛、社区、用户中心、管理员与 `/auth/me` 端点；`src/services/system.ts` 保留系统信息校验。
+- `src/features/servers/data/live-servers.ts`：TanStack Query hook + 单例 `EventSource`。浏览器订阅 `/api/v1/servers/stream`，收到 `server-update` 后立即 invalidate `/api/v1/servers`，并保留 30 秒兜底轮询；`mergeLiveServers` 将在线名单合并回服务端渲染的服务器列表，保留地图展示与预估延迟等静态字段。
 
 本地开发时，`next.config.ts` 根据 `API_INTERNAL_URL` 生成 `/api/v1/:path*` rewrite。生产环境 Nginx 在请求到达 Next 之前就处理 `/api/`，因此 rewrite 不是生产流量的主路径。
 
@@ -152,20 +152,21 @@ Steam 是唯一登录方式：
 - `/account` 未登录时显示 Steam 登录卡片；`/admin` 未登录或非管理员时显示受限提示。
 - 管理员由 `ADMIN_STEAM_IDS` 首次引导；之后通过管理面板维护角色。API `/admin/*` 再次校验，不依赖前端隐藏。
 
-前端访问控制只改善体验，最终授权在 API。当前没有写操作接口，因此暂未引入 CSRF 令牌；后续写接口必须先补 CSRF 与限流。
+前端访问控制只改善体验，最终授权在 API。论坛和管理面板已有写操作，但尚未引入 CSRF 令牌与登录限流；当前依赖 `SameSite=Lax` 会话 Cookie、同源请求和服务端权限校验，后续应补充 CSRF 与限流。
 
 ### 5.6 真实数据与模块组织
 
 页面数据通过 Server Components 调用 API，API 再查询 PostgreSQL：
 
-- `src/services/content.ts`：`/servers`、`/forum/*`、`/community/overview`、`/account`、`/admin/overview`、`/auth/me` 的类型化请求。
-- `src/features/servers/data/servers.ts`：仅保留 `KzServer` / `KzPlayer` 类型、地址与搜索/统计工具，不含数据。
-- `src/features/forum/types.ts`、`features/account/types.ts`、`features/admin/types.ts`：API 响应类型。
+- `src/services/content.ts`：`/servers`、`/players`、`/forum/*`、`/community/overview`、`/account`、`/admin/overview`、`/auth/me` 的类型化请求。
+- `src/features/servers/data/servers.ts`：仅保留 `KzServer` / `KzPlayer` 类型、地址与搜索/统计工具，不含数据；`map-images.ts` 提供 CDN/同源地图图片 URL，`live-servers.ts` 提供 SSE 订阅、兜底轮询与合并逻辑。
+- `src/features/players/types.ts`、`features/forum/types.ts`、`features/account/types.ts`、`features/admin/types.ts`：API 响应类型。
+- `/players` 只读取公开玩家资料、论坛聚合和在线服务器；`/players/[id]` 复用账号页的 KZ 地图卡片，通过 `basePath` 让模式/分页链接回到玩家资料页。
 - 服务器、分类、主题、回复、用户、会话、收藏和在线玩家均来自数据库表。
 - 数据库为空时页面显示空状态，不回退到伪造内容。
 - 迁移预置 1 篇官方新手指南；作者为 `users.is_system=true` 的系统账号，不计入成员/活跃统计。论坛“新手指南”卡片通过“查看教学”跳转到该主题。
 
-服务器状态、在线玩家及其 IP 由 `ThRei_Players` 上报写入 `servers` / `server_players`；公开目录和管理面板读取同一份快照。超过 90 秒未上报时，后台清理任务会把空服标记为 `hibernating`、有玩家的服务器标记为 `offline`，并删除名单。服务器管理封禁玩家时优先使用该 IP，缺失时回退到玩家的网站登录 IP，并自动创建仅作用于游戏的 IP 封禁；网站账号不会被封禁。
+服务器状态、在线玩家及其 IP 由 `ThRei_Players` 上报写入 `servers` / `server_players`；公开目录和管理面板读取同一份快照。插件在玩家加入时立即触发上报，API 在事务提交后向 `/api/v1/servers/stream` 的 SSE 订阅者广播服务器 ID，网站 `/servers` 与首页推荐卡片随即刷新名单，因此跨服移动无需刷新页面；SSE 断开时保留 30 秒兜底轮询。超过 90 秒未上报时，后台清理任务会把空服标记为 `hibernating`、有玩家的服务器标记为 `offline`，并删除名单。服务器管理封禁玩家时优先使用该 IP，缺失时回退到玩家的网站登录 IP，并自动创建仅作用于游戏的 IP 封禁；网站账号不会被封禁。
 
 ## 6. 后端架构
 
@@ -182,7 +183,7 @@ src/routes/fallback.rs      统一 404 / 405 错误
 src/middleware/request_id.rs 请求 ID 注入、校验、透传、trace span
 src/errors/                 统一 AppError 与错误响应结构
 src/infrastructure/         PostgreSQL、Redis、日志初始化
-src/modules/                auth / servers / forum / community / account / admin
+src/modules/                auth / servers / players / forum / community / account / admin
 src/bin/migrate.rs          独立迁移二进制
 ```
 
@@ -431,7 +432,7 @@ Compose 服务：
 
 1. 在有 Docker 的主机完成镜像构建、Compose 启动和健康检查；
 2. 真实 Steam 账号登录验收 + 登录限流/CSRF；
-3. 论坛发帖/回复、资料编辑、收藏写接口；
+3. 资料编辑、收藏写接口；
 4. 插件对踢出、封禁与白名单指令的游戏内执行；
 5. 管理审核与审计；
 6. CI、备份自动化、指标与 HTTPS 自动化。

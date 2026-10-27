@@ -1,4 +1,5 @@
-export type CategoryIcon = "megaphone" | "messages" | "map" | "graduation" | "life-buoy";
+export type CategoryIcon =
+  "megaphone" | "messages" | "map" | "graduation" | "life-buoy" | "lightbulb" | "flag";
 
 export interface ForumAuthor {
   name: string;

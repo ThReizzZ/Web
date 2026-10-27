@@ -139,6 +139,16 @@ struct ReportServerRow {
     last_reported_at: DateTime<Utc>,
 }
 
+#[derive(Debug, FromRow)]
+struct PreviousServerRow {
+    id: String,
+    map: String,
+    name: String,
+    status: String,
+    max_players: i32,
+    player_count: Option<i32>,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/plugin/report", post(report))
@@ -173,7 +183,7 @@ pub async fn report(
     validate_max_players(request.max_players)?;
     let (players, skipped) = normalize_players(&request.players, Utc::now());
 
-    persist_report(
+    let (response, changed) = persist_report(
         &state.db,
         ReportPayload {
             server_id: server_id.as_deref(),
@@ -185,8 +195,15 @@ pub async fn report(
             skipped,
         },
     )
-    .await
-    .map(Json)
+    .await?;
+
+    // Wake SSE clients only when the roster, map, name or status actually
+    // changed; ordinary 30-second heartbeats should not cause site refreshes.
+    if changed {
+        let _ = state.server_updates.send(response.server_id.clone());
+    }
+
+    Ok(Json(response))
 }
 
 fn validate_ban_reason(value: &str) -> Result<String, AppError> {
@@ -916,12 +933,55 @@ struct ReportPayload<'a> {
     skipped: i32,
 }
 
+#[allow(clippy::too_many_lines)]
 async fn persist_report(
     db: &PgPool,
     report: ReportPayload<'_>,
-) -> Result<PluginReportResponse, AppError> {
+) -> Result<(PluginReportResponse, bool), AppError> {
     let player_count = i32::try_from(report.players.len()).unwrap_or(i32::MAX);
     let mut transaction = db.begin().await?;
+
+    let previous = sqlx::query_as::<_, PreviousServerRow>(
+        r"
+        SELECT id, map, name, status, max_players, player_count
+        FROM servers
+        WHERE plugin_token = $1
+          AND ($2::text IS NULL OR id = $2)
+        FOR UPDATE
+        ",
+    )
+    .bind(report.token)
+    .bind(report.server_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
+
+    let previous_players = sqlx::query_as::<_, (String, String)>(
+        "SELECT steam_id64, display_name FROM server_players WHERE server_id = $1",
+    )
+    .bind(&previous.id)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let roster_changed = previous_players.len() != report.players.len()
+        || report.players.iter().any(|player| {
+            !previous_players
+                .iter()
+                .any(|(steam_id, name)| steam_id == &player.steam_id64 && name == &player.name)
+        });
+
+    let next_map = report.map.unwrap_or(previous.map.as_str());
+    let next_name = report.name.unwrap_or(previous.name.as_str());
+    let next_max_players = report.max_players.unwrap_or(previous.max_players);
+    let next_status = if previous.status == "maintenance" {
+        "maintenance"
+    } else {
+        "online"
+    };
+    let server_changed = next_map != previous.map.as_str()
+        || next_name != previous.name.as_str()
+        || next_max_players != previous.max_players
+        || next_status != previous.status.as_str()
+        || Some(player_count) != previous.player_count;
 
     let server = sqlx::query_as::<_, ReportServerRow>(
         r"
@@ -1002,12 +1062,15 @@ async fn persist_report(
 
     transaction.commit().await?;
 
-    Ok(PluginReportResponse {
-        server_id: server.id,
-        player_count,
-        skipped: report.skipped,
-        reported_at: server.last_reported_at,
-    })
+    Ok((
+        PluginReportResponse {
+            server_id: server.id,
+            player_count,
+            skipped: report.skipped,
+            reported_at: server.last_reported_at,
+        },
+        server_changed || roster_changed,
+    ))
 }
 
 async fn sweep_stale(db: &PgPool, skip_rcon_servers: bool) -> Result<(u64, u64), sqlx::Error> {

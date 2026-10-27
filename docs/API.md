@@ -147,6 +147,18 @@ Steam 是唯一登录方式；没有密码、邮箱注册或其他登录入口�
 - 状态、地图、人数与在线玩家由游戏服务器上的 `ThRei_Players` 插件上报。API 不使用 A2S 轮询，也不会向游戏服务器发送任意 RCON 指令。
 - 没有配置 RCON 密码的插件服务器超过 90 秒未上报时，后台任务会把人数清零并删除在线名单：上次人数为 0 时标记 `hibernating`，否则标记 `offline`。这是空服休眠的推断；配置了 RCON 密码且启用 `HIBERNATION_POLL_ENABLED` 时，后台只发送 `status` 判断存活：空服标记 `hibernating`，有玩家标记 `online`；连续 3 次 RCON 失败才标记 `offline`。`maintenance` 状态不会被插件上报或后台任务覆盖。
 - 在线名单只包含插件已通过 Steam 认证的玩家（SteamID64 非空）。插件安装与配置见 [../plugins/ThRei_Players/README.md](../plugins/ThRei_Players/README.md)。
+- 网站 `/servers` 页和首页推荐服务器通过 `GET /api/v1/servers/stream` 的 SSE 事件触发即时刷新，并保留 30 秒兜底轮询；插件在玩家加入服务器时立即触发上报，因此玩家从 1 服进入 2 服后页面会自动更新，无需手动刷新。
+
+### `GET /api/v1/servers/stream`
+
+公开的 Server-Sent Events 长连接。插件上报产生实际变化（玩家加入/离开、地图、名称、人数或状态变化）后，API 发送：
+
+```text
+event: server-update
+data: srv-xxxxxxxxxxxx
+```
+
+客户端收到事件后重新请求 `GET /api/v1/servers`。API 每 15 秒发送 keep-alive，连接不受普通请求 30 秒超时限制；Nginx 对该路径关闭 buffering 并延长读取超时。该接口只发送服务器 ID，不发送令牌、IP 或玩家列表。
 
 ### `POST /api/v1/plugin/report`
 
@@ -296,8 +308,8 @@ action 5c8b2d3e-... unbanip 203.0.113.10 网站解除 IP 封禁
 [
   {
     "slug": "announcements",
-    "name": "公告与活动",
-    "description": "服务器维护、赛季更新、计时赛和社区活动。",
+    "name": "公告",
+    "description": "服务器维护、版本更新、活动与社区通知。",
     "icon": "megaphone",
     "topicCount": 0,
     "postCount": 0,
@@ -319,7 +331,36 @@ Query：
 
 返回 `ForumTopic[]`，包含 `slug`、`title`、`excerpt`、`categorySlug`、`categoryName`、`categoryIcon`、`author`、`tags`、`createdAt`、`lastActivityAt`、`views`、`pinned`、`hot`、`replyCount`。没有主题时返回 `[]`。
 
-### 5.3 `GET /api/v1/forum/topics/{slug}`
+### 5.3 `POST /api/v1/forum/topics`
+
+需要有效网站会话；被论坛禁言的用户返回 `400` 和禁言原因。公告分类只允许管理员发布。
+
+```json
+{
+  "categorySlug": "general",
+  "title": "主题标题",
+  "content": "正文，支持换行",
+  "tags": ["地图推荐", "连跳"]
+}
+```
+
+- `title` 1–200 个字符，`content` 1–100000 个字符。
+- `tags` 可选，最多 5 个，每个最多 24 个字符。
+- 服务端生成唯一 `slug` 和摘要，成功返回 `201` 与 `ForumTopic`。
+- 分类不存在、字段不合法、无权限或被禁言时返回 `400`。
+
+### 5.4 `POST /api/v1/forum/topics/{slug}/replies`
+
+需要有效网站会话；被论坛禁言的用户返回 `400` 和禁言原因。
+
+```json
+{ "content": "回复内容" }
+```
+
+回复长度 1–20000 个字符。成功返回 `201` 与 `ForumReply`，同时更新主题的 `lastActivityAt`；
+主题不存在或已软删除返回 `404`。
+
+### 5.5 `GET /api/v1/forum/topics/{slug}`
 
 返回主题详情与回复；不存在或已软删除返回 `404 not_found`。
 
@@ -340,7 +381,7 @@ Query：
 }
 ```
 
-### 5.4 `GET /api/v1/forum/active-users?limit=8`
+### 5.6 `GET /api/v1/forum/active-users?limit=8`
 
 返回最近发帖或回复的作者，按最近活动时间倒序，`limit` 范围 1–30。
 
@@ -449,6 +490,14 @@ Query：
 - `POST /admin/server-communities/{id}/servers` body `{ "serverIds": ["srv-...", "srv-..."] }`：把实例加入社区组；已属于其他组的实例会被移动到当前组。空数组或未知服务器 ID 返回 `422`，组不存在返回 `404`，成功返回 `204`。
 - `DELETE /admin/server-communities/{id}/servers/{server_id}`：把实例移出社区组；实例不在该组时返回 `404`，成功返回 `204`。
 - 公开服务器接口中的 `community` 为该实例所属社区组名称（未分组为空字符串），管理接口的服务器对象同时返回 `communityId` 与 `community`。
+
+### 6.10 社区玩家
+
+公开接口，不需要登录；排除系统账号和已禁用账号，不返回登录 IP、会话或封禁记录。
+
+- `GET /api/v1/players?q=&limit=`：返回社区玩家，管理员置顶、版主随后，其次是在游戏中的玩家，再按最近登录排序。`q` 最长 80 字符，可匹配昵称（ILIKE）、完整 SteamID64、SteamID2（`STEAM_0:0:...` / `STEAM_1:1:...`）或 SteamID3（`[U:1:...]`）；`limit` 1–100，默认 50。
+- 列表项包含 `id`、`name`、`avatarUrl`、`role`、`joinedAt`、`lastLoginAt`、`topics`、`replies`；`onlineServer` 在玩家当前位于某台服务器时返回 `{ id, name, map }`，否则为 `null`。在线判定使用 `server_players.last_seen_at` 最近 5 分钟。
+- `GET /api/v1/players/{id}`：路径参数可以是用户 UUID、SteamID64、SteamID2 或 SteamID3，例如 `/api/v1/players/STEAM_0:0:914966745`。返回公开资料，包含 `steamId64`（用于 Steam 与 KZ:GO 外链）、`bio`、`location`、论坛统计、最近 5 个主题和 `latestServer`。`latestServer` 包含 `id`、`name`、`map`、`lastSeenAt`、`online`；不存在游戏记录时为 `null`。未知或被禁用的玩家返回 `404`。
 
 ## 7. 错误结构
 

@@ -18,6 +18,7 @@ pub fn api_v1() -> Router<AppState> {
         .merge(modules::server_communities::router())
         .merge(modules::forum::router())
         .merge(modules::forum_admin::router())
+        .merge(modules::players::router())
         .merge(modules::community::router())
         .merge(modules::account::router())
         .merge(modules::admin::router())

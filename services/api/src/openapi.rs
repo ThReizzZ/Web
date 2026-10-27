@@ -5,6 +5,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     errors::{ErrorBody, ErrorResponse},
     modules::{
+        forum::{CreateReplyRequest, CreateTopicRequest},
         server_admin::{PluginTokenResponse, SetRconPasswordRequest},
         server_communities::{
             AddCommunityServersRequest, AdminCommunity, CommunityOverview, CommunityServer,
@@ -54,8 +55,12 @@ use crate::{
         crate::modules::server_communities::remove_server,
         crate::modules::forum::list_categories,
         crate::modules::forum::list_topics,
+        crate::modules::forum::create_topic,
         crate::modules::forum::get_topic,
+        crate::modules::forum::create_reply,
         crate::modules::forum::list_active_users,
+        crate::modules::players::list_players,
+        crate::modules::players::get_player,
         crate::modules::community::overview,
         crate::modules::account::account_overview,
         crate::modules::admin::overview
@@ -70,6 +75,8 @@ use crate::{
         ErrorResponse,
         ErrorBody,
         PluginReportRequest,
+        CreateTopicRequest,
+        CreateReplyRequest,
         PluginPlayer,
         PluginReportResponse,
         PluginTokenResponse,

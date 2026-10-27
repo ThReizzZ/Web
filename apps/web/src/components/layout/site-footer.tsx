@@ -9,6 +9,7 @@ const footerLinks = [
     links: [
       { label: "服务器", href: "/servers" },
       { label: "论坛", href: "/forum" },
+      { label: "社区玩家", href: "/players" },
       { label: "用户中心", href: "/account" },
     ],
   },

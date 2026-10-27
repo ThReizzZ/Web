@@ -13,7 +13,11 @@ export function ServerListRow({ server }: { server: KzServer }) {
   const playerCount = getOnlinePlayerCount(server);
 
   return (
-    <Card data-server-id={server.id} className="gap-0 overflow-hidden py-0">
+    <Card
+      id={`server-${server.id}`}
+      data-server-id={server.id}
+      className="scroll-mt-24 gap-0 overflow-hidden py-0"
+    >
       <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-stretch">
         <div className="relative h-32 w-full shrink-0 overflow-hidden rounded-lg bg-slate-900 sm:h-24 sm:w-44">
           <ServerMapImage

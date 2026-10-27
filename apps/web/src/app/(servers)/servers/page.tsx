@@ -8,8 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ServerDirectory } from "@/features/servers/components/server-directory";
+import { ServerLiveSummary } from "@/features/servers/components/server-live-summary";
 import { ServerMapImage } from "@/features/servers/components/server-map-image";
-import { getMaxPlayerTotal, getOnlinePlayerTotal } from "@/features/servers/data/servers";
 import { getServerApiClient } from "@/lib/api/server";
 import { fetchMe, fetchServers } from "@/services/content";
 import { applyEstimatedLatencies, clientIpFromHeaders } from "@/services/latency";
@@ -26,7 +26,7 @@ const steps = [
   {
     icon: Globe2,
     title: "使用Steam登录",
-    description: "ThRei 只使用Steam登录。登录后可以查看个人资料；论坛与收藏写操作尚未接入。",
+    description: "ThRei 只使用Steam登录。登录后可以查看个人资料并参与论坛讨论。",
   },
   {
     icon: Copy,
@@ -46,8 +46,6 @@ export default async function ServersPage() {
   const clientIp = me.user ? clientIpFromHeaders(await headers()) : null;
   const servers = await applyEstimatedLatencies(baseServers, clientIp);
   const featured = servers.find((server) => server.featured) ?? servers[0];
-  const onlineTotal = getOnlinePlayerTotal(servers);
-  const maxTotal = getMaxPlayerTotal(servers);
 
   return (
     <PageContainer className="space-y-10 py-10">
@@ -93,12 +91,7 @@ export default async function ServersPage() {
               )}
             </Button>
           </div>
-          <dl className="mt-9 grid max-w-2xl grid-cols-2 gap-4 sm:grid-cols-4">
-            <Stat label="在线玩家" value={onlineTotal} />
-            <Stat label="社区容量" value={maxTotal} />
-            <Stat label="服务器 tickrate" value={servers[0]?.tickrate ?? 0} />
-            <Stat label="KZ 服务器" value={servers.length} />
-          </dl>
+          <ServerLiveSummary initialServers={servers} />
         </div>
       </section>
 
@@ -170,14 +163,5 @@ export default async function ServersPage() {
         </p>
       ) : null}
     </PageContainer>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div>
-      <dt className="text-xs text-white/55">{label}</dt>
-      <dd className="mt-1 text-2xl font-semibold tabular-nums">{value.toLocaleString("zh-CN")}</dd>
-    </div>
   );
 }

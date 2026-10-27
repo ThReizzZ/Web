@@ -23,8 +23,9 @@ export function ServerCard({
 
   return (
     <Card
+      id={`server-${server.id}`}
       data-server-id={server.id}
-      className={cn("flex h-full gap-0 overflow-hidden py-0", className)}
+      className={cn("flex h-full scroll-mt-24 gap-0 overflow-hidden py-0", className)}
     >
       <div className="relative aspect-[16/9] overflow-hidden bg-slate-900">
         <ServerMapImage

@@ -5,6 +5,7 @@ pub mod auth;
 pub mod community;
 pub mod forum;
 pub mod forum_admin;
+pub mod players;
 pub mod plugin_access;
 pub mod server_admin;
 pub mod server_communities;

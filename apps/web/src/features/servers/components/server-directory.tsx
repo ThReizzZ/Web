@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ServerCard } from "@/features/servers/components/server-card";
 import { ServerListRow } from "@/features/servers/components/server-list-row";
+import { useLiveServers } from "@/features/servers/data/live-servers";
 import {
   getOnlinePlayerTotal,
   searchServers,
@@ -14,6 +15,7 @@ import {
   type KzServer,
   type ServerSortKey,
 } from "@/features/servers/data/servers";
+import { cn } from "@/lib/utils";
 
 const VIEW_STORAGE_KEY = "threi.servers.view";
 const VIEW_CHANGE_EVENT = "threi:servers-view-change";
@@ -108,14 +110,16 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
     getServerColumnCount,
   );
   const sort = useSyncExternalStore(subscribeToSort, getSortSnapshot, getServerSortSnapshot);
+  const { data: liveServers, isFetching, isError } = useLiveServers(servers);
+  const currentServers = liveServers ?? servers;
   const [query, setQuery] = useState("");
-  const searchedServers = searchServers(servers, query);
+  const searchedServers = searchServers(currentServers, query);
   const orderedServers = sortServers(searchedServers, sort);
   const columns = Array.from({ length: columnCount }, () => [] as typeof orderedServers);
   orderedServers.forEach((server, index) => {
     columns[index % columnCount]!.push(server);
   });
-  const onlineTotal = getOnlinePlayerTotal(servers);
+  const onlineTotal = getOnlinePlayerTotal(currentServers);
   const hasFilters = query.length > 0;
 
   function clearFilters() {
@@ -146,9 +150,28 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
         <div>
           <p className="text-sm font-medium text-primary">服务器列表</p>
           <h2 className="mt-1 text-2xl font-semibold tracking-tight">选择 KZ 服务器</h2>
-          <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
-            <Users className="size-3.5" aria-hidden="true" />
-            {onlineTotal} 位玩家在线，分布在 {servers.length} 个服务器
+          <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5" aria-live="polite">
+              <Users className="size-3.5" aria-hidden="true" />
+              {onlineTotal} 位玩家在线，分布在 {currentServers.length} 个服务器
+            </span>
+            <span
+              className="inline-flex items-center gap-1.5"
+              title="插件上报时立即刷新；连接中断时每 30 秒兜底刷新"
+            >
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  isError
+                    ? "bg-destructive"
+                    : isFetching
+                      ? "animate-pulse bg-primary"
+                      : "bg-success",
+                )}
+                aria-hidden="true"
+              />
+              {isError ? "更新失败，稍后重试" : isFetching ? "正在更新" : "实时更新"}
+            </span>
           </p>
         </div>
 
@@ -225,7 +248,7 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
           </label>
           <p className="text-xs text-muted-foreground" aria-live="polite">
             显示 <span className="font-medium text-foreground">{searchedServers.length}</span> /{" "}
-            {servers.length} 个服务器
+            {currentServers.length} 个服务器
           </p>
         </div>
       </div>
@@ -235,15 +258,15 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
           <Search className="size-8 text-muted-foreground" aria-hidden="true" />
           <div>
             <p className="font-medium">
-              {servers.length === 0 ? "暂时还没有服务器记录" : "没有找到匹配的服务器"}
+              {currentServers.length === 0 ? "暂时还没有服务器记录" : "没有找到匹配的服务器"}
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              {servers.length === 0
+              {currentServers.length === 0
                 ? "服务器接入后，这里会显示真实的地图、在线玩家与连接地址。"
                 : "可以尝试服务器名称、地图名、地区或玩家昵称。"}
             </p>
           </div>
-          {servers.length > 0 && hasFilters ? (
+          {currentServers.length > 0 && hasFilters ? (
             <Button type="button" variant="outline" size="sm" onClick={clearFilters}>
               清空筛选
             </Button>

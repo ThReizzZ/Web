@@ -18,12 +18,15 @@ import type {
 import type {
   ActiveUser,
   ForumCategory,
+  ForumReply,
   ForumTopic,
   ForumTopicDetail,
 } from "@/features/forum/types";
+import type { CommunityPlayer, CommunityPlayerDetail } from "@/features/players/types";
 import type { KzServer } from "@/features/servers/data/servers";
+import { kzMapCdnImageUrl, kzMapImageUrl } from "@/features/servers/data/map-images";
 import type { ApiClient } from "@/lib/api/client";
-import { fetchKzTimerMapInfo, kzMapCdnImageUrl, kzMapImageUrl } from "@/services/kzgo";
+import { fetchKzTimerMapInfo } from "@/services/kzgo";
 
 export interface CommunityStats {
   members: number;
@@ -97,11 +100,57 @@ export function fetchForumTopic(client: ApiClient, slug: string): Promise<ForumT
   return client.get<ForumTopicDetail>(`/api/v1/forum/topics/${encodeURIComponent(slug)}`, noStore);
 }
 
+export function createForumTopic(
+  client: ApiClient,
+  input: {
+    categorySlug: string;
+    title: string;
+    content: string;
+    tags: string[];
+  },
+): Promise<ForumTopic> {
+  return client.request<ForumTopic>("/api/v1/forum/topics", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function createForumReply(
+  client: ApiClient,
+  topicSlug: string,
+  content: string,
+): Promise<ForumReply> {
+  return client.request<ForumReply>(
+    `/api/v1/forum/topics/${encodeURIComponent(topicSlug)}/replies`,
+    {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    },
+  );
+}
+
 export function fetchActiveUsers(client: ApiClient, limit = 8): Promise<ActiveUser[]> {
   return client.get<ActiveUser[]>("/api/v1/forum/active-users", {
     ...noStore,
     query: { limit },
   });
+}
+
+export function fetchCommunityPlayers(
+  client: ApiClient,
+  options: { q?: string; limit?: number } = {},
+): Promise<CommunityPlayer[]> {
+  return client.get<CommunityPlayer[]>("/api/v1/players", {
+    ...noStore,
+    query: options,
+  });
+}
+
+export function fetchCommunityPlayer(
+  client: ApiClient,
+  id: string,
+): Promise<CommunityPlayerDetail> {
+  return client.get<CommunityPlayerDetail>(`/api/v1/players/${encodeURIComponent(id)}`, noStore);
 }
 
 export function fetchMe(client: ApiClient): Promise<MeResponse> {

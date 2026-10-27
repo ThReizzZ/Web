@@ -1,3 +1,5 @@
+import { kzMapCdnImageUrl, kzMapImageUrl } from "./map-images";
+
 export type ServerStatus = "online" | "maintenance" | "offline" | "hibernating";
 
 export interface KzPlayer {
@@ -30,6 +32,71 @@ export interface KzServer {
   estimatedLatencyMs: number | null;
   featured: boolean;
   requiresWhitelist: boolean;
+}
+
+/** Shape returned by `GET /api/v1/servers`; map presentation fields are added by the web app. */
+export type LiveServerPayload = Omit<
+  KzServer,
+  "mapImageFallback" | "mapTier" | "estimatedLatencyMs"
+>;
+
+function toKzServer(server: LiveServerPayload): KzServer {
+  const proxyImage = kzMapImageUrl(server.map);
+  const cdnImage = kzMapCdnImageUrl(server.map);
+  return {
+    ...server,
+    mapImage: server.mapImage || cdnImage || proxyImage || "",
+    mapImageFallback: proxyImage || "",
+    mapTier: null,
+    estimatedLatencyMs: null,
+  };
+}
+
+/**
+ * Merges the live roster/status payload into the initial enriched server list.
+ * Static presentation fields (estimated latency, KZ tier) stay from the server
+ * render; map-derived fields are refreshed when the active map changes.
+ */
+export function mergeLiveServers(current: KzServer[], live: LiveServerPayload[]): KzServer[] {
+  const currentById = new Map(current.map((server) => [server.id, server]));
+
+  return live.map((server) => {
+    const existing = currentById.get(server.id);
+    if (!existing) {
+      return toKzServer(server);
+    }
+
+    const mapChanged = server.map !== existing.map;
+    const proxyImage = kzMapImageUrl(server.map);
+    const cdnImage = kzMapCdnImageUrl(server.map);
+    return {
+      ...existing,
+      name: server.name,
+      map: server.map,
+      description: server.description,
+      community: server.community,
+      status: server.status,
+      ip: server.ip,
+      port: server.port,
+      region: server.region,
+      tickrate: server.tickrate,
+      maxPlayers: server.maxPlayers,
+      latencyMs: server.latencyMs,
+      tags: server.tags,
+      mapImage: mapChanged
+        ? cdnImage || proxyImage || server.mapImage || existing.mapImage
+        : existing.mapImage,
+      mapImageFallback: mapChanged
+        ? proxyImage || existing.mapImageFallback
+        : existing.mapImageFallback,
+      mapTier: mapChanged ? null : existing.mapTier,
+      estimatedLatencyMs: server.ip === existing.ip ? existing.estimatedLatencyMs : null,
+      featured: server.featured,
+      requiresWhitelist: server.requiresWhitelist,
+      playerCount: server.playerCount,
+      players: server.players,
+    };
+  });
 }
 
 export function getServerAddress(server: KzServer): string {

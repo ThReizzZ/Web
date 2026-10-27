@@ -81,6 +81,12 @@ pub fn build_router(state: AppState, settings: &Settings) -> Router {
 }
 
 async fn timeout_request(request: Request, next: Next, timeout: Duration) -> Response {
+    // Server-Sent Events are long-lived by design and must not be cut off by
+    // the normal request timeout. The endpoint only emits server IDs.
+    if request.uri().path() == "/api/v1/servers/stream" {
+        return next.run(request).await;
+    }
+
     match tokio::time::timeout(timeout, next.run(request)).await {
         Ok(response) => response,
         Err(_) => AppError::RequestTimeout.into_response(),

@@ -1,7 +1,20 @@
-use axum::{Json, Router, extract::State, routing::get};
+use std::{convert::Infallible, time::Duration};
+
+use axum::{
+    Json, Router,
+    extract::State,
+    http::{HeaderName, HeaderValue, header},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::get,
+};
 use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
 use serde::Serialize;
 use sqlx::FromRow;
+use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
 use crate::{errors::AppError, state::AppState};
 
@@ -66,7 +79,43 @@ pub struct Server {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/servers", get(list_servers))
+    Router::new()
+        .route("/servers", get(list_servers))
+        .route("/servers/stream", get(stream_servers))
+}
+
+/// Streams a lightweight event whenever a plugin report updates a server.
+/// Clients respond by refetching `/servers`, which keeps the SSE frame small
+/// and avoids duplicating the full server serialization in the API.
+async fn stream_servers(State(state): State<AppState>) -> Response {
+    let receiver = state.server_updates.subscribe();
+    let stream = BroadcastStream::new(receiver).filter_map(|message| async move {
+        match message {
+            Ok(server_id) => Some(Ok::<_, Infallible>(
+                Event::default().event("server-update").data(server_id),
+            )),
+            Err(BroadcastStreamRecvError::Lagged(skipped)) => {
+                tracing::warn!(skipped, "server update stream lagged");
+                Some(Ok(Event::default().event("server-update").data("refresh")))
+            }
+        }
+    });
+
+    let mut response = Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    response.headers_mut().insert(
+        HeaderName::from_static("x-accel-buffering"),
+        HeaderValue::from_static("no"),
+    );
+    response
 }
 
 #[utoipa::path(

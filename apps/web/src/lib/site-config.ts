@@ -1,3 +1,5 @@
+export const qqGroupUrl = "https://qm.qq.com/q/tDU8zyaxp0";
+
 export const siteConfig = {
   name: "ThRei",
   title: "ThRei 社区",
@@ -5,9 +7,11 @@ export const siteConfig = {
   url: resolveSiteUrl(process.env.NEXT_PUBLIC_SITE_URL),
   nav: [
     { title: "官网", href: "/" },
+    { title: "论坛", href: "/forum" },
     { title: "服务器", href: "/servers" },
     { title: "下载站", href: "https://cdn.threi.cn/csgo/", external: true },
-    { title: "论坛", href: "/forum" },
+    { title: "社区玩家", href: "/players" },
+    { title: "加入我们", href: qqGroupUrl, external: true },
   ],
 } as const;
 

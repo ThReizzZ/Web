@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use redis::aio::ConnectionManager;
 use sqlx::PgPool;
+use tokio::sync::broadcast;
 
 /// Shared, cheaply cloneable application state.
 #[derive(Clone)]
@@ -11,6 +12,9 @@ pub struct AppState {
     pub redis_required: bool,
     pub environment: &'static str,
     pub started_at: Instant,
+    /// Broadcasts server IDs after a successful plugin report so SSE clients
+    /// can refresh their rosters immediately.
+    pub server_updates: broadcast::Sender<String>,
 }
 
 impl AppState {
@@ -21,12 +25,14 @@ impl AppState {
         redis_required: bool,
         environment: &'static str,
     ) -> Self {
+        let (server_updates, _) = broadcast::channel(64);
         Self {
             db,
             redis,
             redis_required,
             environment,
             started_at: Instant::now(),
+            server_updates,
         }
     }
 

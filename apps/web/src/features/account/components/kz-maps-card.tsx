@@ -36,12 +36,14 @@ export async function KzMapsCard({
   view,
   tier,
   page,
+  basePath = "/account",
 }: {
   steamId64: string;
   mode: KzMode;
   view: KzMapView;
   tier: number | null;
   page: number;
+  basePath?: string;
 }) {
   const data = await fetchKzgoPlayerMaps(steamId64, mode, view, page, tier);
   const profileUrl = kzgoProfileUrl(steamId64);
@@ -58,7 +60,7 @@ export async function KzMapsCard({
             </CardTitle>
             <CardDescription>暂时无法从 KZ:GO 获取 {modeName} 记录，请稍后刷新。</CardDescription>
           </div>
-          <KzSelectors mode={mode} view={view} tier={tier} />
+          <KzSelectors mode={mode} view={view} tier={tier} basePath={basePath} />
         </CardHeader>
         <CardContent>
           <Button asChild variant="outline" size="sm">
@@ -72,10 +74,24 @@ export async function KzMapsCard({
     );
   }
 
-  return <KzMapsCardContent data={data} profileUrl={profileUrl} mode={mode} view={view} />;
+  return (
+    <KzMapsCardContent
+      data={data}
+      profileUrl={profileUrl}
+      mode={mode}
+      view={view}
+      basePath={basePath}
+    />
+  );
 }
 
-function kzHref(mode: KzMode, view: KzMapView, tier: number | null, page = 1): string {
+function kzHref(
+  basePath: string,
+  mode: KzMode,
+  view: KzMapView,
+  tier: number | null,
+  page = 1,
+): string {
   const query = new URLSearchParams({ kz: mode, view });
   if (tier !== null) {
     query.set("tier", String(tier));
@@ -83,10 +99,20 @@ function kzHref(mode: KzMode, view: KzMapView, tier: number | null, page = 1): s
   if (page > 1) {
     query.set("page", String(page));
   }
-  return `/account?${query.toString()}`;
+  return `${basePath}?${query.toString()}`;
 }
 
-function KzSelectors({ mode, view, tier }: { mode: KzMode; view: KzMapView; tier: number | null }) {
+function KzSelectors({
+  mode,
+  view,
+  tier,
+  basePath,
+}: {
+  mode: KzMode;
+  view: KzMapView;
+  tier: number | null;
+  basePath: string;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <div
@@ -97,7 +123,7 @@ function KzSelectors({ mode, view, tier }: { mode: KzMode; view: KzMapView; tier
         {KZ_MODES.map((option) => (
           <Link
             key={option.value}
-            href={kzHref(option.value, view, view === "incomplete" ? tier : null)}
+            href={kzHref(basePath, option.value, view, view === "incomplete" ? tier : null)}
             scroll={false}
             title={option.name}
             aria-current={option.value === mode ? "page" : undefined}
@@ -120,7 +146,7 @@ function KzSelectors({ mode, view, tier }: { mode: KzMode; view: KzMapView; tier
         {KZ_MAP_VIEWS.map((option) => (
           <Link
             key={option.value}
-            href={kzHref(mode, option.value, option.value === "incomplete" ? tier : null)}
+            href={kzHref(basePath, mode, option.value, option.value === "incomplete" ? tier : null)}
             scroll={false}
             aria-current={option.value === view ? "page" : undefined}
             className={cn(
@@ -138,7 +164,15 @@ function KzSelectors({ mode, view, tier }: { mode: KzMode; view: KzMapView; tier
   );
 }
 
-function KzTierFilter({ mode, tier }: { mode: KzMode; tier: number | null }) {
+function KzTierFilter({
+  mode,
+  tier,
+  basePath,
+}: {
+  mode: KzMode;
+  tier: number | null;
+  basePath: string;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <span className="mr-1 text-[11px] text-muted-foreground">难度</span>
@@ -147,7 +181,7 @@ function KzTierFilter({ mode, tier }: { mode: KzMode; tier: number | null }) {
         return (
           <Link
             key={value ?? "all"}
-            href={kzHref(mode, "incomplete", value)}
+            href={kzHref(basePath, mode, "incomplete", value)}
             scroll={false}
             aria-current={active ? "page" : undefined}
             className={cn(
@@ -170,11 +204,13 @@ function KzMapsCardContent({
   profileUrl,
   mode,
   view,
+  basePath,
 }: {
   data: KzPlayerMaps;
   profileUrl: string;
   mode: KzMode;
   view: KzMapView;
+  basePath: string;
 }) {
   return (
     <Card>
@@ -220,12 +256,12 @@ function KzMapsCardContent({
             </a>
           </Button>
         </div>
-        <KzSelectors mode={mode} view={view} tier={data.incompleteTier} />
+        <KzSelectors mode={mode} view={view} tier={data.incompleteTier} basePath={basePath} />
       </CardHeader>
       <CardContent className="space-y-3">
         {view === "incomplete" ? (
           <>
-            <KzTierFilter mode={mode} tier={data.incompleteTier} />
+            <KzTierFilter mode={mode} tier={data.incompleteTier} basePath={basePath} />
             {data.incompleteMaps.length > 0 ? (
               <>
                 <div className="flex items-center justify-between text-[11px] text-muted-foreground">
@@ -253,7 +289,13 @@ function KzMapsCardContent({
                     {data.incompletePage > 1 ? (
                       <Button asChild variant="outline" size="sm">
                         <Link
-                          href={kzHref(mode, view, data.incompleteTier, data.incompletePage - 1)}
+                          href={kzHref(
+                            basePath,
+                            mode,
+                            view,
+                            data.incompleteTier,
+                            data.incompletePage - 1,
+                          )}
                           scroll={false}
                         >
                           上一页
@@ -270,7 +312,13 @@ function KzMapsCardContent({
                     {data.incompletePage < data.incompletePageCount ? (
                       <Button asChild variant="outline" size="sm">
                         <Link
-                          href={kzHref(mode, view, data.incompleteTier, data.incompletePage + 1)}
+                          href={kzHref(
+                            basePath,
+                            mode,
+                            view,
+                            data.incompleteTier,
+                            data.incompletePage + 1,
+                          )}
                           scroll={false}
                         >
                           下一页
@@ -350,10 +398,12 @@ export function KzMapsCardSkeleton({
   mode,
   view,
   tier,
+  basePath = "/account",
 }: {
   mode: KzMode;
   view: KzMapView;
   tier: number | null;
+  basePath?: string;
 }) {
   return (
     <Card>
@@ -363,7 +413,7 @@ export function KzMapsCardSkeleton({
           KZ 地图记录
         </CardTitle>
         <CardDescription>正在从 KZ:GO 读取地图记录…</CardDescription>
-        <KzSelectors mode={mode} view={view} tier={tier} />
+        <KzSelectors mode={mode} view={view} tier={tier} basePath={basePath} />
       </CardHeader>
       <CardContent>
         <div className="space-y-px overflow-hidden rounded-xl border bg-border">

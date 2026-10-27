@@ -1,6 +1,8 @@
 import {
+  Flag,
   GraduationCap,
   LifeBuoy,
+  Lightbulb,
   Map as MapIcon,
   Megaphone,
   MessagesSquare,
@@ -16,6 +18,8 @@ const icons: Record<CategoryIcon, LucideIcon> = {
   map: MapIcon,
   graduation: GraduationCap,
   "life-buoy": LifeBuoy,
+  lightbulb: Lightbulb,
+  flag: Flag,
 };
 
 export const categoryTone: Record<CategoryIcon, string> = {
@@ -24,6 +28,8 @@ export const categoryTone: Record<CategoryIcon, string> = {
   map: "bg-emerald-500/10 text-emerald-600",
   graduation: "bg-violet-500/10 text-violet-600",
   "life-buoy": "bg-rose-500/10 text-rose-600",
+  lightbulb: "bg-cyan-500/10 text-cyan-600",
+  flag: "bg-rose-500/10 text-rose-600",
 };
 
 export function ForumCategoryIcon({ icon, className }: { icon: CategoryIcon; className?: string }) {

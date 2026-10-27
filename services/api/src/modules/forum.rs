@@ -1,13 +1,21 @@
+use std::collections::HashSet;
+
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    routing::get,
+    http::{HeaderMap, StatusCode},
+    routing::{get, post},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use uuid::Uuid;
 
-use crate::{errors::AppError, state::AppState};
+use crate::{
+    errors::AppError,
+    modules::auth::{AuthUser, require_user},
+    state::AppState,
+};
 
 #[derive(Debug, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -128,11 +136,27 @@ pub struct ActiveUserQuery {
     pub limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTopicRequest {
+    pub category_slug: String,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct CreateReplyRequest {
+    pub content: String,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/forum/categories", get(list_categories))
-        .route("/forum/topics", get(list_topics))
+        .route("/forum/topics", get(list_topics).post(create_topic))
         .route("/forum/topics/{slug}", get(get_topic))
+        .route("/forum/topics/{slug}/replies", post(create_reply))
         .route("/forum/active-users", get(list_active_users))
 }
 
@@ -228,6 +252,254 @@ async fn get_topic(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/forum/topics",
+    tag = "forum",
+    responses(
+        (status = 201, description = "Topic created"),
+        (status = 401, description = "Authentication required"),
+        (status = 400, description = "Invalid topic data or missing permission")
+    )
+)]
+async fn create_topic(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateTopicRequest>,
+) -> Result<(StatusCode, Json<TopicSummary>), AppError> {
+    let user = require_user(&state, &headers).await?;
+    ensure_not_muted(&state, &user).await?;
+
+    let category_slug = request.category_slug.trim();
+    if category_slug.is_empty() || category_slug.chars().count() > 64 {
+        return Err(AppError::bad_request("分类标识无效。"));
+    }
+    let category = sqlx::query_scalar::<_, String>("SELECT slug FROM categories WHERE slug = $1")
+        .bind(category_slug)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::bad_request("分类不存在。"))?;
+
+    if category == "announcements" && user.role != "admin" {
+        return Err(AppError::bad_request("只有管理员可以在公告分类发布主题。"));
+    }
+
+    let title = request.title.trim();
+    if title.is_empty() || title.chars().count() > 200 {
+        return Err(AppError::bad_request(
+            "标题长度需要在 1 到 200 个字符之间。",
+        ));
+    }
+    let content = request.content.trim();
+    if content.is_empty() || content.chars().count() > 100_000 {
+        return Err(AppError::bad_request(
+            "正文长度需要在 1 到 100000 个字符之间。",
+        ));
+    }
+
+    let tags = normalize_tags(request.tags)?;
+    let excerpt = build_excerpt(content);
+    let slug = unique_topic_slug(&state, title).await?;
+
+    let row = sqlx::query_as::<_, TopicRow>(
+        r"
+        WITH inserted AS (
+            INSERT INTO topics (slug, category_slug, author_id, title, excerpt, content, tags)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING *
+        )
+        SELECT t.slug, t.title, t.excerpt, c.slug AS category_slug, c.name AS category_name,
+               c.icon AS category_icon,
+               u.persona_name AS author_name, u.role AS author_role,
+               u.avatar_url AS author_avatar_url,
+               t.tags, t.created_at, t.last_activity_at, t.views, t.pinned, t.hot,
+               0::bigint AS reply_count
+        FROM inserted t
+        JOIN categories c ON c.slug = t.category_slug
+        JOIN users u ON u.id = t.author_id
+        ",
+    )
+    .bind(&slug)
+    .bind(&category)
+    .bind(user.id)
+    .bind(title)
+    .bind(&excerpt)
+    .bind(content)
+    .bind(&tags)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(row.into_summary())))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/forum/topics/{slug}/replies",
+    tag = "forum",
+    params(("slug" = String, Path, description = "Topic slug")),
+    responses(
+        (status = 201, description = "Reply created"),
+        (status = 401, description = "Authentication required"),
+        (status = 404, description = "Topic not found"),
+        (status = 400, description = "Invalid reply data or muted user")
+    )
+)]
+async fn create_reply(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(request): Json<CreateReplyRequest>,
+) -> Result<(StatusCode, Json<Reply>), AppError> {
+    let user = require_user(&state, &headers).await?;
+    ensure_not_muted(&state, &user).await?;
+
+    let content = request.content.trim();
+    if content.is_empty() || content.chars().count() > 20_000 {
+        return Err(AppError::bad_request(
+            "回复长度需要在 1 到 20000 个字符之间。",
+        ));
+    }
+
+    let mut transaction = state.db.begin().await?;
+    let topic_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM topics WHERE slug = $1 AND deleted_at IS NULL",
+    )
+    .bind(&slug)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let (id, created_at) = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
+        "INSERT INTO replies (topic_id, author_id, content)
+         VALUES ($1, $2, $3)
+         RETURNING id, created_at",
+    )
+    .bind(topic_id)
+    .bind(user.id)
+    .bind(content)
+    .fetch_one(&mut *transaction)
+    .await?;
+
+    sqlx::query("UPDATE topics SET last_activity_at = now() WHERE id = $1")
+        .bind(topic_id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(Reply {
+            id,
+            content: content.to_owned(),
+            likes: 0,
+            created_at,
+            author: Author {
+                name: user.persona_name,
+                role: user.role,
+                avatar_url: user.avatar_url,
+            },
+        }),
+    ))
+}
+
+async fn ensure_not_muted(state: &AppState, user: &AuthUser) -> Result<(), AppError> {
+    let mute = sqlx::query_as::<_, (String, Option<DateTime<Utc>>)>(
+        r"
+        SELECT reason, expires_at
+        FROM forum_mutes
+        WHERE steam_id64 = $1
+          AND lifted_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
+        ORDER BY created_at DESC
+        LIMIT 1
+        ",
+    )
+    .bind(&user.steam_id64)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if let Some((reason, expires_at)) = mute {
+        let message = match expires_at {
+            Some(expires_at) => format!(
+                "您已被论坛禁言：{reason}（解除时间：{}）",
+                expires_at.format("%Y-%m-%d %H:%M UTC")
+            ),
+            None => format!("您已被论坛禁言：{reason}"),
+        };
+        return Err(AppError::bad_request(message));
+    }
+
+    Ok(())
+}
+
+fn build_excerpt(content: &str) -> String {
+    let compact = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut excerpt = compact.chars().take(180).collect::<String>();
+    if compact.chars().count() > 180 {
+        excerpt.push('…');
+    }
+    excerpt
+}
+
+fn normalize_tags(tags: Vec<String>) -> Result<Vec<String>, AppError> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+
+    for tag in tags {
+        let tag = tag.trim().trim_start_matches('#').trim();
+        if tag.is_empty() {
+            continue;
+        }
+        if tag.chars().count() > 24 {
+            return Err(AppError::bad_request("单个标签不能超过 24 个字符。"));
+        }
+        if seen.insert(tag.to_lowercase()) {
+            normalized.push(tag.to_owned());
+        }
+    }
+
+    if normalized.len() > 5 {
+        return Err(AppError::bad_request("最多只能添加 5 个标签。"));
+    }
+
+    Ok(normalized)
+}
+
+async fn unique_topic_slug(state: &AppState, title: &str) -> Result<String, AppError> {
+    let mut base = String::new();
+    let mut pending_separator = false;
+    for character in title.chars() {
+        if character.is_ascii_alphanumeric() {
+            if pending_separator && !base.is_empty() {
+                base.push('-');
+            }
+            pending_separator = false;
+            base.push(character.to_ascii_lowercase());
+        } else {
+            pending_separator = true;
+        }
+    }
+    if base.is_empty() {
+        base.push_str("topic");
+    }
+    let base = base.chars().take(48).collect::<String>();
+
+    for _ in 0..5 {
+        let suffix = Uuid::new_v4().simple().to_string();
+        let slug = format!("{base}-{}", &suffix[..8]);
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM topics WHERE slug = $1)")
+                .bind(&slug)
+                .fetch_one(&state.db)
+                .await?;
+        if !exists {
+            return Ok(slug);
+        }
+    }
+
+    Err(AppError::Conflict)
+}
+
 #[derive(Debug, FromRow)]
 struct TopicDetailRow {
     slug: String,
@@ -247,6 +519,31 @@ struct TopicDetailRow {
     hot: bool,
     reply_count: i64,
     content: String,
+}
+
+impl TopicRow {
+    fn into_summary(self) -> TopicSummary {
+        TopicSummary {
+            slug: self.slug,
+            title: self.title,
+            excerpt: self.excerpt,
+            category_slug: self.category_slug,
+            category_name: self.category_name,
+            category_icon: self.category_icon,
+            author: Author {
+                name: self.author_name,
+                role: self.author_role,
+                avatar_url: self.author_avatar_url,
+            },
+            tags: self.tags,
+            created_at: self.created_at,
+            last_activity_at: self.last_activity_at,
+            views: self.views,
+            pinned: self.pinned,
+            hot: self.hot,
+            reply_count: self.reply_count,
+        }
+    }
 }
 
 impl TopicDetailRow {
@@ -331,29 +628,7 @@ pub(crate) async fn fetch_topics(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| TopicSummary {
-            slug: row.slug,
-            title: row.title,
-            excerpt: row.excerpt,
-            category_slug: row.category_slug,
-            category_name: row.category_name,
-            category_icon: row.category_icon,
-            author: Author {
-                name: row.author_name,
-                role: row.author_role,
-                avatar_url: row.author_avatar_url,
-            },
-            tags: row.tags,
-            created_at: row.created_at,
-            last_activity_at: row.last_activity_at,
-            views: row.views,
-            pinned: row.pinned,
-            hot: row.hot,
-            reply_count: row.reply_count,
-        })
-        .collect())
+    Ok(rows.into_iter().map(TopicRow::into_summary).collect())
 }
 
 #[utoipa::path(get, path = "/api/v1/forum/active-users", tag = "forum", responses((status = 200, description = "Recently active forum authors")))]
@@ -391,4 +666,41 @@ async fn list_active_users(
             })
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excerpt_collapses_whitespace_and_truncates() {
+        assert_eq!(
+            build_excerpt("第一行\n\n第二行  第三行"),
+            "第一行 第二行 第三行"
+        );
+
+        let long = "字".repeat(200);
+        let excerpt = build_excerpt(&long);
+        assert_eq!(excerpt.chars().count(), 181);
+        assert!(excerpt.ends_with('…'));
+    }
+
+    #[test]
+    fn tags_are_trimmed_deduplicated_and_limited() {
+        let tags = normalize_tags(vec![
+            " 地图 ".to_owned(),
+            "#地图".to_owned(),
+            "连跳".to_owned(),
+            "   ".to_owned(),
+        ])
+        .expect("tags should be valid");
+        assert_eq!(tags, vec!["地图", "连跳"]);
+
+        let too_many = normalize_tags(
+            (0..6)
+                .map(|index| format!("tag-{index}"))
+                .collect::<Vec<_>>(),
+        );
+        assert!(too_many.is_err());
+    }
 }
