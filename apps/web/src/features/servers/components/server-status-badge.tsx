@@ -16,7 +16,7 @@ export function ServerStatusBadge({ status }: { status: ServerStatus }) {
     return (
       <Badge variant="warning">
         <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />
-        休眠/待上报
+        休眠
       </Badge>
     );
   }

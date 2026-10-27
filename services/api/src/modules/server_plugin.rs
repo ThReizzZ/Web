@@ -751,7 +751,11 @@ pub fn spawn_stale_sweeper(db: PgPool, skip_rcon_servers: bool) {
             match sweep_stale(&db, skip_rcon_servers).await {
                 Ok((0, 0)) => {}
                 Ok((servers, players)) => {
-                    tracing::info!(servers, players, "marked stale plugin servers offline");
+                    tracing::info!(
+                        servers,
+                        players,
+                        "marked stale plugin servers offline or hibernating"
+                    );
                 }
                 Err(error) => {
                     tracing::warn!(%error, "failed to sweep stale plugin servers");
@@ -1030,11 +1034,12 @@ async fn sweep_stale(db: &PgPool, skip_rcon_servers: bool) -> Result<(u64, u64),
               OR s.last_reported_at < now() - make_interval(secs => $1::double precision)
           )
           AND (
-              s.status NOT IN ('maintenance', 'offline')
+              s.status NOT IN ('maintenance', 'offline', 'hibernating')
               OR s.player_count IS DISTINCT FROM 0
               OR EXISTS (
                   SELECT 1 FROM server_players p WHERE p.server_id = s.id
               )
+              OR (s.status = 'offline' AND s.last_reported_at IS NOT NULL)
           )
         FOR UPDATE OF s
         ",
@@ -1054,6 +1059,7 @@ async fn sweep_stale(db: &PgPool, skip_rcon_servers: bool) -> Result<(u64, u64),
         UPDATE servers
         SET status = CASE
                 WHEN status = 'maintenance' THEN status
+                WHEN coalesce(player_count, 0) = 0 THEN 'hibernating'
                 ELSE 'offline'
             END,
             player_count = 0,
