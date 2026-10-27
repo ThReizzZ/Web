@@ -1,8 +1,11 @@
 const KZ_TIMER_API = "https://kztimerglobal.com/api/v2.0";
 const KZ_TIMER_TIMEOUT_MS = 15_000;
 const KZ_TIMER_REVALIDATE_SECONDS = 600;
+const KZ_MAP_REVALIDATE_SECONDS = 3600;
 const KZ_RECORD_LIMIT = 9999;
+const KZ_MAP_LIMIT = 9999;
 const KZ_RECENT_MAP_LIMIT = 8;
+const KZ_INCOMPLETE_PAGE_SIZE = 30;
 
 const STEAM_ID64_OFFSET = 76561197960265728n;
 
@@ -14,10 +17,28 @@ export const KZ_MODES = [
 
 export type KzMode = (typeof KZ_MODES)[number]["value"];
 
+export const KZ_MAP_VIEWS = [
+  { value: "completed", label: "已完成地图" },
+  { value: "incomplete", label: "未完成地图" },
+] as const;
+
+export type KzMapView = (typeof KZ_MAP_VIEWS)[number]["value"];
+
 export function parseKzMode(value: string | string[] | undefined): KzMode {
   const candidate = Array.isArray(value) ? value[0] : value;
   const matched = KZ_MODES.find((mode) => mode.value === candidate);
   return matched?.value ?? "kz_timer";
+}
+
+export function parseKzMapView(value: string | string[] | undefined): KzMapView {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  return candidate === "incomplete" ? "incomplete" : "completed";
+}
+
+export function parseKzPage(value: string | string[] | undefined): number {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  const page = Number.parseInt(candidate ?? "1", 10);
+  return Number.isFinite(page) && page > 0 ? page : 1;
 }
 
 interface KzTimerRecord {
@@ -31,6 +52,17 @@ interface KzTimerRank {
   finishes: number;
   points: number;
   rating: number;
+}
+
+interface KzTimerMap {
+  id: number;
+  name: string;
+  difficulty: number;
+}
+
+interface KzTimerRecordFilter {
+  map_id: number;
+  mode_id: number;
 }
 
 interface MutableMapProgress {
@@ -49,6 +81,12 @@ export interface KzMapProgress {
   lastPlayedAt: string;
 }
 
+export interface KzIncompleteMap {
+  mapId: number;
+  mapName: string;
+  difficulty: number;
+}
+
 export interface KzPlayerMaps {
   uniqueMaps: number;
   proMaps: number;
@@ -57,6 +95,11 @@ export interface KzPlayerMaps {
   points: number | null;
   rating: number | null;
   recentMaps: KzMapProgress[];
+  incompleteMaps: KzIncompleteMap[];
+  incompleteCount: number;
+  incompletePage: number;
+  incompletePageCount: number;
+  totalMapLibrary: number | null;
 }
 
 function steamId64ToSteamId2(steamId64: string): string {
@@ -118,6 +161,42 @@ async function fetchKzTimerRank(steamId64: string, mode: KzMode): Promise<KzTime
   return ranks[0] ?? null;
 }
 
+async function fetchKzTimerMaps(): Promise<KzTimerMap[]> {
+  const query = new URLSearchParams({
+    is_validated: "true",
+    limit: String(KZ_MAP_LIMIT),
+  });
+  const response = await fetch(`${KZ_TIMER_API}/maps?${query.toString()}`, {
+    headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
+    next: { revalidate: KZ_MAP_REVALIDATE_SECONDS },
+    signal: AbortSignal.timeout(KZ_TIMER_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`KZ:GO map library request failed with ${response.status}`);
+  }
+  return (await response.json()) as KzTimerMap[];
+}
+
+async function fetchKzTimerRecordFilters(mode: KzMode): Promise<KzTimerRecordFilter[]> {
+  const modeId = KZ_MODES.find((item) => item.value === mode)?.rankModeId;
+  if (!modeId) {
+    return [];
+  }
+  const query = new URLSearchParams({
+    mode_ids: String(modeId),
+    limit: String(KZ_MAP_LIMIT),
+  });
+  const response = await fetch(`${KZ_TIMER_API}/record_filters?${query.toString()}`, {
+    headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
+    next: { revalidate: KZ_MAP_REVALIDATE_SECONDS },
+    signal: AbortSignal.timeout(KZ_TIMER_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`KZ:GO record filter request failed with ${response.status}`);
+  }
+  return (await response.json()) as KzTimerRecordFilter[];
+}
+
 function mergeRecords(
   maps: Map<number, MutableMapProgress>,
   records: KzTimerRecord[],
@@ -151,16 +230,20 @@ function mergeRecords(
 export async function fetchKzgoPlayerMaps(
   steamId64: string,
   mode: KzMode,
+  view: KzMapView,
+  page: number,
 ): Promise<KzPlayerMaps | null> {
   if (!/^\d{17}$/.test(steamId64)) {
     return null;
   }
 
   try {
-    const [rankResult, proResult, tpResult] = await Promise.allSettled([
+    const [rankResult, proResult, tpResult, mapResult, filterResult] = await Promise.allSettled([
       fetchKzTimerRank(steamId64, mode),
       fetchKzTimerRecords(steamId64, false, mode),
       fetchKzTimerRecords(steamId64, true, mode),
+      view === "incomplete" ? fetchKzTimerMaps() : Promise.resolve(null),
+      view === "incomplete" ? fetchKzTimerRecordFilters(mode) : Promise.resolve(null),
     ]);
     if (proResult.status === "rejected" && tpResult.status === "rejected") {
       return null;
@@ -173,6 +256,45 @@ export async function fetchKzgoPlayerMaps(
     const maps = new Map<number, MutableMapProgress>();
     mergeRecords(maps, proRecords, false);
     mergeRecords(maps, tpRecords, true);
+
+    let incompleteMaps: KzIncompleteMap[] = [];
+    let incompleteCount = 0;
+    let incompletePage = 1;
+    let incompletePageCount = 1;
+    let totalMapLibrary: number | null = null;
+    if (view === "incomplete") {
+      if (
+        mapResult.status !== "fulfilled" ||
+        mapResult.value === null ||
+        filterResult.status !== "fulfilled" ||
+        filterResult.value === null
+      ) {
+        return null;
+      }
+      const modeMapIds = new Set(
+        filterResult.value.map((filter) => filter.map_id).filter((mapId) => mapId > 0),
+      );
+      const library = mapResult.value.filter((map) => modeMapIds.has(map.id));
+      const completedIds = new Set(maps.keys());
+      const allIncomplete = library
+        .filter((map) => !completedIds.has(map.id))
+        .sort(
+          (left, right) =>
+            right.difficulty - left.difficulty ||
+            left.name.localeCompare(right.name, "en", { sensitivity: "base" }),
+        )
+        .map((map) => ({
+          mapId: map.id,
+          mapName: map.name,
+          difficulty: map.difficulty,
+        }));
+      incompleteCount = allIncomplete.length;
+      incompletePageCount = Math.max(1, Math.ceil(incompleteCount / KZ_INCOMPLETE_PAGE_SIZE));
+      incompletePage = Math.min(Math.max(page, 1), incompletePageCount);
+      const start = (incompletePage - 1) * KZ_INCOMPLETE_PAGE_SIZE;
+      incompleteMaps = allIncomplete.slice(start, start + KZ_INCOMPLETE_PAGE_SIZE);
+      totalMapLibrary = library.length;
+    }
 
     const values = [...maps.values()];
     const recentMaps = values
@@ -194,6 +316,11 @@ export async function fetchKzgoPlayerMaps(
       points: rank?.points ?? null,
       rating: rank?.rating ?? null,
       recentMaps,
+      incompleteMaps,
+      incompleteCount,
+      incompletePage,
+      incompletePageCount,
+      totalMapLibrary,
     };
   } catch {
     return null;

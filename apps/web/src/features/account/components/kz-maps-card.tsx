@@ -8,8 +8,10 @@ import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   fetchKzgoPlayerMaps,
+  KZ_MAP_VIEWS,
   KZ_MODES,
   kzgoProfileUrl,
+  type KzMapView,
   type KzMode,
   type KzPlayerMaps,
 } from "@/services/kzgo";
@@ -26,8 +28,18 @@ function formatKzTime(seconds: number): string {
   return `${wholeSeconds}.${fraction}`;
 }
 
-export async function KzMapsCard({ steamId64, mode }: { steamId64: string; mode: KzMode }) {
-  const data = await fetchKzgoPlayerMaps(steamId64, mode);
+export async function KzMapsCard({
+  steamId64,
+  mode,
+  view,
+  page,
+}: {
+  steamId64: string;
+  mode: KzMode;
+  view: KzMapView;
+  page: number;
+}) {
+  const data = await fetchKzgoPlayerMaps(steamId64, mode, view, page);
   const profileUrl = kzgoProfileUrl(steamId64);
   const modeName = KZ_MODES.find((item) => item.value === mode)?.name ?? "KZTimer";
 
@@ -42,7 +54,7 @@ export async function KzMapsCard({ steamId64, mode }: { steamId64: string; mode:
             </CardTitle>
             <CardDescription>暂时无法从 KZ:GO 获取 {modeName} 记录，请稍后刷新。</CardDescription>
           </div>
-          <KzModeSelector mode={mode} />
+          <KzSelectors mode={mode} view={view} />
         </CardHeader>
         <CardContent>
           <Button asChild variant="outline" size="sm">
@@ -56,45 +68,79 @@ export async function KzMapsCard({ steamId64, mode }: { steamId64: string; mode:
     );
   }
 
-  return <KzMapsCardContent data={data} profileUrl={profileUrl} mode={mode} />;
+  return <KzMapsCardContent data={data} profileUrl={profileUrl} mode={mode} view={view} />;
 }
 
-function KzModeSelector({ mode }: { mode: KzMode }) {
+function KzSelectors({ mode, view }: { mode: KzMode; view: KzMapView }) {
   return (
-    <div
-      role="group"
-      aria-label="KZ 模式"
-      className="flex w-fit items-center gap-1 rounded-lg border bg-muted/30 p-1"
-    >
-      {KZ_MODES.map((option) => (
-        <Link
-          key={option.value}
-          href={`/account?kz=${option.value}`}
-          scroll={false}
-          title={option.name}
-          aria-current={option.value === mode ? "page" : undefined}
-          className={cn(
-            "rounded-md px-3 py-1 text-xs font-medium transition-colors",
-            option.value === mode
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {option.label}
-        </Link>
-      ))}
+    <div className="flex flex-wrap items-center gap-2">
+      <div
+        role="group"
+        aria-label="KZ 模式"
+        className="flex w-fit items-center gap-1 rounded-lg border bg-muted/30 p-1"
+      >
+        {KZ_MODES.map((option) => (
+          <Link
+            key={option.value}
+            href={`/account?kz=${option.value}&view=${view}`}
+            scroll={false}
+            title={option.name}
+            aria-current={option.value === mode ? "page" : undefined}
+            className={cn(
+              "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+              option.value === mode
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {option.label}
+          </Link>
+        ))}
+      </div>
+      <div
+        role="group"
+        aria-label="地图完成状态"
+        className="flex w-fit items-center gap-1 rounded-lg border bg-muted/30 p-1"
+      >
+        {KZ_MAP_VIEWS.map((option) => (
+          <Link
+            key={option.value}
+            href={`/account?kz=${mode}&view=${option.value}`}
+            scroll={false}
+            aria-current={option.value === view ? "page" : undefined}
+            className={cn(
+              "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+              option.value === view
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {option.label}
+          </Link>
+        ))}
+      </div>
     </div>
   );
+}
+
+function kzMapPageHref(mode: KzMode, view: KzMapView, page: number): string {
+  const query = new URLSearchParams({ kz: mode, view });
+  if (page > 1) {
+    query.set("page", String(page));
+  }
+  return `/account?${query.toString()}`;
 }
 
 function KzMapsCardContent({
   data,
   profileUrl,
   mode,
+  view,
 }: {
   data: KzPlayerMaps;
   profileUrl: string;
   mode: KzMode;
+  view: KzMapView;
 }) {
   return (
     <Card>
@@ -106,14 +152,15 @@ function KzMapsCardContent({
               KZ 地图记录
             </CardTitle>
             <CardDescription>
-              已过 {data.uniqueMaps.toLocaleString("zh-CN")} 张地图 · 总完成{" "}
-              {data.totalRuns.toLocaleString("zh-CN")} 次
+              {view === "incomplete"
+                ? `未完成 ${data.incompleteCount.toLocaleString("zh-CN")} 张 · 地图库共 ${(data.totalMapLibrary ?? 0).toLocaleString("zh-CN")} 张`
+                : `已过 ${data.uniqueMaps.toLocaleString("zh-CN")} 张地图 · 总完成 ${data.totalRuns.toLocaleString("zh-CN")} 次`}
             </CardDescription>
             {data.points !== null || data.rating !== null ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 {data.points !== null ? (
                   <span>
-                    总点数{" "}
+                    总分数{" "}
                     <span className="font-mono text-sm font-medium text-foreground">
                       {data.points.toLocaleString("zh-CN")}
                     </span>
@@ -137,10 +184,74 @@ function KzMapsCardContent({
             </a>
           </Button>
         </div>
-        <KzModeSelector mode={mode} />
+        <KzSelectors mode={mode} view={view} />
       </CardHeader>
       <CardContent className="space-y-3">
-        {data.recentMaps.length > 0 ? (
+        {view === "incomplete" ? (
+          data.incompleteMaps.length > 0 ? (
+            <>
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>未完成地图</span>
+                <span>
+                  共 {data.incompleteCount.toLocaleString("zh-CN")} 张 · 第 {data.incompletePage}/
+                  {data.incompletePageCount} 页
+                </span>
+              </div>
+              <div className="max-h-96 divide-y overflow-y-auto rounded-xl border">
+                {data.incompleteMaps.map((map) => (
+                  <div
+                    key={map.mapId}
+                    className="flex items-center justify-between gap-3 px-4 py-2.5"
+                  >
+                    <p className="truncate font-mono text-xs sm:text-sm">{map.mapName}</p>
+                    <Badge variant="outline" className="shrink-0">
+                      Tier {map.difficulty}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+              {data.incompletePageCount > 1 ? (
+                <div className="flex items-center justify-between gap-2">
+                  {data.incompletePage > 1 ? (
+                    <Button asChild variant="outline" size="sm">
+                      <Link
+                        href={kzMapPageHref(mode, view, data.incompletePage - 1)}
+                        scroll={false}
+                      >
+                        上一页
+                      </Link>
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" disabled>
+                      上一页
+                    </Button>
+                  )}
+                  <span className="text-[11px] text-muted-foreground">
+                    第 {data.incompletePage} / {data.incompletePageCount} 页
+                  </span>
+                  {data.incompletePage < data.incompletePageCount ? (
+                    <Button asChild variant="outline" size="sm">
+                      <Link
+                        href={kzMapPageHref(mode, view, data.incompletePage + 1)}
+                        scroll={false}
+                      >
+                        下一页
+                      </Link>
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" disabled>
+                      下一页
+                    </Button>
+                  )}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <p className="rounded-xl border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
+              当前地图库中的地图都已完成。
+            </p>
+          )
+        ) : data.recentMaps.length > 0 ? (
           <>
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
               <span>最近完成</span>
@@ -193,7 +304,7 @@ function KzMapsCardContent({
   );
 }
 
-export function KzMapsCardSkeleton({ mode }: { mode: KzMode }) {
+export function KzMapsCardSkeleton({ mode, view }: { mode: KzMode; view: KzMapView }) {
   return (
     <Card>
       <CardHeader className="space-y-4">
@@ -202,7 +313,7 @@ export function KzMapsCardSkeleton({ mode }: { mode: KzMode }) {
           KZ 地图记录
         </CardTitle>
         <CardDescription>正在从 KZ:GO 读取地图记录…</CardDescription>
-        <KzModeSelector mode={mode} />
+        <KzSelectors mode={mode} view={view} />
       </CardHeader>
       <CardContent>
         <div className="space-y-px overflow-hidden rounded-xl border bg-border">
