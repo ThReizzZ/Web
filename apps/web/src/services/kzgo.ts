@@ -114,7 +114,7 @@ export function kzMapCdnImageUrl(mapName: string): string | null {
   if (!/^[A-Za-z0-9_.-]+$/.test(normalized)) {
     return null;
   }
-  return `https://cdn.threi.cn/csgo/map-images/${encodeURIComponent(normalized)}.jpg`;
+  return `https://cdn.threi.cn/csgo/map-images-v1/${encodeURIComponent(normalized)}.jpg`;
 }
 
 export async function fetchKzTimerMapInfo(): Promise<Map<string, KzMapInfo>> {
