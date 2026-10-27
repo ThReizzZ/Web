@@ -17,6 +17,40 @@
 
 ---
 
+## 2026年10月28日 02时35分17秒 取消 basebans 检测并固定接管命令（1.8.1）
+
+### 背景
+
+用户表示会直接删除 basebans，不需要插件检测；检测本身也没有必要，增加启动逻辑。
+
+### 变更内容
+
+- 版本 1.8.1。
+- 删除 `FindPluginByFile("basebans.smx")` / `GetPluginStatus` 检测。
+- `sm_ban` / `sm_addban` / `sm_unban` / `sm_banip` / `sm_unbanip` 现在**始终注册**，
+  运行时和启动时都不再检查 basebans。
+- 安装说明改为：覆盖 1.8.1 后先不要 reload，先删除/卸载 basebans，再
+  `sm plugins reload ThRei_Players`，避免同名命令冲突。
+- 纯插件封禁、即时解封、连接时自定义提示、`configs/threi_bans.cfg` 均沿用 1.8.0。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+
+### 插件包
+
+- `ThRei_Players-1.8.1`：`/home/threi/ThRei_Players-1.8.1/`、`.zip`、`.tar.gz`，并复制到
+  `/mnt/c/Users/15155/Downloads/`。
+- `.smx` SHA-256：`f193dbb1c3f4ff92e8fabcb43a26de410d481181ec98072bea7102c5a79291d6`。
+
+### 测试与结果
+
+- SourcePawn Compiler 1.11.0.6970 编译通过，无警告。
+- 未执行真实游戏服务器测试；需要用户删除 basebans 后安装 1.8.1 验证。
+- 无网站/API 变更。
+
 ## 2026年10月28日 02时32分15秒 纯插件封禁与脱离 basebans（1.8.0）
 
 ### 背景

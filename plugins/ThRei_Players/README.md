@@ -47,8 +47,8 @@ sm_threi_status
 - 封禁立即生效，解封后立即可以重新连接；
 - 重连时显示我们的 `sm_threi_ban_kick_message` 和原因，而不是 Valve 的
   “您已被禁止使用此服务器”；
-- basebans 不再是运行依赖；卸载 `basebans.smx` 并重载插件后，会自动注册
-  `sm_ban` / `sm_addban` / `sm_unban` / `sm_banip` / `sm_unbanip` 兼容命令。
+- 1.8.1 起不再检测 basebans，始终注册 `sm_ban` / `sm_addban` / `sm_unban` /
+  `sm_banip` / `sm_unbanip`。请直接删除 `basebans.smx`，避免命令重复注册。
 
 1.7.0 新增 `sm_threi_*` 封禁命令和网站分组解封；1.7.1 支持 SteamID64/2/3；1.7.2 修复
 非法 UTF-8 与 4xx 队列堵塞；1.7.3 支持不加引号的 SteamID2/3 参数。1.6.1 增加了网站
@@ -56,7 +56,7 @@ sm_threi_status
 `/plugin/actions?wait=20` 长轮询，新指令通常 1 秒内到达；旧 API 会返回 404，此时插件仍会
 上报状态，但不会执行访问控制。
 
-> 1.8.0 的封禁只存在于插件和 `configs/threi_bans.cfg` 中；插件未加载时封禁不会生效。
+> 1.8.1 的封禁只存在于插件和 `configs/threi_bans.cfg` 中；插件未加载时封禁不会生效。
 > 网站仍然是权威来源，插件会定期从访问快照刷新 SteamID 封禁。
 
 ## 获取服务器令牌
@@ -249,14 +249,13 @@ CS:GO 的 `sv_hibernate_when_empty` 会在空服时暂停游戏帧与 SourceMod 
 `sm_threi_ban`、`sm_threi_addban`、`sm_threi_unban`、`sm_threi_banip`、`sm_threi_unbanip`
 需要 `ADMFLAG_BAN`；`sm_threi_report`、`sm_threi_status` 需要 `ADMFLAG_ROOT`。
 
-1.8.0 可以卸载 `basebans.smx`：插件启动时检测到 basebans 未加载，会注册
-`sm_ban` / `sm_addban` / `sm_unban` / `sm_banip` / `sm_unbanip` 兼容命令；如果 basebans
-仍在运行，则只注册 `sm_threi_*`，不会冲突。卸载 basebans 后需要
-`sm plugins reload ThRei_Players` 让兼容命令生效。
+1.8.1 起不再检测 basebans，始终注册 `sm_ban` / `sm_addban` / `sm_unban` / `sm_banip` /
+`sm_unbanip`。请先删除 `basebans.smx`，否则两个插件会争用同名命令并产生注册错误。删除后
+执行 `sm plugins reload ThRei_Players` 即可。
 
 ### 封禁行为
 
-- 1.8.0 的封禁只写入插件内存和 `configs/threi_bans.cfg`，**不写 basebans/引擎封禁**。
+- 1.8.1 的封禁只写入插件内存和 `configs/threi_bans.cfg`，**不写 basebans/引擎封禁**。
   玩家连接时由 `CheckClientAccess` 用 `sm_threi_ban_kick_message` + 具体原因踢出，因此重连
   也能看到自定义提示。
 - `sm_threi_ban` / `sm_threi_addban` 立即写插件封禁、保存文件、踢出在线目标，并异步上报
@@ -438,7 +437,7 @@ POST /api/v1/plugin/actions/{uuid}/ack
   解封插件来源记录。令牌泄露等同于允许伪造封禁/解封，应立即在管理后台轮换。
 - 令牌使用 `FCVAR_PROTECTED | FCVAR_UNLOGGED`，不会下发给游戏客户端。
 - 定期在管理后台重新生成令牌，尤其是在管理员变动或配置文件泄露后。
-- 1.8.0 的本地封禁保存在 `configs/threi_bans.cfg`，文件损坏会导致插件封禁失效；建议纳入
+- 1.8.1 的本地封禁保存在 `configs/threi_bans.cfg`，文件损坏会导致插件封禁失效；建议纳入
   服务器备份，并限制文件写权限。插件未加载时纯插件封禁不会生效。
 - 游戏服务器只需要能访问 threi 的 API 地址；白名单、踢出与封禁不依赖 RCON，也不要求开放
   A2S/RCON 端口。
@@ -516,7 +515,7 @@ sm_threi_instance 10001 "该服务器的令牌"
 
 1.8.0+ 会在网站解除「游戏服务器封禁」时自动下发 `unban`，删除插件封禁文件/缓存中的
 SteamID 条目，玩家无需等待引擎解封即可重连；网站账号/IP 封禁也会按分组解除。如果仍然
-被封，确认 `sm_threi_status` 显示 `version=1.8.0`，并确认解除的是「游戏服务器封禁」而不是
+被封，确认 `sm_threi_status` 显示 `version=1.8.1`，并确认解除的是「游戏服务器封禁」而不是
 只解除了网站账号/IP 封禁。
 
 如果是从 1.7.x 升级，旧版写入的引擎封禁会在首次快照加载时清理；basebans 自己遗留的、
@@ -528,12 +527,12 @@ sm_unban "STEAM_1:1:12345678"
 sm_unban "[U:1:24691356]"
 ```
 
-1.8.0 安装并卸载 basebans 后，直接使用 `sm_unban` / `sm_threi_unban` 即可，不再依赖
+1.8.1 安装并卸载 basebans 后，直接使用 `sm_unban` / `sm_threi_unban` 即可，不再依赖
 `sm_banlist`；网站上的账号封禁、服务器封禁和 IP 封禁仍需分别解除。
 
 **游戏内封禁没有出现在网站**
 
-- 确认插件版本为 1.8.0 或更高：`sm_threi_status` 应显示 `version=1.8.0`。网站解封和分组
+- 确认插件版本为 1.8.1 或更高：`sm_threi_status` 应显示 `version=1.8.1`。网站解封和分组
   清理需要 1.7.0+；1.6.0 只支持封禁回传。
 - `sm_threi_ban` / `sm_threi_addban` / `sm_threi_banip` 会主动上报；通过 `BanClient`
   执行的封禁（如 basebans `sm_ban`）会经 `OnBanClient` 回传；控制台原始 `banid` /

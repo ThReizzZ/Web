@@ -39,6 +39,8 @@
 - `ThRei_Players` 1.8.0 改成纯插件封禁：不再写 basebans/引擎封禁，封禁持久化到
   `configs/threi_bans.cfg`，连接时用自定义提示踢出；解封删除条目后立即可以重连。basebans
   未加载时自动接管 `sm_ban` / `sm_unban` / `sm_banip` 等命令。代价是插件未加载时封禁失效。
+- `ThRei_Players` 1.8.1 取消 basebans 检测，始终注册 `sm_ban` / `sm_addban` / `sm_unban` /
+  `sm_banip` / `sm_unbanip`；安装前直接删除 `basebans.smx` 即可。
 - 白名单改为全服共享：玩家申请一次、管理员审核一次，所有开启白名单的服务器通用；
   新增 `global_whitelist` 并迁移旧的 `server_whitelist` 数据。
 - 游戏服务器封禁默认作用于全部服务器（`scope: "global"`），封禁弹窗可选择“仅本服”；

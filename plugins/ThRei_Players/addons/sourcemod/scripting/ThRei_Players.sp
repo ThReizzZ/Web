@@ -27,7 +27,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.8.0"
+#define PLUGIN_VERSION "1.8.1"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -188,22 +188,18 @@ public void OnPluginStart() {
     RegAdminCmd("sm_threi_unbanip", Command_UnbanIp, ADMFLAG_BAN,
         "解封 IP 并同步网站：sm_threi_unbanip <IP>");
 
-    // When basebans is gone, take over its command names so !ban / sm_ban
-    // continue to work and use the plugin-only ban store.
-    Handle basebans = FindPluginByFile("basebans.smx");
-    bool basebansRunning = basebans != null && GetPluginStatus(basebans) == Plugin_Running;
-    if (!basebansRunning) {
-        RegAdminCmd("sm_ban", Command_Ban, ADMFLAG_BAN,
-            "封禁玩家：sm_ban <目标|SteamID> <分钟> [原因]");
-        RegAdminCmd("sm_addban", Command_AddBan, ADMFLAG_BAN,
-            "按 SteamID 封禁：sm_addban <SteamID> <分钟> [原因]");
-        RegAdminCmd("sm_unban", Command_Unban, ADMFLAG_BAN,
-            "解封：sm_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
-        RegAdminCmd("sm_banip", Command_BanIp, ADMFLAG_BAN,
-            "封禁 IP：sm_banip <IP> <分钟> [原因]");
-        RegAdminCmd("sm_unbanip", Command_UnbanIp, ADMFLAG_BAN,
-            "解封 IP：sm_unbanip <IP>");
-    }
+    // basebans is intentionally removed on these servers; take over its
+    // command names so !ban / sm_ban use the plugin-only ban store.
+    RegAdminCmd("sm_ban", Command_Ban, ADMFLAG_BAN,
+        "封禁玩家：sm_ban <目标|SteamID> <分钟> [原因]");
+    RegAdminCmd("sm_addban", Command_AddBan, ADMFLAG_BAN,
+        "按 SteamID 封禁：sm_addban <SteamID> <分钟> [原因]");
+    RegAdminCmd("sm_unban", Command_Unban, ADMFLAG_BAN,
+        "解封：sm_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
+    RegAdminCmd("sm_banip", Command_BanIp, ADMFLAG_BAN,
+        "封禁 IP：sm_banip <IP> <分钟> [原因]");
+    RegAdminCmd("sm_unbanip", Command_UnbanIp, ADMFLAG_BAN,
+        "解封 IP：sm_unbanip <IP>");
 
     float now = GetGameTime();
     g_fNextReport = now + 5.0;
