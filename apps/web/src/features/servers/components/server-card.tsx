@@ -29,6 +29,7 @@ export function ServerCard({
       <div className="relative aspect-[16/9] overflow-hidden bg-slate-900">
         <ServerMapImage
           src={server.mapImage}
+          fallbackSrc={server.mapImageFallback}
           alt={`${server.map} 地图预览`}
           className="transition-transform duration-700 hover:scale-[1.03]"
         />

@@ -16,7 +16,11 @@ export function ServerListRow({ server }: { server: KzServer }) {
     <Card data-server-id={server.id} className="gap-0 overflow-hidden py-0">
       <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-stretch">
         <div className="relative h-32 w-full shrink-0 overflow-hidden rounded-lg bg-slate-900 sm:h-24 sm:w-44">
-          <ServerMapImage src={server.mapImage} alt={`${server.map} 地图预览`} />
+          <ServerMapImage
+            src={server.mapImage}
+            fallbackSrc={server.mapImageFallback}
+            alt={`${server.map} 地图预览`}
+          />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 to-transparent" />
           <div className="absolute bottom-2 left-2 font-mono text-xs font-medium text-white">
             {server.map}

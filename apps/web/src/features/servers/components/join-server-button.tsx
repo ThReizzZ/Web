@@ -60,7 +60,11 @@ export function JoinServerButton({
       >
         <div className="relative">
           <div className="relative h-36 overflow-hidden rounded-t-2xl">
-            <ServerMapImage src={server.mapImage} alt={`${server.map} 地图`} />
+            <ServerMapImage
+              src={server.mapImage}
+              fallbackSrc={server.mapImageFallback}
+              alt={`${server.map} 地图`}
+            />
             <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 to-transparent" />
             <div className="absolute inset-x-0 top-0 flex items-start justify-between p-4">
               <ServerStatusBadge status={server.status} />

@@ -23,7 +23,7 @@ import type {
 } from "@/features/forum/types";
 import type { KzServer } from "@/features/servers/data/servers";
 import type { ApiClient } from "@/lib/api/client";
-import { fetchKzTimerMapInfo, kzMapImageUrl } from "@/services/kzgo";
+import { fetchKzTimerMapInfo, kzMapCdnImageUrl, kzMapImageUrl } from "@/services/kzgo";
 
 export interface CommunityStats {
   members: number;
@@ -63,10 +63,13 @@ export async function fetchServers(client: ApiClient): Promise<KzServer[]> {
 
   return servers.map((server) => {
     const tier = mapInfo.get(server.map.trim().toLowerCase())?.difficulty ?? null;
+    const proxyImage = kzMapImageUrl(server.map) || "";
+    const cdnImage = kzMapCdnImageUrl(server.map) || "";
     return {
       ...server,
       mapTier: tier,
-      mapImage: server.mapImage || kzMapImageUrl(server.map) || "",
+      mapImage: server.mapImage || cdnImage || proxyImage,
+      mapImageFallback: proxyImage,
     };
   });
 }

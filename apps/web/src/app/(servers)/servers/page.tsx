@@ -50,6 +50,7 @@ export default async function ServersPage() {
       <section className="relative overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 text-white">
         <ServerMapImage
           src={featured?.mapImage ?? ""}
+          fallbackSrc={featured?.mapImageFallback}
           alt=""
           loading="eager"
           className="opacity-45"
