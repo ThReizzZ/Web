@@ -53,7 +53,10 @@ export interface AdminAccount {
 
 export interface Ban {
   id: string;
-  steamId64: string;
+  banType: "steam" | "ip";
+  steamId64: string | null;
+  ipAddress: string | null;
+  sourceBanId: string | null;
   playerName: string;
   avatarUrl: string | null;
   reason: string;
@@ -68,7 +71,7 @@ export interface Ban {
 
 export interface WhitelistApplication {
   id: string;
-  serverId: string;
+  serverId: string | null;
   serverName: string;
   steamId64: string;
   playerName: string;
@@ -82,7 +85,7 @@ export interface WhitelistApplication {
 }
 
 export interface WhitelistEntry {
-  serverId: string;
+  serverId: string | null;
   serverName: string;
   steamId64: string;
   playerName: string;
@@ -225,6 +228,7 @@ export interface AdminServerPlayer {
   steamId64: string;
   name: string;
   avatarUrl: string | null;
+  ipAddress: string | null;
   connectedAt: string;
   lastSeenAt: string;
 }
@@ -235,8 +239,9 @@ export interface PluginTokenResponse {
 
 export interface ServerBan {
   id: string;
-  serverId: string;
+  serverId: string | null;
   serverName: string;
+  scope: "global" | "server";
   steamId64: string;
   playerName: string;
   avatarUrl: string | null;

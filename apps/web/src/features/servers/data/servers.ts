@@ -45,6 +45,58 @@ export function getMaxPlayerTotal(servers: KzServer[]): number {
   return servers.reduce((total, server) => total + server.maxPlayers, 0);
 }
 
+export type ServerSortKey = "default" | "players" | "name" | "latency" | "status";
+
+const STATUS_SORT_ORDER: Record<ServerStatus, number> = {
+  online: 0,
+  hibernating: 1,
+  maintenance: 2,
+  offline: 3,
+};
+
+function compareNames(left: KzServer, right: KzServer): number {
+  return left.name.localeCompare(right.name, "zh-CN", {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+/** Returns a new array; "default" keeps the API order (featured first, then name). */
+export function sortServers(servers: KzServer[], sort: ServerSortKey): KzServer[] {
+  if (sort === "default") {
+    return servers;
+  }
+
+  const sorted = [...servers];
+  switch (sort) {
+    case "players":
+      sorted.sort(
+        (left, right) =>
+          getOnlinePlayerCount(right) - getOnlinePlayerCount(left) || compareNames(left, right),
+      );
+      break;
+    case "name":
+      sorted.sort(compareNames);
+      break;
+    case "latency":
+      sorted.sort(
+        (left, right) =>
+          (left.latencyMs ?? Number.POSITIVE_INFINITY) -
+            (right.latencyMs ?? Number.POSITIVE_INFINITY) || compareNames(left, right),
+      );
+      break;
+    case "status":
+      sorted.sort(
+        (left, right) =>
+          STATUS_SORT_ORDER[left.status] - STATUS_SORT_ORDER[right.status] ||
+          getOnlinePlayerCount(right) - getOnlinePlayerCount(left) ||
+          compareNames(left, right),
+      );
+      break;
+  }
+  return sorted;
+}
+
 export function searchServers(servers: KzServer[], query: string): KzServer[] {
   const normalized = query.trim().toLowerCase();
   if (!normalized) {

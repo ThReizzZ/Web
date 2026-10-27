@@ -17,6 +17,457 @@
 
 ---
 
+## 2026年10月27日 14时56分40秒 自动 IP 封禁生产部署与验证
+
+### 背景
+
+用户在完成本地实现后要求部署网站/API 部分；游戏服务器插件由用户自行覆盖为 1.6.0。
+
+### 变更内容
+
+- 通过 SSH 上传 `threi-update-20261027.tar.gz` 并解压到 `/home/web/threi`；未覆盖 `.env`、
+  `compose.override.yaml`、`services/api/Dockerfile.deploy`、`services/api/.cargo/config.toml`。
+- 构建并切换 `threi-api:0.1.0`、`threi-web:0.1.0` 镜像。
+- 执行 `docker compose run --rm migrate`，应用 `20261027180000_server_player_ips.sql`。
+- 执行 `docker compose up -d --wait`，`api`、`web`、`nginx`、`postgres`、`redis` 均健康。
+
+### 生产验证
+
+- `/health/ready` 返回 `{"status":"ok","checks":{"database":"ok","redis":"ok"}}`。
+- `https://threi.cn/` 返回 200；新接口无令牌返回 401；不存在的旧路径行为已变为新路由。
+- 用真实服务器插件令牌调用 `POST /api/v1/plugin/ban-report` 返回 204，数据库新增：
+  - 1 条网站 Steam 封禁；
+  - 1 条该服务器游戏封禁；
+  - 1 条自动 IP 封禁（原因前缀“服务器封禁自动关联 IP”）。
+- 通过临时管理员 magic-link 调用 `POST /admin/bans`（`banType=steam`）返回 200，数据库新增
+  1 条 Steam 封禁和 1 条自动 IP 封禁。
+- 所有测试封禁、临时用户和会话已清理，最终计数为 0。
+- 部署后的 Web 构建产物包含新的封禁页提示文本；API/Web 日志无 error/panic。
+
+### 未完成
+
+- 游戏服务器仍需安装 `ThRei_Players` 1.6.0；用户表示将自行覆盖 `.smx` 并重载。
+
+## 2026年10月27日 14时33分03秒 自动 IP 封禁与游戏内封禁回传
+
+### 背景
+
+用户要求：玩家被 ban 后自动封禁其 IP；并询问在游戏服务器内封禁玩家是否会同步到网站。
+原实现只有手动 IP 封禁，SteamID 封禁和服务器封禁不会自动创建 IP 封禁；插件只消费网站指令，
+不会把游戏内封禁回传网站。
+
+### 变更内容
+
+#### 自动 IP 封禁
+
+- 抽出 `bans::create_ip_ban`，统一处理手动和自动 IP 封禁：检查已有生效 IP 封禁，写入
+  IP 封禁，自动关联该 IP 下已知的非管理员账号（`source_ban_id` 指向 IP 封禁），删除会话。
+- 网站 SteamID 封禁（`POST /admin/bans` 的 `banType=steam`）创建后查找目标玩家的最近 IP：
+  依次使用 `users.last_login_ip`、有效会话 `sessions.ip_address`、插件上报的
+  `server_players.ip_address`；存在且不等于操作管理员当前 IP 时自动创建 IP 封禁。失败只
+  记录警告，不影响已经创建的 SteamID 封禁。
+- 服务器管理封禁玩家（`POST /admin/servers/{id}/players/{steam_id64}/ban`）在事务删除在线
+  名单前捕获 `server_players.ip_address`，没有时回退 `users.last_login_ip`，随后自动创建
+  IP 封禁；管理员当前 IP 不会被自动封禁。
+- 新增迁移 `20261027180000_server_player_ips.sql`：`server_players.ip_address` 与部分索引。
+
+#### 插件 1.6.0
+
+- `/plugin/report` 的玩家对象新增 `ipAddress`，API 校验 IPv4/IPv6，非法或空值按 `NULL`
+  保存；upsert 时新值优先、旧值保留。
+- 新增 `POST /api/v1/plugin/ban-report`：校验每服务器令牌，写入网站账号封禁（若尚无生效
+  SteamID 封禁）和该服务器的游戏封禁（若尚无生效全服/单服封禁），有 IP 时自动创建 IP 封禁。
+  已有生效封禁时跳过，避免重复。
+- 插件注册 `OnBanClient`，把 `BanClient` / `sm_ban` 封禁异步排队上报；上报失败只写日志，
+  不影响 SourceMod 本地封禁。原始控制台 `banid` / `addip` 不触发该转发；网站下发指令不会
+  回传，避免循环。
+- 服务器管理在线名单显示插件上报的 IP；封禁确认框提示会自动封禁该 IP。
+
+### 涉及文件
+
+- `services/api/migrations/20261027180000_server_player_ips.sql`
+- `services/api/src/modules/bans.rs`
+- `services/api/src/modules/server_admin.rs`
+- `services/api/src/modules/server_plugin.rs`
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+- `docs/API.md`、`docs/ARCHITECTURE.md`、`docs/CHANGELOG.md`、`README.md`
+
+### 数据库与 API 变化
+
+- 迁移：`server_players.ip_address text`；索引 `server_players_ip_idx`。
+- `POST /api/v1/plugin/report` 接受可选 `ipAddress`。
+- 新增 `POST /api/v1/plugin/ban-report`，返回 `204`。
+- SteamID 封禁和服务器封禁的响应不变，但可能额外产生一条 IP 封禁记录。
+
+### 插件包
+
+- 本地包：`/home/threi/ThRei_Players-1.6.0/`、`.zip`、`.tar.gz`，并复制到
+  `/mnt/c/Users/15155/Downloads/`。
+- `.smx` SHA-256：`04da93ba8059197a653823360313456b189268d871cfd7332459edec8b494be0`。
+
+### 测试与结果
+
+- `cargo fmt --all -- --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：47 个单元测试 + 14 个 HTTP 合约测试通过。
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- `npm run build`：通过（退出码 0；本地 WSL 仍打印 Turbopack 缓存 fsync `os error 22` 警告，但页面生成完成）。
+- SourcePawn Compiler 1.11.0.6970 编译插件：通过，无警告。
+- **当时未执行**：生产迁移与部署、真实 PostgreSQL 下的端到端封禁测试。本机没有 PostgreSQL /
+  Docker，编写本条时也没有可用的生产 SSH 凭据；后续已在 14:56 完成部署和验证，见上方条目。
+
+### 部署后验证步骤
+
+1. `docker compose run --rm migrate`，确认 `20261027180000` 成功。
+2. 在游戏服务器安装 `ThRei_Players` 1.6.0，`sm_threi_status` 显示 `version=1.6.0`。
+3. 网站封禁一个测试 SteamID，确认封禁管理出现 IP 封禁。
+4. 在游戏内执行 `sm_ban <测试玩家> 0 测试`，确认网站出现账号封禁、服务器封禁和 IP 封禁。
+5. 清理测试封禁与账号。
+
+## 2026年10月27日 14时14分54秒 IP 封禁与全服白名单
+
+### 背景
+
+用户要求增加 IP 封禁类型：封禁某个 IP 后，该 IP 下登录的账号一同封禁。同时把原来按服务器逐个
+申请的白名单改为全服白名单：玩家申请并通过一次后，所有开启白名单的服务器都可进入。
+
+### 变更内容
+
+#### IP 封禁（网站登录）
+
+- `bans` 新增 `ban_type`（`steam` / `ip`）、`ip_address`、`source_ban_id`；
+  `users` 新增 `last_login_ip`，`sessions` 新增 `ip_address`。
+- 封禁管理新增「封禁类型」选择：SteamID64 或 IP 地址。IP 封禁创建时：
+  - 自动为已知使用该 IP 的非管理员账号写入 SteamID 封禁，`source_ban_id` 指向 IP 封禁；
+  - 删除这些账号的现有会话；
+  - 后续从该 IP 登录的普通账号会在登录时被自动关联封禁并拒绝；
+  - 管理员账号保留恢复通道：管理员从被封 IP 登录会记录警告但不自动封禁。
+- 解除 IP 封禁时，同时解除由它自动生成的账号封禁。
+- 登录 IP 从反向代理头获取：优先非回环 `X-Real-IP`，否则取 `X-Forwarded-For` 最后一个
+  非回环地址（兼容 Caddy → Nginx，降低伪造首项的影响）。
+- IP 封禁只作用于网站登录，不影响游戏服务器封禁；游戏服务器封禁仍由 `server_bans` 管理。
+
+#### 全服白名单
+
+- 新增 `global_whitelist` 表；迁移时把 `server_whitelist` 按 SteamID64 去重合并。
+- `whitelist_applications.server_id` 改为可空；现有 pending 申请统一置空，并保留最早一条，
+  重复 pending 自动标记为 rejected（备注“已合并为全服白名单申请”），再建立
+  `(steam_id64) WHERE status='pending'` 唯一索引。
+- 玩家申请不再选择服务器：提交一次全服申请；审核通过或手动添加都会写入
+  `global_whitelist`，所有开启 `requires_whitelist` 的服务器通用。
+- 插件访问快照的白名单查询改为读取 `global_whitelist`；插件本身无需升级（1.5.0 即可）。
+- 管理面板「白名单审核」改为全服申请/全服授权列表；服务器设置仍保留每台的
+  `requires_whitelist` 开关。
+- 用户中心增加白名单状态：已通过、待审核、可申请；避免重复提交。
+
+### 涉及文件
+
+- `services/api/migrations/20261027170000_ip_bans.sql`
+- `services/api/migrations/20261027171000_global_whitelist.sql`
+- `services/api/src/modules/auth/mod.rs`
+- `services/api/src/modules/bans.rs`
+- `services/api/src/modules/whitelist.rs`
+- `services/api/src/modules/plugin_access.rs`
+- `services/api/src/modules/account.rs`
+- `apps/web/src/features/admin/types.ts`
+- `apps/web/src/features/account/types.ts`
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `apps/web/src/features/admin/components/whitelist-manager.tsx`
+- `apps/web/src/features/admin/components/forum-moderation-manager.tsx`
+- `apps/web/src/features/account/components/whitelist-apply-card.tsx`
+- `apps/web/src/app/(account)/account/page.tsx`
+- `apps/web/src/services/content.ts`
+
+### 数据库与 API 变化
+
+- 迁移 `20261027170000_ip_bans`：`bans` 新列与身份约束、`users.last_login_ip`、
+  `sessions.ip_address` 及索引。
+- 迁移 `20261027171000_global_whitelist`：`global_whitelist` 表、旧白名单迁移、
+  pending 申请归一与唯一索引、`server_whitelist` 标记为 deprecated。
+- `POST /api/v1/admin/bans` body 新增 `banType`（`steam` 默认 / `ip`）与 `ipAddress`；
+  响应新增 `banType`、`ipAddress`、`sourceBanId`。
+- `POST /api/v1/admin/bans/{id}/lift` 对 IP 封禁会联动解除 `source_ban_id` 关联的账号封禁。
+- `POST /api/v1/whitelist/applications` 不再需要 `serverId`；`POST /admin/whitelist`
+  body 不再需要 `serverId`；移除接口改为 `DELETE /admin/whitelist/{steam_id64}`。
+- `GET /api/v1/account` 新增 `whitelist: { whitelisted, pending }`。
+- `GET /api/v1/plugin/access-snapshot` 的白名单来源改为 `global_whitelist`。
+
+### 测试与结果
+
+- `cargo fmt --all -- --check`、`cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：lib 43 项、HTTP 合约 14 项通过（新增 client IP 解析测试）。
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 生产库事务试跑两份迁移后 `ROLLBACK`：成功；pending 申请归一与重复拒绝符合预期。
+- 生产部署：迁移 `20261027170000`、`20261027171000` 成功，api/web 容器 healthy。
+- 一次性管理员会话端到端验证：
+  - 创建/解除测试 IP 封禁：201/204，`ban_type=ip`、`ip_address` 正确；
+  - 临时用户自动关联：IP 封禁 + 关联 Steam 封禁（`source_ban_id` 非空），解除 IP 封禁后
+    两条都变为已解除；
+  - 全服白名单添加/列表/移除：204，条目 `serverId=null`、`serverName=全服`；
+  - 全服白名单审核：通过 204，申请状态 approved，`global_whitelist` 出现记录，移除 204；
+  - 测试用户、申请、封禁记录和临时管理员会话均已清理。
+
+---
+
+## 2026年10月27日 13时52分57秒 服务器排序页支持拖拽
+
+### 背景
+
+线上已有 18 台服务器，逐台点“上移/下移”仍然不够方便；用户要求服务器排序页支持拖动。
+
+### 变更内容
+
+- `ServerOrderManager` 每行左侧新增拖拽手柄（`GripVertical`），使用原生 HTML5
+  drag-and-drop：
+  - `dragstart` 记录拖拽的服务器 ID，并把整行设为拖拽预览；
+  - 拖过其他行时实时交换位置，松开鼠标后进入“有未保存的修改”状态；
+  - 拖拽中的行降低透明度并加主色描边。
+- 保留置顶/上移/下移按钮，作为键盘操作和触屏设备的备用方式。
+- 页面顶部和列表底部都提供“重置/保存顺序”按钮，18 台服务器滚到底部也能直接保存。
+- 页面说明中补充拖拽手柄的使用提示。
+
+### 涉及文件
+
+- `apps/web/src/features/admin/components/server-order-manager.tsx`
+
+### 数据库与 API 变化
+
+- 无；仍然通过 `PUT /api/v1/admin/servers/order` 一次性保存完整顺序。
+
+### 测试与结果
+
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 生产 Docker `docker compose build web`：通过；web 容器重建后 `healthy`。
+- 线上 `/admin/server-order` 未登录返回 307；生产构建产物包含“拖动排序”文案。
+
+---
+
+## 2026年10月27日 13时50分04秒 独立服务器排序页与服务器管理整理
+
+### 背景
+
+上一条记录把上移/下移按钮直接放进了服务器管理列表，用户反馈操作繁琐、面板太乱。改为独立的
+「服务器排序」管理页面，同时整理服务器管理页的操作区。
+
+### 变更内容
+
+- 管理面板导航新增「服务器排序」，路由 `/admin/server-order`。
+- 新页面 `ServerOrderManager`：
+  - 按当前位置显示 `#1`、`#2`…；
+  - 支持置顶、上移、下移，先本地调整，点击「保存顺序」后一次性调用
+    `PUT /api/v1/admin/servers/order`；
+  - 显示“有未保存的修改”，支持重置为已保存顺序；
+  - 停用服务器保留相对位置，但不会出现在公开目录。
+- 服务器管理页移除逐台服务器的排序按钮和 `#序号`，改为顶部「调整顺序」链接。
+- 服务器管理操作区重新分组：
+  - 保留文字按钮「插件配置」「停用/启用」；
+  - RCON 兜底、社区组、白名单管理、删除改为带 Tooltip 的图标按钮，放在同一个分段操作组；
+  - 删除按钮使用危险色，减少整行按钮宽度和视觉噪音。
+
+### 涉及文件
+
+- `apps/web/src/app/(admin)/admin/server-order/page.tsx`（新增）
+- `apps/web/src/features/admin/components/server-order-manager.tsx`（新增）
+- `apps/web/src/features/admin/components/admin-nav.tsx`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+
+### 数据库与 API 变化
+
+- 无新增数据库迁移；复用 `PUT /api/v1/admin/servers/order` 和 `servers.sort_order`。
+
+### 测试与结果
+
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 生产 Docker `docker compose build web`：通过；web 容器重建后 `healthy`。
+- 线上 `/admin/server-order`、`/admin/servers` 未登录均返回 307 跳转登录；`/`、`/servers`
+  返回 200。
+- 生产构建产物包含「服务器排序」「有未保存的修改」「调整顺序」「保存」「置顶」等页面文案。
+
+---
+
+## 2026年10月27日 13时41分36秒 管理面板手动调整服务器顺序
+
+### 背景
+
+上一条记录实现了访客侧的排序下拉，但用户实际想要的是由管理员决定公开目录中的固定顺序：
+在管理面板里把某台服务器移到第一位，它就应该在公开目录排第一。访客侧排序不是这次的重点。
+
+### 变更内容
+
+- 数据库新增 `servers.sort_order`，迁移时按原来的 `featured DESC, name` 顺序回填，
+  保证升级后现有顺序不变；新建服务器自动追加到末尾。
+- 公开 `GET /api/v1/servers` 改为按 `sort_order, name` 返回；公开目录的“默认排序”因此就是
+  管理员设置的顺序。之前加的访客排序下拉仍保留，用户可临时切换其他排序。
+- 管理面板服务器列表新增 `#序号` 和上移/下移按钮；移动后调用新接口
+  `PUT /api/v1/admin/servers/order`，一次提交完整服务器 ID 顺序，事务内写入 `sort_order`。
+- 管理面板服务器列表按 `sort_order, name` 读取，保证与管理面板的上下移动一致。
+- 新服务器插入时 `sort_order = MAX(sort_order) + 1`。
+
+### 涉及文件
+
+- `services/api/migrations/20261027160000_server_sort_order.sql`
+- `services/api/src/modules/servers.rs`
+- `services/api/src/modules/server_admin.rs`
+- `apps/web/src/services/content.ts`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+
+### 数据库与 API 变化
+
+- 新迁移：`servers.sort_order integer NOT NULL DEFAULT 0`，回填旧顺序并建立
+  `(sort_order, name)` 索引。
+- 新端点 `PUT /api/v1/admin/servers/order`，body `{ "serverIds": ["srv-...", ...] }`，
+  按数组顺序写入 `sort_order = 0..n-1`；需要管理员权限，服务器不存在返回 404。
+
+### 测试与结果
+
+- `cargo fmt --all -- --check`、`cargo clippy --all-targets -- -D warnings`、
+  `cargo test`（lib 41 项、HTTP 合约 14 项）：通过。
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 生产部署：已执行。`20261027160000_server_sort_order` 迁移成功，api/web 容器重建并
+  healthy；`servers.sort_order` 已回填为 0..11，公开 `/api/v1/servers` 返回顺序与数据库
+  `ORDER BY sort_order, name` 一致；未登录 `PUT /api/v1/admin/servers/order` 返回 401，
+  `/`、`/servers` 返回 200。
+- 管理面板构建产物中已包含上移/下移按钮与“移动到第 N 位”提示。
+
+---
+
+## 2026年10月27日 13时38分09秒 服务器目录增加排序
+
+### 背景
+
+用户要求给服务器目录增加排序功能。
+
+### 变更内容
+
+- `data/servers.ts` 新增 `ServerSortKey` 和 `sortServers`：
+  - `default` 保持 API 默认顺序（featured 优先、名称）；
+  - `players` 按在线人数从多到少；
+  - `name` 按名称（`zh-CN`、数字感知）排序；
+  - `latency` 按延迟从低到高，未知延迟排最后；
+  - `status` 按在线 > 休眠/待上报 > 维护中 > 离线，再按人数和名称。
+- `ServerDirectory` 在搜索/社区组筛选之后应用排序，再渲染卡片或列表。
+- 筛选栏新增“排序方式”下拉框，选择保存到 `localStorage["threi.servers.sort"]`，
+  刷新或再次访问保持；排序选择不会被“清空筛选”重置。
+
+### 涉及文件
+
+- `apps/web/src/features/servers/data/servers.ts`
+- `apps/web/src/features/servers/components/server-directory.tsx`
+
+### 测试与结果
+
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 生产 Docker `docker compose build web`：通过；web 容器重建后 `healthy`。
+- 线上 `/servers` 返回 200，HTML 中包含“服务器排序方式”下拉框和
+  默认/在线人数/服务器名称/延迟最低/在线状态选项。
+
+---
+
+## 2026年10月27日 13时34分28秒 增加黑夜模式
+
+### 背景
+
+用户要求给网站增加黑夜模式，并希望在亮色/暗色之间随时切换。
+
+### 变更内容
+
+- `globals.css` 增加 `.dark` 主题变量（背景、卡片、文字、边框、主色等）和
+  `@custom-variant dark`，使现有 `dark:` Tailwind 工具类跟随 `.dark` 类。
+- 新增 `ThemeToggle` 按钮，放在官网/论坛/用户中心共用的顶部导航和管理面板顶部导航。
+- 根布局加入 `beforeInteractive` 初始化脚本：优先读取 `localStorage["threi-theme"]`，
+  没有保存值时跟随系统 `prefers-color-scheme`，在 hydration 前设置 `.dark`，避免闪烁。
+- 切换时同步 `color-scheme` 和 `meta[name="theme-color"]`；`viewport.themeColor` 增加
+  亮色/暗色媒体查询。
+- 管理面板 `<html>` 加 `suppressHydrationWarning`，避免主题类在 hydration 前变化产生警告。
+
+### 涉及文件
+
+- `apps/web/src/app/globals.css`
+- `apps/web/src/app/layout.tsx`
+- `apps/web/src/components/layout/theme-toggle.tsx`（新增）
+- `apps/web/src/components/layout/site-header.tsx`
+- `apps/web/src/app/(admin)/layout.tsx`
+
+### 测试与结果
+
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 本地 `next build`：受 WSL 上 Turbopack 持久化缓存目录 `fsync` 限制失败（`os error 22`），
+  不是代码错误；生产 Docker 镜像 `docker compose build web`：通过。
+- 生产 web 容器重建后 `healthy`；线上首页 HTML 包含 `theme-init` 脚本与“切换亮色/黑夜模式”
+  按钮，CSS 包含 `.dark` 变量和 `:where(.dark, .dark *)` 变体；`/`、`/servers` 返回 200。
+
+---
+
+## 2026年10月27日 12时55分32秒 全服封禁、封禁管理统一与指令即时执行
+
+### 背景
+
+生产环境在 10001 服封禁玩家后，只有 10001 拦截，10002 仍可进入，且「封禁管理」页面看不到
+这条记录。原因是站点存在两套封禁：`bans` 是网站账号封禁，`server_bans` 是按服务器作用域的
+游戏封禁；「封禁管理」只读前者，插件快照只读后者。用户要求对标 LumiAdmin：封禁默认全服，
+保留“仅本服”选项，并让踢出/封禁不再等待 15 秒轮询，而是通常 1 秒内执行。
+
+### 变更内容
+
+- `server_bans.server_id` 允许为 `NULL`，表示全服封禁；访问快照对任意服务器都包含全服封禁。
+- 服务器管理页的封禁默认 `scope = "global"`，可为所有启用服务器写入封禁记录与 `server_actions`；
+  选择“仅本服”时保持原来的单服行为。
+- 新增 `GET /api/v1/admin/server-bans`，「封禁管理」页面同时展示网站账号封禁与游戏服务器封禁，
+  显示作用范围并支持解除；全服封禁解封时取消所有服务器上的待执行封禁指令。
+- `GET /api/v1/plugin/actions` 新增 `?wait=<秒>` long-poll（最大 20 秒）；没有指令时挂起，
+  新指令到达立即返回，旧插件不传 `wait` 时保持原行为。
+- `ThRei_Players` 升至 1.5.0：动作请求使用 `&wait=20`，HTTP 超时 25 秒，每次响应后约 1 秒
+  重新发起；`sm_threi_actions_interval` 仅作为失败后的重试/退避间隔。
+- 管理面板文案从“下一次轮询时执行”改为“通常 1 秒内执行”；服务器封禁列表显示全服/单服标签。
+
+### 涉及文件
+
+- `services/api/migrations/20261027150000_global_server_bans.sql`
+- `services/api/src/modules/server_admin.rs`
+- `services/api/src/modules/plugin_access.rs`
+- `services/api/Cargo.toml`、`services/api/Cargo.lock`（utoipa `uuid` feature）
+- `apps/web/src/app/(admin)/admin/bans/page.tsx`
+- `apps/web/src/features/admin/components/bans-manager.tsx`
+- `apps/web/src/features/admin/components/server-admin-manager.tsx`
+- `apps/web/src/features/admin/types.ts`、`apps/web/src/services/content.ts`
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`、`plugins/ThRei_Players/cfg/sourcemod/threi_players.cfg.example`
+- `docs/API.md`、`docs/DEPLOYMENT.md`、`docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 新迁移把 `server_bans.server_id` 改为可空，并增加全服封禁索引。
+- `POST /admin/servers/{id}/players/{steam_id64}/ban` 的 body 新增 `scope`（`global` 默认 /
+  `server`）；全局封禁只写一条 `server_bans`（`server_id = NULL`），并为每个启用服务器写入
+  `server_actions`。
+- 新端点 `GET /admin/server-bans`；`POST /admin/server-bans/{id}/lift` 兼容全局封禁。
+- `/plugin/actions` 支持 `wait` 查询参数；响应格式不变。
+
+### 测试与结果
+
+- `cargo check --all-targets`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo fmt --all -- --check`：通过。
+- `cargo test`：通过（lib 41 项、HTTP 合约 14 项）。
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- `spcomp64`（SourcePawn Compiler 1.11.0.6970）编译通过，生成 21187 字节的
+  `ThRei_Players.smx`，SHA-256 `1d34b0ee10b0fa8ab584349853a8f755475b6b009742d92961eebd872004dbef`。
+- 生产部署：已执行。`20261027150000_global_server_bans` 迁移成功，api/web 镜像重建并保持
+  healthy；现有 10001 封禁已提升为全服封禁，并为 6 台启用服务器补发封禁动作。线上 `/`、
+  `/servers` 返回 200，未登录访问 `/admin/server-bans` 返回 401，
+  `/plugin/actions?wait=1` 未带令牌返回 401。
+- 构建备注：服务器 `Dockerfile.deploy` 的 Debian 源改为腾讯云镜像并强制 IPv4，解决
+  `apt-get` 在 Docker 构建容器内长时间卡住的问题；原文件保留为
+  `Dockerfile.deploy.bak-20261027`。
+
+---
+
 ## 2026年10月25日 13时55分09秒 对标 LumiAdmin 补齐白名单、踢封执行与空服存活判断
 
 ### 背景

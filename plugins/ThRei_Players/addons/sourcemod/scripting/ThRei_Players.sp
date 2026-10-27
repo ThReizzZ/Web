@@ -1,15 +1,17 @@
 /**
  * ThRei_Players — reports server state and enforces ThRei access rules.
  *
- * The plugin polls three authenticated endpoints with a per-server token:
+ * The plugin uses these authenticated endpoints with a per-server token:
  *   POST /api/v1/plugin/report
  *   GET  /api/v1/plugin/access-snapshot
  *   GET  /api/v1/plugin/actions
+ *   POST /api/v1/plugin/ban-report
  *
  * Whitelist and ban enforcement is local: the plugin keeps the latest
  * snapshot in memory and checks players when they finish connecting, so an
  * API outage does not block normal play. Kick/ban commands from the website
  * are consumed from the action queue and acknowledged after execution.
+ * Bans executed in game through BanClient are reported back to the website.
  *
  * Requirements:
  *   - SourceMod 1.11+
@@ -23,7 +25,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.4.0"
+#define PLUGIN_VERSION "1.6.0"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -36,6 +38,15 @@
 #define MAX_ACTION_LINE 1024
 #define MAX_REASON_LENGTH 512
 #define MAX_ACK_QUEUE 128
+#define BAN_REPORT_BODY_SIZE 6144
+
+// The action endpoint supports long polling. The HTTP request stays open for
+// up to 20 seconds, so the timeout must be slightly larger; after every
+// response the plugin re-polls almost immediately to keep command latency at
+// roughly one second.
+#define ACTION_LONG_POLL_WAIT "20"
+#define ACTION_LONG_POLL_TIMEOUT 25
+#define ACTION_REPOLL_DELAY 1.0
 
 public Plugin myinfo = {
     name = "ThRei_Players",
@@ -63,6 +74,7 @@ Handle g_hReportRequest;
 Handle g_hAccessRequest;
 Handle g_hActionRequest;
 Handle g_hAckRequest;
+Handle g_hBanReportRequest;
 float g_fNextReport;
 float g_fNextAccess;
 float g_fNextActions;
@@ -79,6 +91,7 @@ StringMap g_smWhitelist;
 StringMap g_smBans;
 StringMap g_smBanReasons;
 ArrayList g_aAckQueue;
+ArrayList g_aBanReportQueue;
 
 char g_sBody[BODY_BUFFER_SIZE];
 char g_sErrorBody[ERROR_BODY_SIZE + 1];
@@ -117,7 +130,7 @@ public void OnPluginStart() {
     g_cvActionsEnabled = CreateConVar("sm_threi_actions_enabled", "1",
         "Enable website kick/ban command polling.", FCVAR_NONE, true, 0.0, true, 1.0);
     g_cvActionsInterval = CreateConVar("sm_threi_actions_interval", "15",
-        "Seconds between action queue polls.",
+        "Retry/backoff seconds after a failed action long-poll request.",
         FCVAR_NONE, true, 5.0, true, 600.0);
     g_cvWhitelistKickMessage = CreateConVar("sm_threi_whitelist_kick_message",
         "该服务器需要白名单。请在 threi.cn 提交申请后重试。",
@@ -130,6 +143,7 @@ public void OnPluginStart() {
     g_smBans = new StringMap();
     g_smBanReasons = new StringMap();
     g_aAckQueue = new ArrayList(ByteCountToCells(64));
+    g_aBanReportQueue = new ArrayList(ByteCountToCells(BAN_REPORT_BODY_SIZE));
 
     ResolveHostPort();
 
@@ -186,6 +200,72 @@ public void OnClientDisconnect(int client) {
     }
 }
 
+/**
+ * Reports bans executed through `BanClient` (including `sm_ban`) to the
+ * website. The local ban is still applied by SourceMod; this forward only
+ * adds a website record and an automatic IP ban.
+ *
+ * Raw console `banid` commands do not fire this forward.
+ */
+public Action OnBanClient(int client, int time, int flags, const char[] reason,
+        const char[] kick_message, const char[] command, any source) {
+    if (!g_cvEnabled.BoolValue || g_aBanReportQueue == null) {
+        return Plugin_Continue;
+    }
+    if (client <= 0 || !IsClientInGame(client) || IsFakeClient(client)
+            || IsClientSourceTV(client) || IsClientReplay(client)) {
+        return Plugin_Continue;
+    }
+
+    char steamId[MAX_AUTHID_LENGTH];
+    if (!GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId), true)
+            || strlen(steamId) != 17) {
+        return Plugin_Continue;
+    }
+
+    char ip[64];
+    char ipJson[256];
+    ip[0] = '\0';
+    GetClientIP(client, ip, sizeof(ip), true);
+    JsonEscape(ip, ipJson, sizeof(ipJson));
+
+    char name[MAX_NAME_LENGTH];
+    char nameJson[FRAGMENT_BUFFER_SIZE];
+    GetClientName(client, name, sizeof(name));
+    JsonEscape(name, nameJson, sizeof(nameJson));
+
+    char safeReason[MAX_REASON_LENGTH];
+    strcopy(safeReason, sizeof(safeReason), reason);
+    TrimString(safeReason);
+    if (safeReason[0] == '\0') {
+        strcopy(safeReason, sizeof(safeReason), "服务器封禁");
+    }
+    char reasonJson[FRAGMENT_BUFFER_SIZE];
+    JsonEscape(safeReason, reasonJson, sizeof(reasonJson));
+
+    if (time < 0) {
+        time = 0;
+    }
+
+    char body[BAN_REPORT_BODY_SIZE];
+    Format(body, sizeof(body),
+        "{\"steamId64\":\"%s\",\"ipAddress\":\"%s\",\"playerName\":\"%s\","
+        ... "\"reason\":\"%s\",\"durationMinutes\":%d}",
+        steamId, ipJson, nameJson, reasonJson, time);
+
+    if (g_aBanReportQueue.Length >= MAX_ACK_QUEUE) {
+        LogError("[ThRei_Players] Ban report queue is full; dropping report for %s.", steamId);
+        return Plugin_Continue;
+    }
+    g_aBanReportQueue.PushString(body);
+    LogMessage("[ThRei_Players] Queued in-game ban report for %s.", steamId);
+
+    if (g_hBanReportRequest == null) {
+        SendNextBanReport();
+    }
+    return Plugin_Continue;
+}
+
 public void OnPluginEnd() {
     if (g_hTimer != null) {
         KillTimer(g_hTimer);
@@ -195,10 +275,12 @@ public void OnPluginEnd() {
     CloseRequest(g_hAccessRequest);
     CloseRequest(g_hActionRequest);
     CloseRequest(g_hAckRequest);
+    CloseRequest(g_hBanReportRequest);
     g_hReportRequest = null;
     g_hAccessRequest = null;
     g_hActionRequest = null;
     g_hAckRequest = null;
+    g_hBanReportRequest = null;
 
     if (g_smWhitelist != null) {
         delete g_smWhitelist;
@@ -216,6 +298,10 @@ public void OnPluginEnd() {
         delete g_aAckQueue;
         g_aAckQueue = null;
     }
+    if (g_aBanReportQueue != null) {
+        delete g_aBanReportQueue;
+        g_aBanReportQueue = null;
+    }
 }
 
 public Action Timer_Poll(Handle timer) {
@@ -232,6 +318,10 @@ public Action Timer_Poll(Handle timer) {
     }
     if (g_aAckQueue != null && g_aAckQueue.Length > 0 && g_hAckRequest == null) {
         SendNextAck();
+    }
+    if (g_aBanReportQueue != null && g_aBanReportQueue.Length > 0
+            && g_hBanReportRequest == null) {
+        SendNextBanReport();
     }
     return Plugin_Continue;
 }
@@ -442,7 +532,7 @@ bool BuildControlUrl(const char[] reportUrl, const char[] endpoint, char[] outpu
     return true;
 }
 
-bool PrepareRequest(Handle request, const char[] token) {
+bool PrepareRequest(Handle request, const char[] token, int timeout = 15) {
     if (request == null) {
         return false;
     }
@@ -450,7 +540,7 @@ bool PrepareRequest(Handle request, const char[] token) {
         LogError("[ThRei_Players] Could not set the plugin token header.");
         return false;
     }
-    if (!SteamWorks_SetHTTPRequestNetworkActivityTimeout(request, 15)) {
+    if (!SteamWorks_SetHTTPRequestNetworkActivityTimeout(request, timeout)) {
         LogError("[ThRei_Players] Could not set the HTTP timeout.");
         return false;
     }
@@ -590,9 +680,11 @@ void SendActions() {
     if (!BuildControlUrl(reportUrl, "/plugin/actions", apiUrl, sizeof(apiUrl))) {
         return;
     }
+    StrCat(apiUrl, sizeof(apiUrl), "?wait=");
+    StrCat(apiUrl, sizeof(apiUrl), ACTION_LONG_POLL_WAIT);
 
     Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, apiUrl);
-    if (!PrepareRequest(request, token)) {
+    if (!PrepareRequest(request, token, ACTION_LONG_POLL_TIMEOUT)) {
         CloseRequest(request);
         return;
     }
@@ -656,6 +748,68 @@ void SendNextAck() {
         LogError("[ThRei_Players] Could not send action ack.");
         if (g_hAckRequest == request) {
             g_hAckRequest = null;
+            CloseHandle(request);
+        }
+    }
+}
+
+void SendNextBanReport() {
+    if (g_aBanReportQueue == null || g_aBanReportQueue.Length == 0) {
+        return;
+    }
+    if (!SteamWorks_IsLoaded()) {
+        if (!g_bSteamWorksWarned) {
+            LogError("[ThRei_Players] SteamWorks extension is not loaded; skipping ban report.");
+            g_bSteamWorksWarned = true;
+        }
+        g_aBanReportQueue.Clear();
+        return;
+    }
+    g_bSteamWorksWarned = false;
+
+    char reportUrl[512];
+    char apiUrl[512];
+    char serverId[128];
+    char token[256];
+    if (!ResolveConfig(reportUrl, sizeof(reportUrl), serverId, sizeof(serverId), token,
+            sizeof(token))) {
+        g_aBanReportQueue.Clear();
+        return;
+    }
+    if (!BuildControlUrl(reportUrl, "/plugin/ban-report", apiUrl, sizeof(apiUrl))) {
+        g_aBanReportQueue.Clear();
+        return;
+    }
+
+    char body[BAN_REPORT_BODY_SIZE];
+    g_aBanReportQueue.GetString(0, body, sizeof(body));
+    g_aBanReportQueue.Erase(0);
+    if (body[0] == '\0') {
+        return;
+    }
+
+    Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodPOST, apiUrl);
+    if (!PrepareRequest(request, token)) {
+        CloseRequest(request);
+        return;
+    }
+    if (!SteamWorks_SetHTTPRequestRawPostBody(request, "application/json", body,
+            strlen(body))) {
+        LogError("[ThRei_Players] Could not set the ban report body.");
+        CloseRequest(request);
+        return;
+    }
+    if (!SteamWorks_SetHTTPCallbacks(request, OnBanReportComplete)) {
+        LogError("[ThRei_Players] Could not set ban report callbacks.");
+        CloseRequest(request);
+        return;
+    }
+
+    g_hBanReportRequest = request;
+    if (!SteamWorks_SendHTTPRequest(request)) {
+        LogError("[ThRei_Players] Could not send the ban report.");
+        if (g_hBanReportRequest == request) {
+            g_hBanReportRequest = null;
             CloseHandle(request);
         }
     }
@@ -727,9 +881,14 @@ bool BuildBody(const char[] serverId, int skipUserId) {
 
         char name[MAX_NAME_LENGTH];
         char nameJson[FRAGMENT_BUFFER_SIZE];
+        char ip[64];
+        char ipJson[256];
         char fragment[FRAGMENT_BUFFER_SIZE];
         GetClientName(client, name, sizeof(name));
         JsonEscape(name, nameJson, sizeof(nameJson));
+        ip[0] = '\0';
+        GetClientIP(client, ip, sizeof(ip), true);
+        JsonEscape(ip, ipJson, sizeof(ipJson));
 
         int connectedSeconds = RoundToFloor(GetClientTime(client));
         if (connectedSeconds < 0) {
@@ -737,8 +896,9 @@ bool BuildBody(const char[] serverId, int skipUserId) {
         }
 
         Format(fragment, sizeof(fragment),
-            "%s{\"steamId64\":\"%s\",\"name\":\"%s\",\"connectedSeconds\":%d}",
-            reported > 0 ? "," : "", steamId, nameJson, connectedSeconds);
+            "%s{\"steamId64\":\"%s\",\"name\":\"%s\",\"ipAddress\":\"%s\","
+            ... "\"connectedSeconds\":%d}",
+            reported > 0 ? "," : "", steamId, nameJson, ipJson, connectedSeconds);
         if (!AppendText(g_sBody, sizeof(g_sBody), fragment)) {
             LogError("[ThRei_Players] Report body is too large; aborting report.");
             return false;
@@ -766,6 +926,26 @@ public void OnReportComplete(Handle request, bool failure, bool requestSuccessfu
     }
 
     CloseHandle(request);
+}
+
+public void OnBanReportComplete(Handle request, bool failure, bool requestSuccessful,
+        EHTTPStatusCode statusCode) {
+    if (g_hBanReportRequest == request) {
+        g_hBanReportRequest = null;
+    }
+
+    if (failure || !requestSuccessful) {
+        LogError("[ThRei_Players] Ban report failed: network error or timeout.");
+    } else if (statusCode != k_EHTTPStatusCode204NoContent
+            && statusCode != k_EHTTPStatusCode200OK) {
+        LogHttpStatus("ban report", request, statusCode);
+    }
+
+    CloseHandle(request);
+
+    if (g_aBanReportQueue != null && g_aBanReportQueue.Length > 0) {
+        SendNextBanReport();
+    }
 }
 
 public void OnAccessComplete(Handle request, bool failure, bool requestSuccessful,
@@ -876,7 +1056,7 @@ public void OnActionsComplete(Handle request, bool failure, bool requestSuccessf
 
     ParseAndExecuteActions(body);
     g_iActionFailures = 0;
-    g_fNextActions = GetGameTime() + float(g_cvActionsInterval.IntValue);
+    g_fNextActions = GetGameTime() + ACTION_REPOLL_DELAY;
     CloseHandle(request);
 }
 

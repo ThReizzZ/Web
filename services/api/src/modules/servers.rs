@@ -85,7 +85,7 @@ async fn list_servers(State(state): State<AppState>) -> Result<Json<Vec<Server>>
         FROM servers s
         LEFT JOIN server_communities c ON c.id = s.community_id
         WHERE s.is_active = true
-        ORDER BY s.featured DESC, s.name
+        ORDER BY s.sort_order, s.name
         ",
     )
     .fetch_all(&state.db)

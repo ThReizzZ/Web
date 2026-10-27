@@ -11,6 +11,7 @@ import type {
   Ban,
   PluginTokenResponse,
   ServerAdminOverview,
+  ServerBan,
   WhitelistOverview,
 } from "@/features/admin/types";
 import type {
@@ -130,10 +131,16 @@ export async function fetchBans(client: ApiClient): Promise<Ban[]> {
   return client.get<Ban[]>("/api/v1/admin/bans", noStore);
 }
 
+export async function fetchServerBans(client: ApiClient): Promise<ServerBan[]> {
+  return client.get<ServerBan[]>("/api/v1/admin/server-bans", noStore);
+}
+
 export async function createBan(
   client: ApiClient,
   input: {
-    steamId64: string;
+    banType: "steam" | "ip";
+    steamId64?: string;
+    ipAddress?: string;
     reason: string;
     playerName?: string;
     expiresInHours?: number | null;
@@ -173,7 +180,7 @@ export async function reviewWhitelistApplication(
 
 export async function addWhitelistEntry(
   client: ApiClient,
-  input: { serverId: string; steamId64: string; playerName?: string },
+  input: { steamId64: string; playerName?: string },
 ): Promise<void> {
   await client.request<void>("/api/v1/admin/whitelist", {
     method: "POST",
@@ -181,15 +188,10 @@ export async function addWhitelistEntry(
   });
 }
 
-export async function removeWhitelistEntry(
-  client: ApiClient,
-  serverId: string,
-  steamId64: string,
-): Promise<void> {
-  await client.request<void>(
-    `/api/v1/admin/whitelist/${encodeURIComponent(serverId)}/${encodeURIComponent(steamId64)}`,
-    { method: "DELETE" },
-  );
+export async function removeWhitelistEntry(client: ApiClient, steamId64: string): Promise<void> {
+  await client.request<void>(`/api/v1/admin/whitelist/${encodeURIComponent(steamId64)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function setServerWhitelist(
@@ -205,7 +207,7 @@ export async function setServerWhitelist(
 
 export async function submitWhitelistApplication(
   client: ApiClient,
-  input: { serverId: string; message: string },
+  input: { message: string },
 ): Promise<void> {
   await client.request<void>("/api/v1/whitelist/applications", {
     method: "POST",
@@ -445,6 +447,13 @@ export async function removeAdminCommunityServer(
   );
 }
 
+export async function reorderAdminServers(client: ApiClient, serverIds: string[]): Promise<void> {
+  await client.request<void>("/api/v1/admin/servers/order", {
+    method: "PUT",
+    body: JSON.stringify({ serverIds }),
+  });
+}
+
 export async function deleteAdminServer(client: ApiClient, id: string): Promise<void> {
   await client.request<void>(`/api/v1/admin/servers/${encodeURIComponent(id)}`, {
     method: "DELETE",
@@ -467,7 +476,12 @@ export async function banServerPlayer(
   client: ApiClient,
   serverId: string,
   steamId64: string,
-  input: { reason: string; playerName?: string; expiresInHours?: number | null },
+  input: {
+    reason: string;
+    playerName?: string;
+    expiresInHours?: number | null;
+    scope?: "global" | "server";
+  },
 ): Promise<void> {
   await client.request<void>(
     `/api/v1/admin/servers/${encodeURIComponent(serverId)}/players/${encodeURIComponent(steamId64)}/ban`,

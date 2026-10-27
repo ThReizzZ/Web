@@ -15,8 +15,28 @@
 
 **状态：** 本地开发与真实数据接入，尚未创建 Git tag 或正式发布。
 
+### Changed
+
+- 新增 IP 封禁：封禁 IP 后自动关联该 IP 下已知的非管理员账号，并拦截后续从该 IP 的登录；
+  管理员账号保留恢复通道，解除 IP 封禁会联动解除关联账号封禁。
+- SteamID 封禁和服务器管理里的玩家封禁会自动查找玩家最近 IP（网站登录、有效会话或插件上报的
+  服务器 IP）并创建 IP 封禁；管理员当前 IP 不会被自动封禁。
+- `ThRei_Players` 1.6.0 上报在线玩家 IP，并通过 `POST /api/v1/plugin/ban-report` 回传游戏内
+  `BanClient` / `sm_ban` 封禁；网站记录账号封禁、该服务器游戏封禁并自动创建 IP 封禁。
+- 白名单改为全服共享：玩家申请一次、管理员审核一次，所有开启白名单的服务器通用；
+  新增 `global_whitelist` 并迁移旧的 `server_whitelist` 数据。
+- 游戏服务器封禁默认作用于全部服务器（`scope: "global"`），封禁弹窗可选择“仅本服”；
+  `server_bans.server_id` 允许为 `NULL` 表示全服封禁，访问快照同时包含全服封禁。
+- `/api/v1/plugin/actions` 新增 `?wait=<秒>` long-poll（最大 20 秒），`ThRei_Players` 1.5.0
+  使用它，网站踢出/封禁通常 1 秒内执行。
+- 管理面板「封禁管理」新增游戏服务器封禁列表，可查看作用范围并解除。
+
 ### Added
 
+- 管理面板新增独立的「服务器排序」页面：支持拖动、置顶/上移/下移，保存后公开目录按该顺序显示。
+- 服务器管理页操作区重新分组：常用操作保留文字按钮，RCON/社区组/白名单/删除改为图标按钮。
+- 服务器目录新增排序：默认、在线人数、服务器名称、延迟、在线状态；选择保存在本地。
+- 新增亮色/黑夜模式切换：顶部导航与管理面板均可切换，偏好保存在本地，未设置时跟随系统。
 - 新增 Steam OpenID 登录：`/api/v1/auth/steam/login`、`/callback`、`/me`、`/logout`。
 - 新增数据库会话：随机令牌、SHA-256 哈希存储、`threi_session` HttpOnly Cookie、过期时间与登出撤销。
 - 新增真实业务表：`users`、`sessions`、`servers`、`server_players`、`categories`、`topics`、`replies`、`favorites`。

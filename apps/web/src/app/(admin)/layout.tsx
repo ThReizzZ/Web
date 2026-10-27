@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 
 import { AdminNav } from "@/features/admin/components/admin-nav";
 import { Brand } from "@/components/layout/brand";
+import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ToastProvider } from "@/components/ui/toast";
@@ -44,6 +45,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               <Badge variant="outline">管理面板</Badge>
             </div>
             <div className="flex items-center gap-2">
+              <ThemeToggle />
               <span className="hidden items-center gap-2 text-sm text-muted-foreground sm:flex">
                 <UserAvatar name={user.name} avatarUrl={user.avatarUrl} size="sm" />
                 {user.name}

@@ -54,9 +54,17 @@ pub struct Activity {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AccountWhitelist {
+    pub whitelisted: bool,
+    pub pending: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountOverview {
     pub user: MeUser,
     pub stats: AccountStats,
+    pub whitelist: AccountWhitelist,
     pub recent_topics: Vec<TopicSummary>,
     pub favorites: Vec<FavoriteServer>,
     pub recent_activity: Vec<Activity>,
@@ -145,9 +153,27 @@ pub(crate) async fn build_overview(
     .fetch_all(&state.db)
     .await?;
 
+    let (whitelisted, pending) = sqlx::query_as::<_, (bool, bool)>(
+        r"
+        SELECT
+            EXISTS (SELECT 1 FROM global_whitelist WHERE steam_id64 = $1) AS whitelisted,
+            EXISTS (
+                SELECT 1 FROM whitelist_applications
+                WHERE steam_id64 = $1 AND status = 'pending'
+            ) AS pending
+        ",
+    )
+    .bind(&user.steam_id64)
+    .fetch_one(&state.db)
+    .await?;
+
     Ok(AccountOverview {
         user: MeUser::from(user.clone()),
         stats: account_stats,
+        whitelist: AccountWhitelist {
+            whitelisted,
+            pending,
+        },
         recent_topics,
         favorites,
         recent_activity: activity

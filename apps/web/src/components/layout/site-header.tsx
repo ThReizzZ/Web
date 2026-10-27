@@ -3,6 +3,7 @@ import { LogIn } from "lucide-react";
 
 import { Brand } from "@/components/layout/brand";
 import { PageContainer } from "@/components/layout/page-container";
+import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { Button } from "@/components/ui/button";
 import { getServerApiClient } from "@/lib/api/server";
@@ -44,21 +45,24 @@ export async function SiteHeader() {
             ))}
           </ul>
         </nav>
-        {user ? (
-          <Button asChild variant="outline" size="sm">
-            <Link href="/account">
-              <UserAvatar name={user.name} avatarUrl={user.avatarUrl} size="xs" />
-              <span className="max-w-32 truncate">{user.name}</span>
-            </Link>
-          </Button>
-        ) : (
-          <Button asChild size="sm">
-            <a href="/api/v1/auth/steam/login">
-              <LogIn aria-hidden="true" />
-              使用Steam登录
-            </a>
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          {user ? (
+            <Button asChild variant="outline" size="sm">
+              <Link href="/account">
+                <UserAvatar name={user.name} avatarUrl={user.avatarUrl} size="xs" />
+                <span className="max-w-32 truncate">{user.name}</span>
+              </Link>
+            </Button>
+          ) : (
+            <Button asChild size="sm">
+              <a href="/api/v1/auth/steam/login">
+                <LogIn aria-hidden="true" />
+                使用Steam登录
+              </a>
+            </Button>
+          )}
+        </div>
       </PageContainer>
     </header>
   );

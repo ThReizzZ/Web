@@ -167,6 +167,7 @@ X-ThRei-Plugin-Token: <server plugin token>
     {
       "steamId64": "76561199125125759",
       "name": "玩家昵称",
+      "ipAddress": "203.0.113.10",
       "connectedSeconds": 120
     }
   ]
@@ -176,6 +177,7 @@ X-ThRei-Plugin-Token: <server plugin token>
 - `serverId` 可省略：令牌在数据库中唯一，API 会直接根据令牌找到服务器。这样一台主机上的多个实例可以共用一份配置，只按端口写各自的令牌。若同时提供 `serverId`，必须与令牌所属服务器一致。
 - `name`、`map`、`maxPlayers` 可省略。`name` 为游戏服务器的 `hostname`，上报后会更新服务器目录中的显示名称；省略或为空时保留当前名称。
 - `players` 中无效或重复的 SteamID64 会被跳过，响应里的 `skipped` 表示跳过数量。
+- `ipAddress` 由插件 1.6.0+ 通过 `GetClientIP` 上报，非法或空值按 `NULL` 保存；用于服务器封禁时自动创建 IP 封禁。
 - `connectedSeconds` 用于恢复 `connected_at`，超出 0–2592000 秒会被截断。
 - 成功返回 `{ "serverId": "...", "playerCount": 1, "skipped": 0, "reportedAt": "..." }`。
 - 令牌缺失、错误、服务器不存在或 `serverId` 与令牌不匹配统一返回 `401 unauthorized`，避免枚举服务器。
@@ -184,7 +186,7 @@ X-ThRei-Plugin-Token: <server plugin token>
 
 ### `GET /api/v1/plugin/access-snapshot`
 
-供 `ThRei_Players` 1.4.0+ 同步访问规则。请求头与上报相同，响应为 `text/plain; charset=utf-8`：
+供 `ThRei_Players` 1.5.0+ 同步访问规则。请求头与上报相同，响应为 `text/plain; charset=utf-8`：
 
 ```text
 # ThRei access snapshot v1
@@ -196,14 +198,16 @@ ban 76561198000000001 1792914155 临时封禁
 ```
 
 - `requires_whitelist` 为 `0` 时插件只执行封禁，不检查白名单。
-- `whitelist` 每行一个 SteamID64。
+- `whitelist` 每行一个 SteamID64，来自全服白名单；同一份名单用于所有开启白名单的服务器。
 - `ban` 的第二个字段是到期 Unix 时间戳，`0` 表示永久；第三个字段起为已压平为单行的原因。
 - 最多返回 10,000 条白名单与 10,000 条生效封禁。已解除、已过期封禁不会出现在快照中。
 - 令牌缺失或错误返回 `401`，不泄露服务器是否存在。
 
 ### `GET /api/v1/plugin/actions`
 
-供 `ThRei_Players` 1.4.0+ 轮询管理后台下发的指令，响应为 `text/plain; charset=utf-8`：
+供 `ThRei_Players` 1.5.0+ 长轮询管理后台下发的指令，响应为
+`text/plain; charset=utf-8`。支持 `?wait=<秒>`（最大 20）：没有待执行指令时请求会挂起，
+一有新指令立即返回；不传 `wait` 时保持原来的立即返回行为，兼容旧插件。
 
 ```text
 # ThRei actions v1
@@ -217,7 +221,28 @@ action 8a1d2c3b-... ban 76561198000000000 1792914155 临时封禁
 
 ### `POST /api/v1/plugin/actions/{id}/ack`
 
-插件执行或判定指令已过期后调用，成功返回 `204 No Content`，把 `server_actions.processed_at` 设为当前时间。指令不属于该令牌对应的服务器时返回 `404`。确认失败不会丢失指令，下一次轮询会再次返回。
+插件执行或判定指令已过期后调用，成功返回 `204 No Content`，把 `server_actions.processed_at` 设为当前时间。指令不属于该令牌对应的服务器时返回 `404`。确认失败不会丢失指令，下一次 long-poll 会再次返回。
+
+### `POST /api/v1/plugin/ban-report`
+
+供 `ThRei_Players` 1.6.0+ 回传游戏内由 `BanClient`（包括 `sm_ban`）执行的封禁。请求头与上报相同。
+
+```json
+{
+  "steamId64": "76561199125125759",
+  "ipAddress": "203.0.113.10",
+  "playerName": "玩家昵称",
+  "reason": "长期挂机",
+  "durationMinutes": 0
+}
+```
+
+- `durationMinutes` 为分钟数，`0` 或省略表示永久；最大 52,560,000 分钟。
+- 成功返回 `204 No Content`。API 会写入一条网站账号封禁（若尚无生效的 SteamID 封禁）和一条该服务器的游戏封禁（若尚无生效的全服/单服封禁）。
+- 如果请求带 `ipAddress`，还会创建 IP 封禁并自动关联该 IP 下已知的普通账号；已有生效 IP 封禁时跳过。
+- `serverId` 可省略，由令牌解析；提供时必须与令牌所属服务器一致。
+- 原始控制台 `banid` / `addip` 不触发 `OnBanClient`，不会回传；网站下发的指令也不会回传，避免循环。
+- 令牌缺失或错误返回 `401`；SteamID64、原因或时长不合法返回 `422`。
 
 ## 5. 论坛
 
@@ -316,21 +341,25 @@ Query：
 
 ### 6.5 封禁管理
 
-- `GET /admin/bans` 返回生效和历史封禁记录。
-- `POST /admin/bans` body `{ "steamId64": "...", "reason": "...", "expiresInHours": 24 }`；`expiresInHours` 缺省/`null` 为永久。
-- `POST /admin/bans/{id}/lift` body `{ "reason": "..." }` 解封。
-- 管理员账号不能直接被封禁，需先取消管理员权限。
-- 封禁会撤销目标网站会话；后续登录和会话读取都会被拒绝，直到解封或到期。
+- `GET /admin/bans` 返回生效和历史封禁记录；每条包含 `banType`（`steam` / `ip`）、`steamId64`、`ipAddress`、`sourceBanId`。
+- `POST /admin/bans` body `{ "banType": "steam" | "ip", "steamId64": "...", "ipAddress": "...", "reason": "...", "expiresInHours": 24 }`；`expiresInHours` 缺省/`null` 为永久。`banType` 默认 `steam`。
+- SteamID 封禁会自动查找该玩家最近一次网站登录 IP、有效会话 IP 或插件上报的服务器 IP，并在存在已知 IP 时创建 IP 封禁；已有生效 IP 封禁时跳过。
+- IP 封禁会为已知使用该 IP 的非管理员账号自动写入 SteamID 封禁（`sourceBanId` 指向 IP 封禁），删除其会话；后续从该 IP 登录的普通账号会被自动关联封禁并拒绝登录。管理员账号保留恢复通道。
+- `POST /admin/bans/{id}/lift` body `{ "reason": "..." }` 解封；解除 IP 封禁会同时解除由它自动关联的账号封禁。
+- 管理员账号不能直接被 SteamID 封禁，需先取消管理员权限。
+- IP 封禁只作用于网站登录，不影响游戏服务器封禁；游戏服务器封禁使用 `/admin/server-bans`。
 
 ### 6.6 白名单
 
-- `GET /admin/whitelist` 返回申请、已授权名单和服务器白名单设置。
-- `POST /admin/whitelist` body `{ "serverId": "...", "steamId64": "...", "playerName": "..." }` 手动授权。
-- `POST /admin/whitelist/applications/{id}/approve` / `reject` body `{ "note": "..." }` 审核申请；通过时会写入 `server_whitelist`。
-- `DELETE /admin/whitelist/{server_id}/{steam_id64}` 移除授权。
-- `PATCH /admin/servers/{id}/whitelist` body `{ "requiresWhitelist": true }` 开关服务器要求。
-- `POST /whitelist/applications` body `{ "serverId": "...", "message": "..." }` 当前登录玩家提交申请；同一服务器已有待审申请或已在白名单时返回 409。
-- `ThRei_Players` 1.4.0+ 默认每 30 秒读取一次 `/plugin/access-snapshot`，在玩家连接时执行白名单与服务器封禁拦截；审核通过、移除授权或新增封禁会在一个刷新间隔内生效，不需要 RCON。
+- 白名单为全服共享：一次审核通过或手动添加，所有开启 `requires_whitelist` 的服务器通用。
+- `GET /admin/whitelist` 返回全服申请、已授权名单和服务器白名单设置；申请/条目中的 `serverId` 为 `null`、`serverName` 为 `全服`。
+- `POST /admin/whitelist` body `{ "steamId64": "...", "playerName": "..." }` 手动加入全服白名单；旧版 `serverId` 字段会被忽略。
+- `POST /admin/whitelist/applications/{id}/approve` / `reject` body `{ "note": "..." }` 审核申请；通过时会写入 `global_whitelist`。
+- `DELETE /admin/whitelist/{steam_id64}` 移除全服授权。
+- `PATCH /admin/servers/{id}/whitelist` body `{ "requiresWhitelist": true }` 开关该服务器是否使用全服白名单。
+- `POST /whitelist/applications` body `{ "message": "..." }` 当前登录玩家提交全服申请；已有待审申请或已在全服白名单时返回 409。旧版 `serverId` 字段会被忽略。
+- `GET /account` 返回 `whitelist: { whitelisted, pending }`，用于用户中心显示全服白名单状态。
+- `ThRei_Players` 1.5.0+ 默认每 30 秒读取一次 `/plugin/access-snapshot`，快照中的 `whitelist` 行来自全服白名单，在玩家连接时执行白名单与服务器封禁拦截；审核通过、移除授权或新增封禁会在一个刷新间隔内生效，不需要 RCON。
 
 ### 6.7 论坛管理
 
@@ -353,9 +382,10 @@ Query：
 - `DELETE /admin/servers/{id}/plugin-token`：撤销令牌，并执行同样的在线状态清理，返回 `204`。
 - `PUT /admin/servers/{id}/rcon-password` body `{ "password": "..." }`：设置可选的 RCON 密码，仅用于空服休眠存活探测。密码只写不读，任何接口都不会返回；成功 `204`，空密码、控制字符或超过 256 字符返回 `422`。
 - `DELETE /admin/servers/{id}/rcon-password`：删除 RCON 密码并清除休眠状态，成功 `204`。
-- `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions`，由 `ThRei_Players` 1.4.0+ 在一个指令轮询间隔（默认 15 秒）内执行。
-- `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "..." }`：原子写入 `server_bans` 与 `server_actions`，插件立即踢出在线目标并阻止重连。
-- `POST /admin/server-bans/{id}/lift` 解除服务器封禁，同时把该服务器该玩家尚未执行的封禁指令标记为已处理，避免解封后旧指令再次生效。
+- `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions`，由 `ThRei_Players` 1.5.0+ 通过 long-poll 通常在 1 秒内执行；插件离线时恢复后执行。
+- `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "...", "scope": "global" }`：原子写入 `server_bans` 与 `server_actions`。`scope` 为 `global`（默认，`server_id = NULL`，对所有启用服务器生效）或 `server`（仅路径指定的服务器）；全局封禁会为每台启用服务器写入一条指令，插件立即踢出在线目标并阻止重连。若已知玩家 IP（插件 1.6.0+ 上报的服务器 IP，或网站最近登录 IP），还会自动创建 IP 封禁；管理员当前 IP 不会被自动封禁。
+- `GET /admin/server-bans`：返回所有游戏服务器封禁（含全服封禁），每项带 `scope`（`global` / `server`）和 `serverName`（全服封禁为 `全服`）。
+- `POST /admin/server-bans/{id}/lift` 解除服务器封禁；全服封禁会同时把该玩家在所有服务器上尚未执行的封禁指令标记为已处理，避免解封后旧指令再次生效。
 - 踢出/封禁指令由插件确认后写入 `processed_at`；`pendingActions` 是尚未确认的指令数。封禁到期或已解除时，插件不会执行对应指令，但仍会确认队列项。
 - RCON 只发送 `status` 用于休眠/存活判断，白名单、踢出与封禁都不依赖 RCON。
 

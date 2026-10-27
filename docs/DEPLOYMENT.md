@@ -322,7 +322,7 @@ docker compose exec api /app/magic-link --steam-id 76561199125125759
 ### 游戏服务器状态与玩家
 
 API 不再进行 A2S 轮询，也不会向游戏服务器发送任意 RCON 指令。每个游戏服务器需要安装
-`plugins/ThRei_Players/` 中的 SourceMod 插件（当前 `1.4.0`）：
+`plugins/ThRei_Players/` 中的 SourceMod 插件（当前 `1.5.0`）：
 
 1. 游戏服务器安装 SourceMod 1.11+ 与 SteamWorks 扩展；
 2. 在管理面板点击「添加服务器」，只需填写游戏服务器的 Host / IP 与端口；服务器 ID 自动生成，添加成功后自动打开「插件配置」。服务器名称、地图和在线人数会在插件首次上报后自动更新；
@@ -340,6 +340,7 @@ sm_threi_access_enabled "1"
 sm_threi_access_fail_open "1"
 sm_threi_access_interval "30"
 sm_threi_actions_enabled "1"
+// 失败后的重试间隔；正常投递使用 20 秒 long-poll，通常 1 秒内到达
 sm_threi_actions_interval "15"
 ```
 
@@ -373,17 +374,18 @@ sm_threi_instance 10002 "<实例 10002 的令牌>"
 ### 封禁与白名单
 
 管理面板提供白名单审核、移除授权、服务器封禁/解封，以及在线玩家的踢出/封禁。这些游戏内操作
-由 `ThRei_Players` 1.4.0+ 通过带每服务器令牌的 HTTP 通道执行，**不需要 RCON**：
+由 `ThRei_Players` 1.5.0+ 通过带每服务器令牌的 HTTP 通道执行，**不需要 RCON**：
 
 - 插件每 30 秒（`sm_threi_access_interval`）获取一次纯文本访问快照。服务器开启
-  `requires_whitelist` 时，不在白名单的玩家会在连接完成时被踢出；封禁始终生效，并支持临时封禁
-  到期。审核通过、移除授权、新增封禁或解封最长在一个刷新间隔内同步到游戏服务器。
-- 插件每 15 秒（`sm_threi_actions_interval`）轮询网站下发的踢出/封禁指令。执行后调用确认接口，
-  API 记录 `processed_at`；确认失败会在下次轮询重试。目标已离线时踢出无额外动作，封禁仍写入
-  插件本地缓存，阻止其重新连接。
+  `requires_whitelist` 时，不在全服白名单的玩家会在连接完成时被踢出；封禁始终生效，并支持临时
+  封禁到期。白名单为全服共享：玩家申请并通过一次后，所有开启白名单的服务器通用；审核通过、
+  移除授权、新增封禁或解封最长在一个刷新间隔内同步到游戏服务器。
+- 插件对 `/plugin/actions?wait=20` 发起 long-poll，新指令通常 1 秒内到达并执行。执行后调用
+  确认接口，API 记录 `processed_at`；请求失败时按 `sm_threi_actions_interval` 重试。目标已
+  离线时踢出无额外动作，封禁仍写入插件本地缓存，阻止其重新连接。
 - 解封会同时取消尚未执行的封禁指令，避免解封后旧指令再次踢人。
-- 网站后台的 `pendingActions` 表示尚未被插件确认的指令数。管理面板会提示指令已入队，插件执行
-  存在一个轮询间隔的延迟。
+- 网站后台的 `pendingActions` 表示尚未被插件确认的指令数。正常情况下指令约 1 秒内执行；插件
+  离线时会在恢复连接后执行。
 - 插件缓存最后一次成功加载的访问规则。API 暂时不可达时不会因为一次网络失败突然放行或踢出
   所有人；首次快照加载前是否放行由 `sm_threi_access_fail_open` 控制（默认放行）。
 - 令牌错误、撤销或缺失时，访问快照和指令接口返回 `401`，插件保留旧快照并记录日志。
@@ -394,8 +396,9 @@ sm_threi_instance 10002 "<实例 10002 的令牌>"
 `offline`。RCON 密码只写不读，不出现在任何 API 响应或日志中；删除密码会把 `hibernating`
 恢复为 `offline`。RCON 不是白名单、踢出或封禁的前置条件，未配置 RCON 的服务器一切照常工作。
 
-网站账号封禁（`bans`）与服务器封禁（`server_bans`）相互独立：前者阻止 Steam 登录并撤销会话，
-后者只影响对应游戏服务器。完整协议与排错见
+网站账号封禁（`bans`）与服务器封禁（`server_bans`）相互独立：前者支持 SteamID64 与 IP 类型，
+阻止网站登录并撤销会话；IP 封禁会自动关联该 IP 下已知的非管理员账号，管理员保留恢复通道。
+后者只影响游戏服务器。完整协议与排错见
 [../plugins/ThRei_Players/README.md](../plugins/ThRei_Players/README.md) 和
 [API.md](API.md)。
 
@@ -511,10 +514,10 @@ curl -fsS http://127.0.0.1/api/v1/system/info
 - [ ] `docker compose ps` 所有服务 healthy（`migrate` 为 exited 0）
 - [ ] API/Web 健康检查通过
 - [ ] `ADMIN_STEAM_IDS` 已配置，管理面板与管理员 API 验证通过
-- [ ] 每个游戏服务器已安装 `ThRei_Players` 1.4.0+，后台显示「插件已连接」，令牌未写入 Git
+- [ ] 每个游戏服务器已安装 `ThRei_Players` 1.5.0+，后台显示「插件已连接」，令牌未写入 Git
 - [ ] 一主机多实例时，所有实例共用一份 `threi_players.cfg`，每个实例都有匹配 `hostport` 的 `sm_threi_instance` 行，后台各自显示「插件已连接」
 - [ ] 已在「社区组」页面创建社区组并加入同一主机的多个实例，服务器目录按组显示正常
-- [ ] 白名单拦截与网站踢出/封禁已在一个轮询间隔内验证生效，并确认没有配置 RCON 也能执行
+- [ ] 全服白名单已在一个服务器上审核通过，并验证其他开启白名单的服务器也能进入；网站踢出/封禁约 1 秒内生效，且没有配置 RCON 也能执行
 - [ ] 如启用 RCON 空服探测，已设置密码、验证 `hibernating` 状态，且 API 可访问对应 RCON 端口；密码未写入日志或 Git
 - [ ] HTTPS 证书有效，HSTS 仅在验证后启用
 - [ ] 日志中无密钥、Cookie 或连接串

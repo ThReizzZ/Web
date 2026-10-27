@@ -8,7 +8,12 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    routing::post,
+};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
@@ -52,6 +57,9 @@ pub struct PluginPlayer {
     pub steam_id64: String,
     #[serde(default)]
     pub name: String,
+    /// Client IP reported by plugin 1.6.0+. Older plugins omit it.
+    #[serde(default)]
+    pub ip_address: Option<String>,
     #[serde(default)]
     pub connected_seconds: Option<i64>,
 }
@@ -65,10 +73,28 @@ pub struct PluginReportResponse {
     pub reported_at: DateTime<Utc>,
 }
 
+/// In-game ban reported by plugin 1.6.0+ through `OnBanClient`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginBanReportRequest {
+    #[serde(default)]
+    pub server_id: Option<String>,
+    pub steam_id64: String,
+    #[serde(default)]
+    pub ip_address: Option<String>,
+    #[serde(default)]
+    pub player_name: Option<String>,
+    pub reason: String,
+    /// `SourceMod` ban length in minutes. `0` or omitted means permanent.
+    #[serde(default)]
+    pub duration_minutes: Option<i64>,
+}
+
 #[derive(Debug)]
 struct NormalizedPlayer {
     steam_id64: String,
     name: String,
+    ip_address: Option<String>,
     connected_at: DateTime<Utc>,
 }
 
@@ -79,7 +105,9 @@ struct ReportServerRow {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/plugin/report", post(report))
+    Router::new()
+        .route("/plugin/report", post(report))
+        .route("/plugin/ban-report", post(ban_report))
 }
 
 #[utoipa::path(
@@ -122,6 +150,192 @@ pub async fn report(
     )
     .await
     .map(Json)
+}
+
+fn validate_ban_reason(value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 1000 {
+        return Err(AppError::Validation(
+            "reason must be between 1 and 1000 characters".to_owned(),
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn ban_expiry(minutes: Option<i64>) -> Result<Option<DateTime<Utc>>, AppError> {
+    match minutes {
+        Some(minutes) if (0..=52_560_000).contains(&minutes) => Ok(if minutes > 0 {
+            Some(Utc::now() + ChronoDuration::minutes(minutes))
+        } else {
+            None
+        }),
+        Some(_) => Err(AppError::Validation(
+            "durationMinutes must be between 0 and 52560000".to_owned(),
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Receives a ban executed on the game server by plugin 1.6.0+ so it is also
+/// visible on the website and mirrored to an IP ban. `SourceMod`'s `sm_ban`
+/// calls `BanClient`, which triggers `OnBanClient`; raw console `banid` does
+/// not fire that forward.
+#[utoipa::path(
+    post,
+    path = "/api/v1/plugin/ban-report",
+    tag = "plugin",
+    params(
+        ("x-threi-plugin-token" = String, Header, description = "Per-server plugin token generated in the admin panel")
+    ),
+    request_body = PluginBanReportRequest,
+    responses(
+        (status = 204, description = "Ban recorded"),
+        (status = 401, description = "Missing or invalid plugin token", body = crate::errors::ErrorResponse),
+        (status = 422, description = "Invalid ban fields", body = crate::errors::ErrorResponse)
+    )
+)]
+#[allow(clippy::too_many_lines)]
+pub async fn ban_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PluginBanReportRequest>,
+) -> Result<StatusCode, AppError> {
+    let token = plugin_token(&headers)?;
+    let requested_server_id = normalize_server_id(request.server_id)?;
+    let steam_id64 = request.steam_id64.trim();
+    if !is_valid_steam_id(steam_id64) {
+        return Err(AppError::Validation(
+            "steamId64 must be a 17-digit number".to_owned(),
+        ));
+    }
+    let game_reason = validate_ban_reason(&request.reason)?;
+    let expires_at = ban_expiry(request.duration_minutes)?;
+    let ip_address = normalize_player_ip(request.ip_address.as_deref());
+    let player_name = request
+        .player_name
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(MAX_NAME_CHARS).collect::<String>());
+    let ban_reason: String = format!("服务器封禁：{game_reason}")
+        .chars()
+        .take(2000)
+        .collect();
+    let server_reason: String = format!("服务器封禁：{game_reason}")
+        .chars()
+        .take(1000)
+        .collect();
+
+    let server_id = sqlx::query_scalar::<_, String>(
+        r"
+        SELECT id FROM servers
+        WHERE plugin_token = $1
+          AND ($2::text IS NULL OR id = $2)
+        ",
+    )
+    .bind(token)
+    .bind(requested_server_id.as_deref())
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
+
+    let mut transaction = state.db.begin().await?;
+
+    let already_website_banned = sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1 FROM bans
+            WHERE ban_type = 'steam'
+              AND steam_id64 = $1
+              AND lifted_at IS NULL
+              AND (expires_at IS NULL OR expires_at > now())
+        )
+        ",
+    )
+    .bind(steam_id64)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !already_website_banned {
+        sqlx::query(
+            r"
+            INSERT INTO bans (ban_type, steam_id64, player_name, reason, expires_at)
+            VALUES (
+                'steam', $1,
+                COALESCE($2, (SELECT persona_name FROM users WHERE steam_id64 = $1)),
+                $3, $4
+            )
+            ",
+        )
+        .bind(steam_id64)
+        .bind(player_name.as_deref())
+        .bind(&ban_reason)
+        .bind(expires_at)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE steam_id64 = $1)",
+        )
+        .bind(steam_id64)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    let already_server_banned = sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1 FROM server_bans
+            WHERE steam_id64 = $1
+              AND (server_id IS NULL OR server_id = $2)
+              AND lifted_at IS NULL
+              AND (expires_at IS NULL OR expires_at > now())
+        )
+        ",
+    )
+    .bind(steam_id64)
+    .bind(&server_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !already_server_banned {
+        sqlx::query(
+            r"
+            INSERT INTO server_bans (server_id, steam_id64, player_name, reason, expires_at)
+            VALUES (
+                $1, $2,
+                COALESCE($3, (SELECT persona_name FROM users WHERE steam_id64 = $2)),
+                $4, $5
+            )
+            ",
+        )
+        .bind(&server_id)
+        .bind(steam_id64)
+        .bind(player_name.as_deref())
+        .bind(&server_reason)
+        .bind(expires_at)
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    transaction.commit().await?;
+
+    if let Some(ip) = ip_address {
+        let auto_reason: String = format!("服务器封禁自动关联 IP：{game_reason}")
+            .chars()
+            .take(2000)
+            .collect();
+        if let Err(error) = crate::modules::bans::create_ip_ban(
+            &state.db,
+            None,
+            &ip,
+            None,
+            &auto_reason,
+            expires_at,
+        )
+        .await
+        {
+            tracing::warn!(%error, %steam_id64, "failed to auto-create IP ban from game ban");
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Starts the stale-server sweep. The task lives for the process lifetime and
@@ -249,6 +463,7 @@ fn normalize_players(players: &[PluginPlayer], now: DateTime<Utc>) -> (Vec<Norma
         normalized.push(NormalizedPlayer {
             steam_id64: steam_id64.to_owned(),
             name: clean_name(&player.name, steam_id64),
+            ip_address: normalize_player_ip(player.ip_address.as_deref()),
             connected_at: now - ChronoDuration::seconds(connected_seconds),
         });
     }
@@ -258,6 +473,19 @@ fn normalize_players(players: &[PluginPlayer], now: DateTime<Utc>) -> (Vec<Norma
 
 fn is_valid_steam_id(value: &str) -> bool {
     value.len() == 17 && value.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// Accepts only valid IPv4/IPv6 literals; invalid or empty values are stored
+/// as `NULL` instead of failing the whole report.
+fn normalize_player_ip(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    value
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| ip.to_string())
 }
 
 fn clean_name(value: &str, fallback: &str) -> String {
@@ -357,25 +585,27 @@ async fn persist_report(
             r"
             INSERT INTO server_players (
                 server_id, user_id, steam_id64, display_name, avatar_url,
-                connected_at, last_seen_at
+                ip_address, connected_at, last_seen_at
             )
             VALUES (
                 $1,
                 (SELECT id FROM users WHERE steam_id64 = $2),
                 $2, $3,
                 (SELECT avatar_url FROM users WHERE steam_id64 = $2),
-                $4, now()
+                $4, $5, now()
             )
             ON CONFLICT (server_id, steam_id64) DO UPDATE SET
                 display_name = EXCLUDED.display_name,
                 avatar_url = COALESCE(EXCLUDED.avatar_url, server_players.avatar_url),
                 user_id = COALESCE(EXCLUDED.user_id, server_players.user_id),
+                ip_address = COALESCE(EXCLUDED.ip_address, server_players.ip_address),
                 last_seen_at = now()
             ",
         )
         .bind(&server.id)
         .bind(&player.steam_id64)
         .bind(&player.name)
+        .bind(player.ip_address.as_deref())
         .bind(player.connected_at)
         .execute(&mut *transaction)
         .await?;
@@ -457,6 +687,7 @@ mod tests {
         PluginPlayer {
             steam_id64: steam_id64.to_owned(),
             name: name.to_owned(),
+            ip_address: None,
             connected_seconds,
         }
     }
@@ -480,6 +711,46 @@ mod tests {
         assert_eq!(players[0].connected_at, now - ChronoDuration::seconds(120));
         assert_eq!(players[1].name, "76561198000000000");
         assert_eq!(players[1].connected_at, now);
+    }
+
+    #[test]
+    fn player_ips_are_validated_and_normalized() {
+        assert_eq!(
+            normalize_player_ip(Some(" 203.0.113.10 ")),
+            Some("203.0.113.10".to_owned())
+        );
+        assert_eq!(
+            normalize_player_ip(Some("2001:0db8::1")),
+            Some("2001:db8::1".to_owned())
+        );
+        assert_eq!(normalize_player_ip(Some("")), None);
+        assert_eq!(normalize_player_ip(Some("not-an-ip")), None);
+        assert_eq!(normalize_player_ip(None), None);
+    }
+
+    #[test]
+    fn player_ip_is_carried_into_normalized_players() {
+        let mut input = player("76561198000000004", "玩家", None);
+        input.ip_address = Some(" 203.0.113.10 ".to_owned());
+        let (players, skipped) = normalize_players(&[input], Utc::now());
+        assert_eq!(skipped, 0);
+        assert_eq!(players[0].ip_address.as_deref(), Some("203.0.113.10"));
+    }
+
+    #[test]
+    fn ban_expiry_accepts_minutes_and_permanent() {
+        assert!(ban_expiry(None).unwrap().is_none());
+        assert!(ban_expiry(Some(0)).unwrap().is_none());
+        assert!(ban_expiry(Some(60)).unwrap().is_some());
+        assert!(ban_expiry(Some(-1)).is_err());
+        assert!(ban_expiry(Some(52_560_001)).is_err());
+    }
+
+    #[test]
+    fn ban_reason_is_required_and_limited() {
+        assert_eq!(validate_ban_reason("  挂机  ").unwrap(), "挂机");
+        assert!(validate_ban_reason("   ").is_err());
+        assert!(validate_ban_reason(&"理".repeat(1001)).is_err());
     }
 
     #[test]

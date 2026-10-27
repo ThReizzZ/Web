@@ -63,7 +63,7 @@ Game server (SourceMod + ThRei_Players)
 - **PostgreSQL**：权威数据源，只能由 API 访问。
 - **Redis**：缓存和临时状态（未来：限流、会话索引等），不是系统记录。
 - **Nginx**：公开入口、TLS 终止预留、路径转发、请求 ID 注入、隐藏内部健康检查。
-- **游戏服务器插件**：主动上报状态与已认证玩家，并通过同一令牌通道同步白名单、封禁与踢出/封禁指令；API 不主动连接插件。可选 RCON 仅用于空服休眠存活探测。
+- **游戏服务器插件**：主动上报状态、已认证玩家及其 IP，并通过同一令牌通道同步白名单、封禁与踢出/封禁指令，同时把游戏内 `BanClient` / `sm_ban` 封禁回传网站；API 不主动连接插件。可选 RCON 仅用于空服休眠存活探测。
 
 ## 4. Monorepo 结构
 
@@ -165,7 +165,7 @@ Steam 是唯一登录方式：
 - 数据库为空时页面显示空状态，不回退到伪造内容。
 - 迁移预置 1 篇官方新手指南；作者为 `users.is_system=true` 的系统账号，不计入成员/活跃统计。论坛“新手指南”卡片通过“查看教学”跳转到该主题。
 
-服务器状态与在线玩家由 `ThRei_Players` 上报写入 `servers` / `server_players`；公开目录和管理面板读取同一份快照。超过 90 秒未上报时，后台清理任务会把服务器标记离线并删除名单。
+服务器状态、在线玩家及其 IP 由 `ThRei_Players` 上报写入 `servers` / `server_players`；公开目录和管理面板读取同一份快照。超过 90 秒未上报时，后台清理任务会把服务器标记离线并删除名单。服务器管理封禁玩家时优先使用该 IP，缺失时回退到玩家的网站登录 IP，并自动创建 IP 封禁。
 
 ## 6. 后端架构
 
@@ -186,7 +186,7 @@ src/modules/                auth / servers / forum / community / account / admin
 src/bin/migrate.rs          独立迁移二进制
 ```
 
-已实现模块：`auth`（Steam OpenID、会话、用户）、`servers`（目录、在线玩家与白名单标记）、`server_plugin`（插件上报、令牌校验、在线名单替换与过期清理）、`plugin_access`（白名单/封禁快照与踢出/封禁指令队列）、`server_hibernation`（可选 RCON 空服存活探测）、`server_admin`（服务器增删、插件令牌、RCON 密码、玩家操作）、`server_communities`（社区组 CRUD 与实例成员关系）、`forum`（分类/主题/回复读取）、`forum_admin`（内容编辑/删除/恢复与用户禁言）、`community`（统计）、`account`（当前用户概览）、`admin`（运营统计）、`admin_users`（管理员增删/禁用）、`bans`（封禁/解封）、`whitelist`（申请审核与服务器白名单）。每个模块目前按职责分文件；后续写接口继续沿用以下结构：
+已实现模块：`auth`（Steam OpenID、会话、用户、登录 IP）、`servers`（目录、在线玩家与白名单标记）、`server_plugin`（插件上报、玩家 IP、游戏内封禁回传、令牌校验、在线名单替换与过期清理）、`plugin_access`（全服白名单/封禁快照与踢出/封禁指令队列）、`server_hibernation`（可选 RCON 空服存活探测）、`server_admin`（服务器增删、插件令牌、RCON 密码、玩家操作）、`server_communities`（社区组 CRUD 与实例成员关系）、`forum`（分类/主题/回复读取）、`forum_admin`（内容编辑/删除/恢复与用户禁言）、`community`（统计）、`account`（当前用户概览）、`admin`（运营统计）、`admin_users`（管理员增删/禁用）、`bans`（SteamID/IP 封禁、自动关联与解封）、`whitelist`（全服白名单申请审核）。每个模块目前按职责分文件；后续写接口继续沿用以下结构：
 
 ```text
 modules/<name>/
@@ -292,12 +292,13 @@ modules/<name>/
 - **上报方向**：游戏服务器上的 `ThRei_Players` 通过 SteamWorks 的 HTTP 客户端调用 `POST /api/v1/plugin/report`。API 不主动连接游戏服务器，不需要开放 A2S 端口或保存 RCON 密码。
 - **认证**：每个服务器有独立的 32 位十六进制令牌，保存在 `servers.plugin_token`，通过 `X-ThRei-Plugin-Token` 请求头提交。令牌只在管理员读取/生成接口中返回，不出现在服务器列表、公开接口或日志中。请求体 `serverId` 可选：省略时按唯一令牌定位服务器，提供时必须与令牌一致；缺失、错误、服务器不存在或不匹配统一返回 `401`。
 - **多实例**：同一主机上的多个实例共用一份 `cfg/sourcemod/threi_players.cfg`，每个实例写一行 `sm_threi_instance <hostport> "<token>"`，插件按自身端口选择令牌并以令牌上报；管理员通过 `server_communities` 社区组把同一主机的实例归在一起，服务器目录显示组名并支持筛选。
-- **输入校验**：`serverId` 最多 80 字符；地图最多 128 字符；`maxPlayers` 为 1–1024；最多 1024 名玩家；SteamID64 必须是 17 位数字；昵称截断到 80 字符；连接秒数限制在 0–2592000。无效或重复玩家记入 `skipped`，不会让整次上报失败。
-- **写入**：在单个事务中更新服务器快照（状态、地图、人数上限、人数、`last_reported_at`），删除本次不再出现的 `server_players`，并 upsert 当前玩家；upsert 保留已有 `connected_at`。`maintenance` 状态不会被上报改为 `online`。
+- **输入校验**：`serverId` 最多 80 字符；地图最多 128 字符；`maxPlayers` 为 1–1024；最多 1024 名玩家；SteamID64 必须是 17 位数字；昵称截断到 80 字符；连接秒数限制在 0–2592000；玩家 IP 必须是合法 IPv4/IPv6，非法值按 `NULL` 保存。无效或重复玩家记入 `skipped`，不会让整次上报失败。
+- **写入**：在单个事务中更新服务器快照（状态、地图、人数上限、人数、`last_reported_at`），删除本次不再出现的 `server_players`，并 upsert 当前玩家及其 IP；upsert 保留已有 `connected_at`，新插件未上报 IP 时保留旧值。`maintenance` 状态不会被上报改为 `online`。
+- **游戏内封禁回传**：`POST /api/v1/plugin/ban-report` 接受插件 `OnBanClient` 的封禁数据，写入网站 `bans` 与该服务器的 `server_bans`，并在有 IP 时调用 `bans::create_ip_ban` 自动封禁 IP。已有生效的同类封禁时跳过，避免重复；原始 `banid` 不触发该转发。
 - **过期清理**：后台任务每 30 秒扫描一次；没有 RCON 兜底的插件服务器超过 90 秒未上报时，状态改为 `offline`、人数清零、延迟清空、删除在线名单，`maintenance` 保持不变。启用 RCON 兜底且服务器有密码时，清理任务跳过该服务器，交给休眠探测任务判断。
 - **管理状态**：`pluginState` 由 `plugin_token` 与 `last_reported_at` 派生：`disabled`（无令牌）、`waiting`（有令牌但没有最近上报）、`connected`（90 秒内有上报）。
 - **令牌生命周期**：生成/轮换会清空在线快照并标记离线；撤销令牌执行同样的清理。旧令牌立即失效。
-- **访问控制**：`GET /api/v1/plugin/access-snapshot` 返回纯文本 `server`、`requires_whitelist`、`whitelist` 与带过期时间的 `ban` 行；插件每 30 秒缓存一次，在 `OnClientPostAdminCheck` 与快照刷新时检查在线玩家。白名单仅在服务器开启 `requires_whitelist` 时拦截，封禁始终生效。快照成功加载后即使 API 暂时不可达也继续使用最后一次规则；首次加载前由插件配置决定是否放行。
+- **访问控制**：`GET /api/v1/plugin/access-snapshot` 返回纯文本 `server`、`requires_whitelist`、全服 `whitelist` 与带过期时间的 `ban` 行；插件每 30 秒缓存一次，在 `OnClientPostAdminCheck` 与快照刷新时检查在线玩家。白名单仅在服务器开启 `requires_whitelist` 时拦截，封禁始终生效。快照成功加载后即使 API 暂时不可达也继续使用最后一次规则；首次加载前由插件配置决定是否放行。
 - **管理指令**：踢出/封禁写入 `server_actions`；`GET /api/v1/plugin/actions` 返回待执行纯文本（封禁附带到期时间），插件执行后 `POST /api/v1/plugin/actions/{id}/ack` 写入 `processed_at`。解封会同时把未执行的封禁指令标记完成；过期封禁不会被插件执行但会确认。
 - **休眠兜底**：`server_hibernation` 只对启用、非维护、有 RCON 密码且插件上报已过期的服务器执行 `status`。成功时 0 人标记 `hibernating`、有玩家标记 `online`；连续 3 次失败标记 `offline`。不会更新 `last_reported_at`，因此管理面板仍能区分插件失联与进程死亡。该任务不提供任意 RCON 执行面。
 
@@ -320,12 +321,13 @@ modules/<name>/
 - 业务表使用外键、唯一约束、CHECK 约束和索引；主题/回复采用 `deleted_at` 软删除字段，当前读取接口只返回未删除记录。
 - `users.is_system` 标记官方系统账号；成员数、角色分布、最近注册和活跃统计会排除这些账号。
 - `users.is_disabled` 禁用管理员账号；禁用会撤销会话并阻止登录。
-- `bans` 保存 SteamID64、原因、到期时间、操作者与解封记录；生效封禁阻止登录。
+- `bans` 保存封禁类型（`steam` / `ip`）、SteamID64 或 IP、原因、到期时间、操作者、解封记录与 `source_ban_id`；IP 封禁会自动关联该 IP 下已知的非管理员账号，生效封禁阻止登录。SteamID 封禁创建后会自动查找玩家最近 IP 并创建 IP 封禁。
+- `users.last_login_ip`、`sessions.ip_address` 与 `server_players.ip_address` 记录登录/游戏 IP，供 IP 封禁自动关联、会话撤销和服务器封禁自动封 IP 使用。
 - `servers.plugin_token` 保存每服务器插件令牌，唯一且可空；`servers.last_reported_at` 记录最近插件上报时间。
 - `servers.rcon_password` 保存可选的只写 RCON 密码，仅用于休眠存活探测；`last_rcon_at` 与 `rcon_failures` 记录探测时间和连续失败次数。密码不出现在任何响应或日志中。
 - `server_communities` 保存管理员创建的社区组（名称大小写不敏感唯一、可选描述）；`servers.community_id` 可为空并外键引用该表，删除组时自动置空，一个实例最多属于一个组。
-- `server_players` 的 SteamID64 非空，插件上报时按 `(server_id, steam_id64)` upsert；不再保存 A2S 匿名槽位。
-- `server_whitelist`、`whitelist_applications` 管理服务器白名单与审核；`servers.requires_whitelist` 标记需要白名单的服务器。
+- `server_players` 的 SteamID64 非空，插件上报时按 `(server_id, steam_id64)` upsert，并保存插件 1.6.0+ 上报的 `ip_address`；不再保存 A2S 匿名槽位。
+- `global_whitelist` 保存全服白名单（SteamID64 唯一）；`whitelist_applications` 保存全服申请与审核；`servers.requires_whitelist` 标记该服务器是否使用全服白名单。旧的 `server_whitelist` 已迁移并标记为 deprecated。
 - `forum_mutes` 记录论坛禁言；`server_bans` 记录服务器级封禁；`server_actions` 保存待游戏服务器插件消费的踢出/封禁指令。
 - 迁移只新增，不修改已应用迁移。
 - 禁止应用启动时删除/重建数据库；禁止容器启动时无条件清空卷。
@@ -361,7 +363,7 @@ modules/<name>/
 - **角色**：`member` / `moderator` / `admin`；`ADMIN_STEAM_IDS` 仅首次引导，之后由管理面板维护；管理页面和 API 均校验。
 - **登出**：删除数据库会话并返回过期 Cookie。
 - **权限**：`/api/v1/account` 需要登录；`/api/v1/admin/*` 需要管理员；公开读取接口不需要登录。管理员管理、封禁、白名单审核在 API 层再次校验。
-- **插件**：`/api/v1/plugin/report`、`/access-snapshot`、`/actions` 与指令确认接口不使用 Cookie，只接受每服务器令牌；令牌仅由管理员生成、读取和撤销。RCON 密码只能由管理员写入或删除，读取接口只返回是否已配置。
+- **插件**：`/api/v1/plugin/report`、`/access-snapshot`、`/actions`、`/ban-report` 与指令确认接口不使用 Cookie，只接受每服务器令牌；令牌仅由管理员生成、读取和撤销。RCON 密码只能由管理员写入或删除，读取接口只返回是否已配置。
 
 尚未实现：
 

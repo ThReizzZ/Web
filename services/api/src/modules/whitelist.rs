@@ -18,7 +18,8 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 pub struct WhitelistApplication {
     pub id: uuid::Uuid,
-    pub server_id: String,
+    /// `None` for applications created after the whitelist became global.
+    pub server_id: Option<String>,
     pub server_name: String,
     pub steam_id64: String,
     pub player_name: String,
@@ -34,7 +35,8 @@ pub struct WhitelistApplication {
 #[derive(Debug, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct WhitelistEntry {
-    pub server_id: String,
+    /// Always `None`: the whitelist is global. Kept for API compatibility.
+    pub server_id: Option<String>,
     pub server_name: String,
     pub steam_id64: String,
     pub player_name: String,
@@ -70,7 +72,9 @@ pub struct ReviewRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddWhitelistRequest {
-    pub server_id: String,
+    /// Ignored; kept so older clients can still submit the field.
+    #[serde(default)]
+    pub server_id: Option<String>,
     pub steam_id64: String,
     pub player_name: Option<String>,
 }
@@ -84,7 +88,9 @@ pub struct ServerWhitelistRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitApplicationRequest {
-    pub server_id: String,
+    /// Ignored; the whitelist is global now.
+    #[serde(default)]
+    pub server_id: Option<String>,
     pub message: String,
 }
 
@@ -99,10 +105,7 @@ pub fn router() -> Router<AppState> {
             "/admin/whitelist/applications/{id}/reject",
             post(reject_application),
         )
-        .route(
-            "/admin/whitelist/{server_id}/{steam_id64}",
-            delete(remove_entry),
-        )
+        .route("/admin/whitelist/{steam_id64}", delete(remove_entry))
         .route(
             "/admin/servers/{id}/whitelist",
             patch(update_server_whitelist),
@@ -128,13 +131,13 @@ async fn overview(
 
     let applications = sqlx::query_as::<_, WhitelistApplication>(
         r"
-        SELECT a.id, a.server_id, s.name AS server_name, a.steam_id64,
+        SELECT a.id, a.server_id, coalesce(s.name, '全服') AS server_name, a.steam_id64,
                coalesce(a.player_name, u.persona_name, a.steam_id64) AS player_name,
                u.avatar_url,
                a.message, a.status, a.created_at, a.reviewed_at,
                reviewer.persona_name AS reviewed_by, a.review_note
         FROM whitelist_applications a
-        JOIN servers s ON s.id = a.server_id
+        LEFT JOIN servers s ON s.id = a.server_id
         LEFT JOIN users u ON u.steam_id64 = a.steam_id64
         LEFT JOIN users reviewer ON reviewer.id = a.reviewed_by
         ORDER BY (a.status = 'pending') DESC, a.created_at DESC
@@ -145,12 +148,11 @@ async fn overview(
 
     let entries = sqlx::query_as::<_, WhitelistEntry>(
         r"
-        SELECT w.server_id, s.name AS server_name, w.steam_id64,
+        SELECT NULL::text AS server_id, '全服' AS server_name, w.steam_id64,
                coalesce(w.player_name, u.persona_name, w.steam_id64) AS player_name,
                u.avatar_url,
                w.created_at, adder.persona_name AS added_by
-        FROM server_whitelist w
-        JOIN servers s ON s.id = w.server_id
+        FROM global_whitelist w
         LEFT JOIN users u ON u.steam_id64 = w.steam_id64
         LEFT JOIN users adder ON adder.id = w.added_by
         ORDER BY w.created_at DESC
@@ -162,12 +164,12 @@ async fn overview(
     let servers = sqlx::query_as::<_, ServerWhitelistSetting>(
         r"
         SELECT s.id, s.name, s.requires_whitelist,
-               (SELECT count(*) FROM server_whitelist w WHERE w.server_id = s.id)::bigint AS whitelist_count,
-               (SELECT count(*) FROM whitelist_applications a
-                WHERE a.server_id = s.id AND a.status = 'pending')::bigint AS pending_count
+               (SELECT count(*) FROM global_whitelist)::bigint AS whitelist_count,
+               (SELECT count(*) FROM whitelist_applications
+                WHERE status = 'pending')::bigint AS pending_count
         FROM servers s
         WHERE s.is_active = true
-        ORDER BY s.name
+        ORDER BY s.sort_order, s.name
         ",
     )
     .fetch_all(&state.db)
@@ -193,26 +195,15 @@ async fn add_entry(
         .filter(|value| !value.is_empty())
         .map(|value| value.chars().take(80).collect::<String>());
 
-    let server_exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM servers WHERE id = $1 AND is_active = true)",
-    )
-    .bind(&request.server_id)
-    .fetch_one(&state.db)
-    .await?;
-    if !server_exists {
-        return Err(AppError::NotFound);
-    }
-
     sqlx::query(
         r"
-        INSERT INTO server_whitelist (server_id, steam_id64, player_name, added_by)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (server_id, steam_id64) DO UPDATE SET
-            player_name = coalesce(EXCLUDED.player_name, server_whitelist.player_name),
+        INSERT INTO global_whitelist (steam_id64, player_name, added_by)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (steam_id64) DO UPDATE SET
+            player_name = coalesce(EXCLUDED.player_name, global_whitelist.player_name),
             added_by = EXCLUDED.added_by
         ",
     )
-    .bind(&request.server_id)
     .bind(&steam_id64)
     .bind(player_name)
     .bind(admin.id)
@@ -235,7 +226,7 @@ async fn approve_application(
         .filter(|value| !value.is_empty())
         .map(|value| value.chars().take(500).collect::<String>());
 
-    let application = sqlx::query_as::<_, (String, String, Option<String>, String)>(
+    let application = sqlx::query_as::<_, (Option<String>, String, Option<String>, String)>(
         "SELECT server_id, steam_id64, player_name, status FROM whitelist_applications WHERE id = $1",
     )
     .bind(id)
@@ -247,25 +238,27 @@ async fn approve_application(
     }
 
     let mut transaction = state.db.begin().await?;
-    sqlx::query(
-        "UPDATE whitelist_applications SET status = 'approved', reviewed_by = $2, reviewed_at = now(), review_note = $3 WHERE id = $1",
+    let updated = sqlx::query(
+        "UPDATE whitelist_applications SET status = 'approved', reviewed_by = $2, reviewed_at = now(), review_note = $3 WHERE id = $1 AND status = 'pending'",
     )
     .bind(id)
     .bind(admin.id)
     .bind(note)
     .execute(&mut *transaction)
     .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::Conflict);
+    }
     sqlx::query(
         r"
-        INSERT INTO server_whitelist (server_id, steam_id64, player_name, added_by, source_application_id)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (server_id, steam_id64) DO UPDATE SET
-            player_name = coalesce(EXCLUDED.player_name, server_whitelist.player_name),
+        INSERT INTO global_whitelist (steam_id64, player_name, added_by, source_application_id)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (steam_id64) DO UPDATE SET
+            player_name = coalesce(EXCLUDED.player_name, global_whitelist.player_name),
             added_by = EXCLUDED.added_by,
             source_application_id = EXCLUDED.source_application_id
         ",
     )
-    .bind(&application.0)
     .bind(&application.1)
     .bind(&application.2)
     .bind(admin.id)
@@ -307,16 +300,14 @@ async fn reject_application(
 async fn remove_entry(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((server_id, steam_id64)): Path<(String, String)>,
+    Path(steam_id64): Path<String>,
 ) -> Result<StatusCode, AppError> {
     require_admin(&state, &headers).await?;
     let steam_id64 = validate_steam_id(&steam_id64)?;
-    let result =
-        sqlx::query("DELETE FROM server_whitelist WHERE server_id = $1 AND steam_id64 = $2")
-            .bind(server_id)
-            .bind(steam_id64)
-            .execute(&state.db)
-            .await?;
+    let result = sqlx::query("DELETE FROM global_whitelist WHERE steam_id64 = $1")
+        .bind(steam_id64)
+        .execute(&state.db)
+        .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
@@ -364,21 +355,9 @@ async fn submit_application_for_user(
         ));
     }
 
-    let server = sqlx::query_as::<_, (bool,)>(
-        "SELECT requires_whitelist FROM servers WHERE id = $1 AND is_active = true",
-    )
-    .bind(&request.server_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound)?;
-    if !server.0 {
-        return Err(AppError::Conflict);
-    }
-
     let already_whitelisted = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM server_whitelist WHERE server_id = $1 AND steam_id64 = $2)",
+        "SELECT EXISTS (SELECT 1 FROM global_whitelist WHERE steam_id64 = $1)",
     )
-    .bind(&request.server_id)
     .bind(&user.steam_id64)
     .fetch_one(&state.db)
     .await?;
@@ -386,9 +365,8 @@ async fn submit_application_for_user(
         return Err(AppError::Conflict);
     }
     let pending = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM whitelist_applications WHERE server_id = $1 AND steam_id64 = $2 AND status = 'pending')",
+        "SELECT EXISTS (SELECT 1 FROM whitelist_applications WHERE steam_id64 = $1 AND status = 'pending')",
     )
-    .bind(&request.server_id)
     .bind(&user.steam_id64)
     .fetch_one(&state.db)
     .await?;
@@ -396,15 +374,21 @@ async fn submit_application_for_user(
         return Err(AppError::Conflict);
     }
 
-    sqlx::query(
-        "INSERT INTO whitelist_applications (server_id, steam_id64, player_name, message) VALUES ($1, $2, $3, $4)",
+    let result = sqlx::query(
+        r"
+        INSERT INTO whitelist_applications (server_id, steam_id64, player_name, message)
+        VALUES (NULL, $1, $2, $3)
+        ON CONFLICT DO NOTHING
+        ",
     )
-    .bind(&request.server_id)
     .bind(&user.steam_id64)
     .bind(&user.persona_name)
     .bind(message)
     .execute(&state.db)
     .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::Conflict);
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

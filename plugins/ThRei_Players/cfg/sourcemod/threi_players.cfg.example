@@ -38,7 +38,9 @@ sm_threi_access_interval "30"
 // Website kick/ban action polling. 1 = enabled, 0 = disabled.
 sm_threi_actions_enabled "1"
 
-// Seconds between action polls, 5-600.
+// Retry/backoff seconds after a failed action request, 5-600.
+// Normal delivery uses a 20-second long poll and re-polls about 1 second
+// after each response, so this is not a fixed polling interval.
 sm_threi_actions_interval "15"
 
 // Kick message shown to a player who is not on the whitelist.

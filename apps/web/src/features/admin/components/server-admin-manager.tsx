@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  ArrowUpDown,
   Ban,
   Check,
+  ClipboardCheck,
   Copy,
   FolderTree,
   Gamepad2,
@@ -392,9 +394,7 @@ export function ServerAdminManager({
     setBusy(`kick-${server.id}-${steamId64}`);
     try {
       await kickServerPlayer(getBrowserApiClient(), server.id, steamId64, reason);
-      setFeedback(
-        `踢出 ${player.name} 的指令已进入队列；ThRei_Players 1.4.0+ 会在下一次轮询时执行。`,
-      );
+      setFeedback(`踢出 ${player.name} 的指令已发送，通常 1 秒内执行。`);
       await reload();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "踢出失败。");
@@ -409,7 +409,19 @@ export function ServerAdminManager({
     if (!reason) {
       return;
     }
-    if (!window.confirm(`确认在 ${server.name} 封禁 ${player.name}？`)) {
+    const scopeInput = window.prompt(
+      `封禁范围：输入 "global" 全服封禁，输入 "server" 仅本服\n（默认 global；取消则放弃封禁）`,
+      "global",
+    );
+    if (scopeInput === null) {
+      return;
+    }
+    const scope = scopeInput.trim().toLowerCase().startsWith("s") ? "server" : "global";
+    const scopeLabel = scope === "global" ? "全服" : `仅 ${server.name}`;
+    const ipNotice = player.ipAddress
+      ? `\n同时会自动封禁该玩家 IP ${player.ipAddress}（网站登录与已知关联账号）。`
+      : "\n如果该玩家有网站登录记录，也会自动封禁其最近 IP。";
+    if (!window.confirm(`确认对 ${player.name} 执行${scopeLabel}封禁？${ipNotice}`)) {
       return;
     }
     setBusy(`ban-${server.id}-${steamId64}`);
@@ -418,9 +430,10 @@ export function ServerAdminManager({
         reason,
         playerName: player.name,
         expiresInHours: null,
+        scope,
       });
       setFeedback(
-        `封禁 ${player.name} 的指令已进入队列；插件会踢出在线目标，并在后续连接时依据封禁名单拦截。`,
+        `${scopeLabel}封禁 ${player.name} 的指令已发送，通常 1 秒内执行；插件离线时会在恢复后执行。`,
       );
       await reload();
     } catch (error) {
@@ -579,7 +592,15 @@ export function ServerAdminManager({
               检测失败才标记离线。
             </p>
           </div>
-          <Badge variant="secondary">{servers.length} 个服务器</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link href="/admin/server-order">
+                <ArrowUpDown />
+                调整顺序
+              </Link>
+            </Button>
+            <Badge variant="secondary">{servers.length} 个服务器</Badge>
+          </div>
         </div>
         <div className="divide-y">
           {servers.length > 0 ? (
@@ -639,7 +660,7 @@ export function ServerAdminManager({
                         </Badge>
                         <RconBadge server={server} />
                         {server.pendingActions > 0 ? (
-                          <Tooltip label="等待 ThRei_Players 轮询执行的踢出/封禁指令">
+                          <Tooltip label="等待插件执行/确认的踢出/封禁指令">
                             <Badge variant="warning">待执行 {server.pendingActions}</Badge>
                           </Tooltip>
                         ) : null}
@@ -679,7 +700,7 @@ export function ServerAdminManager({
                       ) : null}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2 lg:shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 lg:shrink-0">
                     <Button
                       type="button"
                       size="sm"
@@ -698,40 +719,61 @@ export function ServerAdminManager({
                       type="button"
                       size="sm"
                       variant="outline"
-                      onClick={() => openRconDialog(server)}
-                    >
-                      <Radio /> RCON 兜底
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => openCommunityDialog(server)}
-                    >
-                      <FolderTree /> 社区组
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
                       disabled={busy === `server-active-${server.id}`}
                       onClick={() => void toggleActive(server)}
                     >
                       {server.isActive ? <WifiOff /> : <Wifi />}
                       {server.isActive ? "停用" : "启用"}
                     </Button>
-                    <Button asChild size="sm" variant="ghost">
-                      <Link href="/admin/whitelist">白名单</Link>
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy === `server-delete-${server.id}`}
-                      onClick={() => setDeleteTarget(server)}
-                    >
-                      <Trash2 /> 删除
-                    </Button>
+                    <div className="flex items-center gap-1 rounded-md border bg-background p-1">
+                      <Tooltip label="RCON 兜底">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="size-8 px-0"
+                          onClick={() => openRconDialog(server)}
+                          aria-label="RCON 兜底"
+                          title="RCON 兜底"
+                        >
+                          <Radio />
+                        </Button>
+                      </Tooltip>
+                      <Tooltip label="社区组">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="size-8 px-0"
+                          onClick={() => openCommunityDialog(server)}
+                          aria-label="社区组"
+                          title="社区组"
+                        >
+                          <FolderTree />
+                        </Button>
+                      </Tooltip>
+                      <Tooltip label="白名单管理">
+                        <Button asChild size="sm" variant="ghost" className="size-8 px-0">
+                          <Link href="/admin/whitelist" aria-label="白名单管理" title="白名单管理">
+                            <ClipboardCheck />
+                          </Link>
+                        </Button>
+                      </Tooltip>
+                      <Tooltip label="删除服务器">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="size-8 px-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          disabled={busy === `server-delete-${server.id}`}
+                          onClick={() => setDeleteTarget(server)}
+                          aria-label="删除服务器"
+                          title="删除服务器"
+                        >
+                          <Trash2 />
+                        </Button>
+                      </Tooltip>
+                    </div>
                   </div>
                 </div>
 
@@ -740,7 +782,7 @@ export function ServerAdminManager({
                     <p className="text-xs font-medium text-muted-foreground">
                       在线玩家 · {server.playerCount ?? server.players.length}
                       <span className="ml-2 font-normal">
-                        踢出/封禁会写入执行队列，ThRei_Players 1.4.0+ 轮询后执行。
+                        踢出/封禁会立即下发，通常 1 秒内执行；插件离线时会在恢复后执行。
                       </span>
                     </p>
                     <div className="mt-2 divide-y">
@@ -758,6 +800,7 @@ export function ServerAdminManager({
                               </div>
                               <p className="font-mono text-[10px] break-all text-muted-foreground">
                                 {player.steamId64}
+                                {player.ipAddress ? ` · IP ${player.ipAddress}` : ""}
                               </p>
                             </div>
                           </div>
@@ -810,7 +853,7 @@ export function ServerAdminManager({
             <Ban className="size-4 text-primary" /> 服务器封禁
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            服务器封禁只影响对应服务器；网站登录封禁仍由封禁管理页维护。
+            全服封禁对所有服务器生效；单服封禁只影响对应服务器。网站登录封禁仍由封禁管理页维护。
           </p>
         </div>
         <div className="divide-y">
@@ -827,6 +870,9 @@ export function ServerAdminManager({
                       <p className="font-medium break-words">{ban.playerName}</p>
                       <Badge variant={ban.isActive ? "warning" : "muted"}>
                         {ban.isActive ? "生效中" : "已结束"}
+                      </Badge>
+                      <Badge variant="outline">
+                        {ban.scope === "global" ? "全服封禁" : "单服封禁"}
                       </Badge>
                     </div>
                     <p className="mt-1 font-mono text-[11px] break-all text-muted-foreground">

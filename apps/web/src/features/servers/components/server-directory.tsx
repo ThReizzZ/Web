@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutGrid, List, Search, Users, X } from "lucide-react";
+import { ArrowUpDown, LayoutGrid, List, Search, Users, X } from "lucide-react";
 import { useSyncExternalStore, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -10,12 +10,50 @@ import { ServerListRow } from "@/features/servers/components/server-list-row";
 import {
   getOnlinePlayerTotal,
   searchServers,
+  sortServers,
   type KzServer,
+  type ServerSortKey,
 } from "@/features/servers/data/servers";
 
 const VIEW_STORAGE_KEY = "threi.servers.view";
 const VIEW_CHANGE_EVENT = "threi:servers-view-change";
+const SORT_STORAGE_KEY = "threi.servers.sort";
+const SORT_CHANGE_EVENT = "threi:servers-sort-change";
 type ViewMode = "card" | "list";
+
+const SORT_OPTIONS: { value: ServerSortKey; label: string }[] = [
+  { value: "default", label: "默认排序" },
+  { value: "players", label: "在线人数" },
+  { value: "name", label: "服务器名称" },
+  { value: "latency", label: "延迟最低" },
+  { value: "status", label: "在线状态" },
+];
+
+function isSortKey(value: string | null): value is ServerSortKey {
+  return SORT_OPTIONS.some((option) => option.value === value);
+}
+
+function subscribeToSort(callback: () => void) {
+  window.addEventListener("storage", callback);
+  window.addEventListener(SORT_CHANGE_EVENT, callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(SORT_CHANGE_EVENT, callback);
+  };
+}
+
+function getSortSnapshot(): ServerSortKey {
+  try {
+    const value = window.localStorage.getItem(SORT_STORAGE_KEY);
+    return isSortKey(value) ? value : "default";
+  } catch {
+    return "default";
+  }
+}
+
+function getServerSortSnapshot(): ServerSortKey {
+  return "default";
+}
 
 function subscribeToView(callback: () => void) {
   window.addEventListener("storage", callback);
@@ -69,6 +107,7 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
     getColumnCount,
     getServerColumnCount,
   );
+  const sort = useSyncExternalStore(subscribeToSort, getSortSnapshot, getServerSortSnapshot);
   const [query, setQuery] = useState("");
   const [communityFilter, setCommunityFilter] = useState<string | null>(null);
   const communities = Array.from(
@@ -78,8 +117,9 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
   const filteredServers = communityFilter
     ? searchedServers.filter((server) => server.community === communityFilter)
     : searchedServers;
-  const columns = Array.from({ length: columnCount }, () => [] as typeof filteredServers);
-  filteredServers.forEach((server, index) => {
+  const orderedServers = sortServers(filteredServers, sort);
+  const columns = Array.from({ length: columnCount }, () => [] as typeof orderedServers);
+  orderedServers.forEach((server, index) => {
     columns[index % columnCount]!.push(server);
   });
   const onlineTotal = getOnlinePlayerTotal(servers);
@@ -97,6 +137,15 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
       // The selection still applies for the current page session.
     }
     window.dispatchEvent(new Event(VIEW_CHANGE_EVENT));
+  }
+
+  function selectSort(nextSort: ServerSortKey) {
+    try {
+      window.localStorage.setItem(SORT_STORAGE_KEY, nextSort);
+    } catch {
+      // The selection still applies for the current page session.
+    }
+    window.dispatchEvent(new Event(SORT_CHANGE_EVENT));
   }
 
   return (
@@ -165,10 +214,28 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
             </button>
           ) : null}
         </div>
-        <p className="text-xs text-muted-foreground" aria-live="polite">
-          显示 <span className="font-medium text-foreground">{filteredServers.length}</span> /{" "}
-          {servers.length} 个服务器
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3 sm:justify-end">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <ArrowUpDown className="size-3.5" aria-hidden="true" />
+            <span className="sr-only">排序方式</span>
+            <select
+              value={sort}
+              onChange={(event) => selectSort(event.target.value as ServerSortKey)}
+              className="h-8 rounded-md border bg-background px-2 text-sm text-foreground shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+              aria-label="服务器排序方式"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            显示 <span className="font-medium text-foreground">{filteredServers.length}</span> /{" "}
+            {servers.length} 个服务器
+          </p>
+        </div>
       </div>
 
       {communities.length > 0 ? (
@@ -239,7 +306,7 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
         </div>
       ) : (
         <div className="space-y-3">
-          {filteredServers.map((server) => (
+          {orderedServers.map((server) => (
             <ServerListRow key={server.id} server={server} />
           ))}
         </div>

@@ -54,7 +54,6 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
   const [applications, setApplications] = useState(initial.applications);
   const [entries, setEntries] = useState(initial.entries);
   const [servers, setServers] = useState(initial.servers);
-  const [serverId, setServerId] = useState(initial.servers[0]?.id ?? "");
   const [steamId64, setSteamId64] = useState("");
   const [playerName, setPlayerName] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -70,7 +69,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
 
   const pending = applications.filter((item) => item.status === "pending");
   const reviewed = applications.filter((item) => item.status !== "pending").slice(0, 10);
-  const whitelisted = new Set(entries.map((entry) => `${entry.serverId}:${entry.steamId64}`));
+  const whitelisted = new Set(entries.map((entry) => entry.steamId64));
 
   function refresh() {
     startTransition(() => router.refresh());
@@ -112,15 +111,15 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
       if (decision === "approve") {
         setEntries((current) => [
           {
-            serverId: application.serverId,
-            serverName: application.serverName,
+            serverId: null,
+            serverName: "全服",
             steamId64: application.steamId64,
             playerName: application.playerName,
             avatarUrl: application.avatarUrl,
             createdAt: new Date().toISOString(),
             addedBy: "白名单审核",
           },
-          ...current,
+          ...current.filter((entry) => entry.steamId64 !== application.steamId64),
         ]);
       }
       setReviewTarget(null);
@@ -136,10 +135,6 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
   async function addEntry(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFeedback(null);
-    if (!serverId) {
-      setFeedback("请先选择一个服务器。");
-      return;
-    }
     if (!/^\d{17}$/.test(steamId64.trim())) {
       setFeedback("SteamID64 必须是 17 位数字。");
       return;
@@ -147,26 +142,24 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
     setBusy("add");
     try {
       await addWhitelistEntry(getBrowserApiClient(), {
-        serverId,
         steamId64: steamId64.trim(),
         playerName: playerName.trim() || undefined,
       });
-      const server = servers.find((item) => item.id === serverId);
       setEntries((current) => [
         {
-          serverId,
-          serverName: server?.name ?? serverId,
+          serverId: null,
+          serverName: "全服",
           steamId64: steamId64.trim(),
           playerName: playerName.trim() || steamId64.trim(),
           avatarUrl: null,
           createdAt: new Date().toISOString(),
           addedBy: "手动添加",
         },
-        ...current,
+        ...current.filter((entry) => entry.steamId64 !== steamId64.trim()),
       ]);
       setSteamId64("");
       setPlayerName("");
-      setFeedback("已加入白名单。");
+      setFeedback("已加入全服白名单。");
       setShowManual(false);
       refresh();
     } catch (error) {
@@ -177,16 +170,12 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
   }
 
   async function removeEntry(entry: WhitelistEntry) {
-    setBusy(`${entry.serverId}:${entry.steamId64}`);
+    setBusy(entry.steamId64);
     setFeedback(null);
     try {
-      await removeWhitelistEntry(getBrowserApiClient(), entry.serverId, entry.steamId64);
-      setEntries((current) =>
-        current.filter(
-          (item) => !(item.serverId === entry.serverId && item.steamId64 === entry.steamId64),
-        ),
-      );
-      setFeedback("已从白名单移除。");
+      await removeWhitelistEntry(getBrowserApiClient(), entry.steamId64);
+      setEntries((current) => current.filter((item) => item.steamId64 !== entry.steamId64));
+      setFeedback("已从全服白名单移除。");
       refresh();
     } catch (error) {
       setFeedback(errorMessage(error));
@@ -232,8 +221,8 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
           <p className="text-sm font-medium text-primary">白名单</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">白名单审核</h1>
           <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            管理需要白名单的服务器、审核玩家申请并维护已授权名单。ThRei_Players 1.4.0+ 会每 30
-            秒同步名单，并在玩家连接时校验；未通过者会被踢出。
+            白名单为全服共享：审核通过或手动添加一次，所有开启白名单的服务器通用。 ThRei_Players
+            1.5.0+ 会每 30 秒同步名单，并在玩家连接时校验；未通过者会被踢出。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -369,7 +358,8 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                   服务器白名单设置
                 </h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  开启后，未授权玩家会被插件踢出；审核通过后最多 30 秒同步到游戏服务器。
+                  白名单为全服共享；开启后该服务器使用同一份名单，审核通过后最多 30
+                  秒同步到游戏服务器。
                 </p>
               </div>
             </div>
@@ -390,7 +380,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                         )}
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {server.whitelistCount} 条授权 · {server.pendingCount} 条待审核
+                        全服授权 {server.whitelistCount} 人 · 待审核 {server.pendingCount} 条
                       </p>
                     </div>
                     <Button
@@ -419,16 +409,16 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
 
           <section className="rounded-xl border bg-card">
             <div className="border-b px-5 py-4">
-              <h2 className="font-semibold">已授权名单</h2>
+              <h2 className="font-semibold">全服已授权名单</h2>
               <p className="mt-1 text-xs text-muted-foreground">
-                按服务器管理白名单；移除后玩家需要重新申请。
+                审核通过或手动添加后，所有开启白名单的服务器通用；移除后玩家需要重新申请。
               </p>
             </div>
             <div className="divide-y">
               {entries.length > 0 ? (
                 entries.map((entry) => (
                   <article
-                    key={`${entry.serverId}:${entry.steamId64}`}
+                    key={entry.steamId64}
                     className="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between"
                   >
                     <div className="flex min-w-0 items-start gap-3">
@@ -441,7 +431,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground md:justify-end">
-                      <Badge variant="muted">{entry.serverName}</Badge>
+                      <Badge variant="muted">全服</Badge>
                       <span>{formatDate(entry.createdAt)}</span>
                       {entry.addedBy ? <span>由 {entry.addedBy}</span> : null}
                     </div>
@@ -450,7 +440,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                       size="sm"
                       variant="ghost"
                       className="self-start md:self-auto"
-                      disabled={busy === `${entry.serverId}:${entry.steamId64}`}
+                      disabled={busy === entry.steamId64}
                       onClick={() => setRemoveTarget(entry)}
                     >
                       <Trash2 aria-hidden="true" />
@@ -470,21 +460,17 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
         <Modal
           open={showManual}
           onOpenChange={setShowManual}
-          title="手动添加白名单"
-          description="适用于已在其他渠道核实过的玩家。"
+          title="手动添加全服白名单"
+          description="加入全服白名单，所有开启白名单的服务器通用。"
           size="md"
           footer={
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setShowManual(false)}>
                 取消
               </Button>
-              <Button
-                type="submit"
-                form="whitelist-add-form"
-                disabled={busy === "add" || servers.length === 0}
-              >
+              <Button type="submit" form="whitelist-add-form" disabled={busy === "add"}>
                 {busy === "add" ? <LoaderCircle className="animate-spin" /> : <Plus />}
-                加入白名单
+                加入全服白名单
               </Button>
             </div>
           }
@@ -492,26 +478,9 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
           <form id="whitelist-add-form" onSubmit={addEntry} className="grid gap-4 md:grid-cols-2">
             <Alert variant="info" className="md:col-span-2">
               <AlertDescription>
-                白名单写入后会由 ThRei_Players 1.4.0+ 在 30 秒内同步，并在玩家连接时执行拦截。
+                写入全服白名单后，ThRei_Players 1.5.0+ 会在 30 秒内同步到所有开启白名单的服务器。
               </AlertDescription>
             </Alert>
-            <div className="space-y-1.5">
-              <Label htmlFor="whitelist-server">服务器</Label>
-              <select
-                id="whitelist-server"
-                value={serverId}
-                onChange={(event) => setServerId(event.target.value)}
-                disabled={servers.length === 0}
-                className="h-9 w-full rounded-md border bg-background px-3 text-sm disabled:opacity-50"
-              >
-                {servers.length === 0 ? <option value="">没有可用服务器</option> : null}
-                {servers.map((server) => (
-                  <option key={server.id} value={server.id}>
-                    {server.name}
-                  </option>
-                ))}
-              </select>
-            </div>
             <div className="space-y-1.5">
               <Label htmlFor="whitelist-steam-id">SteamID64</Label>
               <Input
@@ -524,7 +493,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
                 onChange={(event) => setSteamId64(event.target.value.replace(/\D/g, ""))}
               />
             </div>
-            <div className="space-y-1.5 md:col-span-2">
+            <div className="space-y-1.5">
               <Label htmlFor="whitelist-player-name">玩家昵称（可选）</Label>
               <Input
                 id="whitelist-player-name"
@@ -535,7 +504,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
             </div>
           </form>
           <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-            已授权：{whitelisted.size} 条。ThRei_Players 1.4.0+ 每 30 秒同步，连接时按 SteamID64
+            全服已授权：{whitelisted.size} 人。ThRei_Players 1.5.0+ 每 30 秒同步，连接时按 SteamID64
             校验这里的记录。
           </p>
         </Modal>
@@ -554,7 +523,7 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
           }
           description={
             reviewTarget?.decision === "approve"
-              ? "通过后会立即写入对应服务器的白名单。"
+              ? "通过后会加入全服白名单，所有开启白名单的服务器通用。"
               : "拒绝后会在申请记录中保留审核备注。"
           }
           confirmLabel={reviewTarget?.decision === "approve" ? "通过申请" : "拒绝申请"}
@@ -583,12 +552,10 @@ export function WhitelistManager({ initial }: { initial: WhitelistOverview }) {
             }
           }}
           title={removeTarget ? `移除 ${removeTarget.playerName} 的白名单` : "移除白名单"}
-          description="移除后该玩家需要重新申请或由管理员重新授权。"
+          description="移除后该玩家在所有服务器都将失去白名单，需要重新申请或由管理员重新授权。"
           confirmLabel="移除白名单"
           destructive
-          pending={
-            removeTarget !== null && busy === `${removeTarget.serverId}:${removeTarget.steamId64}`
-          }
+          pending={removeTarget !== null && busy === removeTarget.steamId64}
           onConfirm={() => removeTarget && void removeEntry(removeTarget)}
         />
       </div>

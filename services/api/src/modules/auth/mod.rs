@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, net::IpAddr};
 
 use axum::{
     Extension, Json, Router,
@@ -122,9 +122,11 @@ async fn steam_login(Extension(settings): Extension<AuthSettings>) -> Result<Red
 async fn steam_callback(
     State(state): State<AppState>,
     Extension(settings): Extension<AuthSettings>,
+    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    match complete_steam_login(&state, &settings, params).await {
+    let ip_address = client_ip(&headers);
+    match complete_steam_login(&state, &settings, params, ip_address.as_deref()).await {
         Ok((_user, token)) => {
             let mut response =
                 Redirect::to(&format!("{}/account", settings.web_url)).into_response();
@@ -145,10 +147,12 @@ async fn steam_callback(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn complete_steam_login(
     state: &AppState,
     settings: &AuthSettings,
     params: HashMap<String, String>,
+    ip_address: Option<&str>,
 ) -> Result<(AuthUser, String), AppError> {
     if params.get("openid.mode").map(String::as_str) != Some("id_res") {
         return Err(AppError::bad_request(
@@ -185,13 +189,14 @@ async fn complete_steam_login(
 
     let user = sqlx::query_as::<_, AuthUser>(
         r"
-        INSERT INTO users (steam_id64, persona_name, avatar_url, role, last_login_at)
-        VALUES ($1, $2, $3, $4, now())
+        INSERT INTO users (steam_id64, persona_name, avatar_url, role, last_login_at, last_login_ip)
+        VALUES ($1, $2, $3, $4, now(), $5)
         ON CONFLICT (steam_id64) DO UPDATE SET
             persona_name = EXCLUDED.persona_name,
             avatar_url = EXCLUDED.avatar_url,
             role = users.role,
             last_login_at = now(),
+            last_login_ip = coalesce(EXCLUDED.last_login_ip, users.last_login_ip),
             updated_at = now()
         RETURNING id, steam_id64, persona_name, avatar_url, role, bio, location,
                   is_disabled, created_at, last_login_at
@@ -201,6 +206,7 @@ async fn complete_steam_login(
     .bind(persona_name)
     .bind(avatar_url)
     .bind(role)
+    .bind(ip_address)
     .fetch_one(&state.db)
     .await?;
 
@@ -224,16 +230,83 @@ async fn complete_steam_login(
         return Err(AppError::Forbidden);
     }
 
+    if let Some(ip) = ip_address {
+        let ip_ban = sqlx::query_as::<_, (Uuid, String, Option<DateTime<Utc>>, Option<Uuid>)>(
+            r"
+            SELECT id, reason, expires_at, created_by
+            FROM bans
+            WHERE ban_type = 'ip'
+              AND ip_address = $1
+              AND lifted_at IS NULL
+              AND (expires_at IS NULL OR expires_at > now())
+            ORDER BY created_at DESC
+            LIMIT 1
+            ",
+        )
+        .bind(ip)
+        .fetch_optional(&state.db)
+        .await?;
+
+        if let Some((ip_ban_id, ip_reason, ip_expires_at, ip_created_by)) = ip_ban {
+            if user.role == "admin" {
+                // Keep an operator recovery path: admins can still sign in from
+                // a banned IP, but the event is logged.
+                tracing::warn!(
+                    steam_id64 = %user.steam_id64,
+                    ip = %ip,
+                    "administrator signed in from a banned IP"
+                );
+            } else {
+                let reason: String = format!("IP 封禁自动关联：{ip_reason}")
+                    .chars()
+                    .take(2000)
+                    .collect();
+                sqlx::query(
+                    r"
+                    INSERT INTO bans (
+                        ban_type, steam_id64, player_name, reason, expires_at,
+                        created_by, source_ban_id
+                    )
+                    SELECT 'steam', $1, $2, $3, $4, $5, $6
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM bans b
+                        WHERE b.ban_type = 'steam'
+                          AND b.steam_id64 = $1
+                          AND b.lifted_at IS NULL
+                          AND (b.expires_at IS NULL OR b.expires_at > now())
+                    )
+                    ",
+                )
+                .bind(&user.steam_id64)
+                .bind(&user.persona_name)
+                .bind(&reason)
+                .bind(ip_expires_at)
+                .bind(ip_created_by)
+                .bind(ip_ban_id)
+                .execute(&state.db)
+                .await?;
+                sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+                    .bind(user.id)
+                    .execute(&state.db)
+                    .await?;
+                return Err(AppError::Forbidden);
+            }
+        }
+    }
+
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let token_hash = hash_token(&token);
     let expires_at = Utc::now() + ChronoDuration::days(settings.session_ttl_days);
 
-    sqlx::query("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)")
-        .bind(token_hash)
-        .bind(user.id)
-        .bind(expires_at)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "INSERT INTO sessions (token_hash, user_id, expires_at, ip_address) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(token_hash)
+    .bind(user.id)
+    .bind(expires_at)
+    .bind(ip_address)
+    .execute(&state.db)
+    .await?;
 
     Ok((user, token))
 }
@@ -251,9 +324,18 @@ async fn complete_steam_login(
 async fn magic_login(
     State(state): State<AppState>,
     Extension(settings): Extension<AuthSettings>,
+    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    match exchange_magic_token(&state, &settings, params.get("token").map(String::as_str)).await {
+    let ip_address = client_ip(&headers);
+    match exchange_magic_token(
+        &state,
+        &settings,
+        params.get("token").map(String::as_str),
+        ip_address.as_deref(),
+    )
+    .await
+    {
         Ok(token) => {
             let mut response =
                 Redirect::to(&format!("{}/account", settings.web_url)).into_response();
@@ -278,6 +360,7 @@ async fn exchange_magic_token(
     state: &AppState,
     settings: &AuthSettings,
     token: Option<&str>,
+    ip_address: Option<&str>,
 ) -> Result<String, AppError> {
     let token = token.ok_or_else(|| AppError::bad_request("missing login token"))?;
     if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -332,12 +415,15 @@ async fn exchange_magic_token(
         .bind(user.id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)")
-        .bind(hash_token(&new_token))
-        .bind(user.id)
-        .bind(expires_at)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO sessions (token_hash, user_id, expires_at, ip_address) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(hash_token(&new_token))
+    .bind(user.id)
+    .bind(expires_at)
+    .bind(ip_address)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
 
     Ok(new_token)
@@ -470,6 +556,56 @@ pub async fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<Auth
     Ok(user)
 }
 
+/// Best-effort client IP from the reverse proxy headers.
+///
+/// Caddy sits in front of Nginx in production, so Nginx's `X-Real-IP` is
+/// `127.0.0.1`; the original client is the first non-loopback entry of
+/// `X-Forwarded-For`. When the API is reached directly through Nginx,
+/// `X-Real-IP` is the useful value.
+pub fn client_ip(headers: &HeaderMap) -> Option<String> {
+    fn parse(value: &str) -> Option<IpAddr> {
+        value.trim().parse().ok()
+    }
+
+    if let Some(ip) = headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse)
+        && !ip.is_loopback()
+    {
+        return Some(ip.to_string());
+    }
+
+    if let Some(value) = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    {
+        let mut forwarded = None;
+        let mut fallback = None;
+        for part in value.split(',') {
+            if let Some(ip) = parse(part) {
+                if ip.is_loopback() {
+                    fallback.get_or_insert(ip);
+                } else {
+                    // Use the last non-loopback entry: Caddy is the edge proxy
+                    // and Nginx appends its own loopback address. This also
+                    // ignores a spoofed leading entry.
+                    forwarded = Some(ip);
+                }
+            }
+        }
+        if let Some(ip) = forwarded.or(fallback) {
+            return Some(ip.to_string());
+        }
+    }
+
+    headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse)
+        .map(|ip| ip.to_string())
+}
+
 fn session_token(headers: &HeaderMap) -> Option<String> {
     let cookie = headers.get(COOKIE)?.to_str().ok()?;
     cookie.split(';').find_map(|part| {
@@ -536,6 +672,28 @@ mod tests {
         );
         assert_eq!(extract_steam_id("https://example.com/openid/id/765"), None);
         assert_eq!(extract_steam_id("not a URL"), None);
+    }
+
+    #[test]
+    fn client_ip_prefers_public_real_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("203.0.113.10"));
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.2, 127.0.0.1"),
+        );
+        assert_eq!(client_ip(&headers).as_deref(), Some("203.0.113.10"));
+    }
+
+    #[test]
+    fn client_ip_uses_last_public_forwarded_entry() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("127.0.0.1"));
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.2, 203.0.113.10, 127.0.0.1"),
+        );
+        assert_eq!(client_ip(&headers).as_deref(), Some("203.0.113.10"));
     }
 
     #[test]

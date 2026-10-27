@@ -2,9 +2,10 @@
 
 `ThRei_Players` 是 threi 的 SourceMod 服务器插件，负责：
 
-- 向 threi API 上报服务器名称、地图、人数上限与 SteamID64 在线玩家；
+- 向 threi API 上报服务器名称、地图、人数上限、SteamID64 在线玩家及其 IP；
 - 从 threi API 同步白名单与封禁快照，在玩家连接时执行拦截；
-- 轮询管理后台下发的踢出/封禁指令，执行后向 API 确认；
+- 长轮询管理后台下发的踢出/封禁指令，通常 1 秒内执行，执行后向 API 确认；
+- 把游戏内通过 `BanClient`（包括 `sm_ban`）执行的封禁回传网站，网站会记录封禁并自动封禁该玩家 IP；
 - 在最后一名玩家断开时立即补报一次，尽量让网站先清理名单再进入空服休眠。
 
 白名单、踢出和封禁全部走带每服务器令牌的插件 HTTP 通道，**不需要 RCON**。RCON 只用于
@@ -39,8 +40,10 @@ sm plugins reload ThRei_Players
 sm_threi_status
 ```
 
-1.4.0 新增的白名单/封禁同步需要使用本仓库中带 `plugin/access-snapshot` 与
-`plugin/actions` 接口的 API。旧 API 会返回 404，此时插件仍会上报状态，但不会执行访问控制。
+1.6.0 在 1.5.0 的 long-poll 基础上增加了在线玩家 IP 上报与游戏内封禁回传。1.5.0 使用
+`/plugin/actions?wait=20` 长轮询，新指令通常 1 秒内到达；1.4.0 的白名单/封禁同步仍依赖
+本仓库带 `plugin/access-snapshot` 与 `plugin/actions` 接口的 API。旧 API 会返回 404，此时
+插件仍会上报状态，但不会执行访问控制，也不会回传游戏内封禁。
 
 ## 获取服务器令牌
 
@@ -88,10 +91,11 @@ sm_threi_access_fail_open "1"
 // 白名单/封禁快照刷新间隔，单位秒，范围 10–600
 sm_threi_access_interval "30"
 
-// 总开关：轮询网站下发的踢出/封禁指令
+// 总开关：长轮询网站下发的踢出/封禁指令
 sm_threi_actions_enabled "1"
 
-// 指令轮询间隔，单位秒，范围 5–600
+// 失败后的重试间隔，单位秒，范围 5–600。正常投递使用 20 秒 long-poll，
+// 不再是固定轮询间隔。
 sm_threi_actions_interval "15"
 
 // 被白名单拦截时的提示
@@ -173,6 +177,8 @@ ban 76561198000000001 1792914155 临时封禁
 ```
 
 - `requires_whitelist 0` 时只执行封禁，不检查白名单；`1` 时同时检查。
+- 快照中的 `whitelist` 行来自网站的全服白名单；同一份名单用于所有开启 `requires_whitelist`
+  的服务器。玩家申请并通过一次后，所有这类服务器都可进入。
 - `ban` 的第二个字段是到期 Unix 时间戳，`0` 表示永久。插件本地也会判断是否过期，
   网站解除封禁或封禁到期后，新快照加载即恢复放行。
 - 快照加载后，新连接会在 `OnClientPostAdminCheck` 时检查；随后每次刷新快照也会复查在线玩家，
@@ -184,7 +190,9 @@ ban 76561198000000001 1792914155 临时封禁
 
 ### 踢出与封禁指令
 
-插件每 `sm_threi_actions_interval` 秒轮询待执行指令：
+插件对 `/plugin/actions?wait=20` 发起 long-poll：没有指令时请求最多挂起 20 秒，一有新指令
+立即返回；每次响应后约 1 秒内重新发起下一次请求。`sm_threi_actions_interval` 只作为请求
+失败后的重试间隔。
 
 ```text
 # ThRei actions v1
@@ -244,6 +252,7 @@ Content-Type: application/json
     {
       "steamId64": "76561199125125759",
       "name": "玩家昵称",
+      "ipAddress": "203.0.113.10",
       "connectedSeconds": 120
     }
   ]
@@ -263,6 +272,40 @@ Content-Type: application/json
 
 `serverId` 可省略，此时 API 根据唯一令牌找到服务器；如果同时提供，则必须与令牌所属服务器一致。
 上报会事务性替换在线名单：不在本次名单中的旧玩家会被删除，持续在线的玩家保留原 `connected_at`。
+`ipAddress` 由插件通过 `GetClientIP` 上报，用于服务器封禁时自动创建 IP 封禁；旧版插件不发送
+该字段，API 会按 `NULL` 处理。
+
+### 游戏内封禁回传
+
+插件 1.6.0 注册 `OnBanClient` 转发。服务器内通过 `BanClient` 执行的封禁（包括常见的
+`sm_ban` 命令）会异步上报：
+
+```http
+POST /api/v1/plugin/ban-report
+Content-Type: application/json
+```
+
+```json
+{
+  "steamId64": "76561199125125759",
+  "ipAddress": "203.0.113.10",
+  "playerName": "玩家昵称",
+  "reason": "长期挂机",
+  "durationMinutes": 0
+}
+```
+
+- `durationMinutes` 为 SourceMod 的封禁分钟数，`0` 表示永久。
+- 网站会写入一条账号封禁和一条该服务器的游戏封禁记录；如果该玩家有 IP，还会自动创建 IP
+  封禁，并关联该 IP 下已知的普通账号。
+- 上报失败只写日志，不影响 SourceMod 本地封禁；服务器仍会在本地执行封禁。
+- 原始控制台 `banid` / `addip` 不会触发 `OnBanClient`，因此不会回传。使用 `sm_ban` 或
+  `BanClient` 才能同步。
+- 网站下发的封禁指令使用本地封禁缓存和踢出，不会调用 `BanClient`，因此不会产生回环上报。
+- 游戏内 `sm_unban` / `removeid` **不会**回传；解除封禁需要在网站「封禁管理」中分别解除
+  账号封禁和游戏服务器封禁。
+- 一次游戏内封禁会在网站产生账号封禁和该服务器的游戏封禁两条记录；如果同时存在 IP 封禁，
+  三条记录需要分别检查。网站账号封禁不会自动解除游戏服务器封禁。
 
 ### 访问快照
 
@@ -293,6 +336,8 @@ POST /api/v1/plugin/actions/{uuid}/ack
 
 - 生产环境必须使用 HTTPS：令牌在 HTTP 请求头中传输，明文 HTTP 会让令牌暴露在网络中。
 - 令牌只写入游戏服务器的 `cfg/sourcemod/threi_players.cfg`，不要提交到 Git。
+- 1.6.0 起令牌还可回传游戏内封禁（会写入账号封禁、服务器封禁和 IP 封禁）；令牌泄露等同于
+  允许伪造封禁，应立即在管理后台轮换。
 - 令牌使用 `FCVAR_PROTECTED | FCVAR_UNLOGGED`，不会下发给游戏客户端。
 - 定期在管理后台重新生成令牌，尤其是在管理员变动或配置文件泄露后。
 - 游戏服务器只需要能访问 threi 的 API 地址；白名单、踢出与封禁不依赖 RCON，也不要求开放
@@ -320,6 +365,30 @@ spcomp64 \
 - 确认 SteamWorks 扩展已安装并在 `sm exts list` 中显示为运行中。
 - 查看 `addons/sourcemod/logs/` 下的错误日志。
 
+**cfg/sourcemod/threi_players.cfg 没有自动生成**
+
+插件在 `OnPluginStart` 中调用了 `AutoExecConfig(true, "threi_players")`，正常情况下首次加载
+就会生成该文件。**自动生成的文件只包含 ConVar**；`sm_threi_instance` 是用 `RegServerCmd`
+注册的控制台命令，不是 ConVar，因此不会出现在自动生成的文件里，需要手动添加：
+
+```cfg
+sm_threi_api_url "https://threi.cn/api/v1/plugin/report"
+sm_threi_instance 10001 "该服务器的令牌"
+```
+
+单实例也可以不写 `sm_threi_instance`，改为填写 `sm_threi_server_id` 与 `sm_threi_token`
+两个 ConVar；只要文件里存在任意一行有效的 `sm_threi_instance`，插件就会忽略这两个 ConVar。
+没有生成文件时按顺序检查：
+
+- `sm plugins list` 是否显示 `ThRei_Players` 且版本正确；未加载时执行
+  `sm plugins load ThRei_Players` 并查看控制台错误。
+- 文件只会写入当前游戏目录：CS:GO 是 `<serverfiles>/csgo/cfg/sourcemod/`，CS:S 是
+  `<serverfiles>/cstrike/cfg/sourcemod/`。多实例共用 SourceMod 时只有一份共享 cfg。
+- 确认 `cfg/sourcemod` 目录存在，且运行服务器的用户对它可写；目录属主错误时
+  `AutoExecConfig` 无法创建文件，也不会覆盖已有文件。
+- 可以直接从仓库的 `cfg/sourcemod/threi_players.cfg.example` 复制一份为
+  `cfg/sourcemod/threi_players.cfg`，填入令牌后执行 `sm plugins reload ThRei_Players`。
+
 **后台显示「等待插件上报」**
 
 - 执行 `sm_threi_status`，确认 `hostport` 正确、`instance=matched`，api 与 token 均已配置。
@@ -340,8 +409,32 @@ spcomp64 \
 
 - 确认 `sm_threi_actions_enabled "1"`，并用 `sm_threi_status` 查看 `actions=enabled` 与
   `pendingAcks`。
-- 网站显示的是待执行队列，插件最长在一个 `sm_threi_actions_interval`（默认 15 秒）后执行。
+- 正常情况新指令约 1 秒内执行；API 不可达时按 `sm_threi_actions_interval` 重试。
 - 目标玩家已经离线时，踢出不会产生额外动作；封禁仍会写入本地缓存阻止重连。
+
+**游戏内封禁无法用 `sm_unban <SteamID64>` 解除**
+
+SourceMod 的 basebans `sm_unban` 会根据参数首字符判断类型：纯数字会被当成 IP。SteamID64
+也是纯数字，因此会报 `removeip: invalid slot ...`，并且**不会**移除 SteamID 封禁。请改用
+SteamID2 或 SteamID3（以 `S` 或 `[` 开头）：
+
+```text
+sm_unban "STEAM_1:1:12345678"
+sm_unban "[U:1:24691356]"
+```
+
+可以先用 `sm_banlist` 确认封禁列表中的 SteamID 格式。网站上的账号封禁、服务器封禁和 IP 封禁
+仍需分别在网站解除；插件只负责游戏内执行。
+
+**游戏内封禁没有出现在网站**
+
+- 确认插件版本为 1.6.0 或更高：`sm_threi_status` 应显示 `version=1.6.0`。
+- 只有通过 `BanClient` 执行的封禁（如 `sm_ban`）会回传；控制台原始 `banid` / `addip`
+  不会触发 `OnBanClient`。
+- 查看 `addons/sourcemod/logs/` 中是否出现 `Queued in-game ban report`；出现
+  `Ban report failed` 时检查 API 连通性、令牌和 `sm_threi_api_url`。
+- 网站已在更早时间存在同一玩家的有效账号封禁时，不会重复写入账号封禁，但仍会补写该服务器的
+  游戏封禁与 IP 封禁。
 
 **API 返回 401**
 
@@ -350,7 +443,8 @@ spcomp64 \
 
 **API 返回 404（访问控制接口）**
 
-- API 版本过旧，不包含 `plugin/access-snapshot`、`plugin/actions` 和确认接口。
+- API 版本过旧，不包含 `plugin/access-snapshot`、`plugin/actions`、`plugin/ban-report`
+  或确认接口。
 - 升级网站 API 后重载插件。
 
 **API 返回 422**

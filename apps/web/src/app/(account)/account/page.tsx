@@ -257,19 +257,35 @@ export default async function AccountPage({ searchParams }: AccountPageProps) {
             </CardContent>
           </Card>
 
-          {whitelistOptions.length > 0 ? (
+          {whitelistOptions.length > 0 ||
+          account.whitelist.whitelisted ||
+          account.whitelist.pending ? (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
                   <ClipboardCheck className="size-4 text-primary" aria-hidden="true" />
-                  白名单申请
+                  白名单
                 </CardTitle>
                 <CardDescription>
-                  部分服务器需要管理员审核后才能进入。提交后可在论坛或服务器内联系管理员。
+                  {account.whitelist.whitelisted
+                    ? "你已通过全服白名单，所有需要白名单的服务器都可以进入。"
+                    : account.whitelist.pending
+                      ? "你的全服白名单申请正在审核中。"
+                      : "部分服务器需要白名单；一次申请，所有服务器通用。"}
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <WhitelistApplyCard servers={whitelistOptions} />
+                {account.whitelist.whitelisted ? (
+                  <p className="rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm text-success">
+                    已通过全服白名单
+                  </p>
+                ) : account.whitelist.pending ? (
+                  <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+                    申请审核中
+                  </p>
+                ) : (
+                  <WhitelistApplyCard />
+                )}
               </CardContent>
             </Card>
           ) : null}

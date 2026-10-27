@@ -36,9 +36,15 @@ export interface AccountActivity {
   href: string | null;
 }
 
+export interface AccountWhitelist {
+  whitelisted: boolean;
+  pending: boolean;
+}
+
 export interface AccountOverview {
   user: AccountUser;
   stats: AccountStats;
+  whitelist: AccountWhitelist;
   recentTopics: ForumTopic[];
   favorites: FavoriteServer[];
   recentActivity: AccountActivity[];

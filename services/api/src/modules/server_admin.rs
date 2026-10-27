@@ -13,7 +13,10 @@ use uuid::Uuid;
 
 use crate::{
     errors::AppError,
-    modules::{auth::require_admin, server_plugin::STALE_AFTER_SECS},
+    modules::{
+        auth::{client_ip, require_admin},
+        server_plugin::STALE_AFTER_SECS,
+    },
     state::AppState,
 };
 
@@ -55,16 +58,23 @@ pub struct AdminPlayer {
     pub steam_id64: String,
     pub name: String,
     pub avatar_url: Option<String>,
+    /// Last IP reported by the plugin, used to mirror server-side bans into an
+    /// IP ban. `None` for reports from plugin versions before 1.6.0.
+    pub ip_address: Option<String>,
     pub connected_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, FromRow, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerBan {
     pub id: uuid::Uuid,
-    pub server_id: String,
+    /// `None` means the ban applies to every server.
+    pub server_id: Option<String>,
+    /// Server name for per-server bans; `全服` for global bans.
     pub server_name: String,
+    /// `global` or `server`, derived from `server_id`.
+    pub scope: String,
     pub steam_id64: String,
     pub player_name: String,
     pub avatar_url: Option<String>,
@@ -120,6 +130,7 @@ struct PlayerRow {
     steam_id64: String,
     display_name: String,
     avatar_url: Option<String>,
+    ip_address: Option<String>,
     connected_at: DateTime<Utc>,
     last_seen_at: DateTime<Utc>,
 }
@@ -191,11 +202,22 @@ pub struct ServerBanRequest {
     pub reason: String,
     pub expires_in_hours: Option<i64>,
     pub player_name: Option<String>,
+    /// `global` (default) bans on every server; `server` only on the origin.
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderServersRequest {
+    /// Every server id in the desired order (first id = position 1).
+    pub server_ids: Vec<String>,
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/servers", get(overview).post(create_server))
+        .route("/admin/servers/order", put(reorder_servers))
         .route(
             "/admin/servers/{id}",
             delete(delete_server).patch(update_server_active),
@@ -222,6 +244,7 @@ pub fn router() -> Router<AppState> {
             "/admin/servers/{id}/rcon-password",
             put(set_rcon_password).delete(clear_rcon_password),
         )
+        .route("/admin/server-bans", get(list_server_bans))
         .route("/admin/server-bans/{id}/lift", post(lift_server_ban))
 }
 
@@ -252,7 +275,7 @@ async fn overview(
                ) AS pending_actions
         FROM servers s
         LEFT JOIN server_communities c ON c.id = s.community_id
-        ORDER BY s.is_active DESC, s.name
+        ORDER BY s.sort_order, s.name
         ",
     )
     .bind(f64::from(STALE_AFTER_SECS))
@@ -261,7 +284,8 @@ async fn overview(
 
     let player_rows = sqlx::query_as::<_, PlayerRow>(
         r"
-        SELECT server_id, steam_id64, display_name, avatar_url, connected_at, last_seen_at
+        SELECT server_id, steam_id64, display_name, avatar_url, ip_address,
+               connected_at, last_seen_at
         FROM server_players
         WHERE last_seen_at > now() - interval '5 minutes'
         ORDER BY connected_at, display_name
@@ -280,6 +304,7 @@ async fn overview(
                     steam_id64: player.steam_id64.clone(),
                     name: player.display_name.clone(),
                     avatar_url: player.avatar_url.clone(),
+                    ip_address: player.ip_address.clone(),
                     connected_at: player.connected_at,
                     last_seen_at: player.last_seen_at,
                 })
@@ -315,16 +340,25 @@ async fn overview(
         })
         .collect();
 
+    let bans = load_server_bans(&state.db).await?;
+
+    Ok(Json(ServerAdminOverview { servers, bans }))
+}
+
+async fn load_server_bans(db: &sqlx::PgPool) -> Result<Vec<ServerBan>, AppError> {
     let bans = sqlx::query_as::<_, ServerBan>(
         r"
-        SELECT b.id, b.server_id, s.name AS server_name, b.steam_id64,
+        SELECT b.id, b.server_id,
+               coalesce(s.name, '全服') AS server_name,
+               CASE WHEN b.server_id IS NULL THEN 'global' ELSE 'server' END AS scope,
+               b.steam_id64,
                coalesce(b.player_name, u.persona_name, b.steam_id64) AS player_name,
                u.avatar_url, b.reason, b.expires_at, b.created_at,
                coalesce(creator.persona_name, '已删除管理员') AS created_by,
                b.lifted_at, lifter.persona_name AS lifted_by,
                (b.lifted_at IS NULL AND (b.expires_at IS NULL OR b.expires_at > now())) AS is_active
         FROM server_bans b
-        JOIN servers s ON s.id = b.server_id
+        LEFT JOIN servers s ON s.id = b.server_id
         LEFT JOIN users u ON u.steam_id64 = b.steam_id64
         LEFT JOIN users creator ON creator.id = b.created_by
         LEFT JOIN users lifter ON lifter.id = b.lifted_by
@@ -332,10 +366,26 @@ async fn overview(
         LIMIT 200
         ",
     )
-    .fetch_all(&state.db)
+    .fetch_all(db)
     .await?;
+    Ok(bans)
+}
 
-    Ok(Json(ServerAdminOverview { servers, bans }))
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/server-bans",
+    tag = "admin",
+    responses(
+        (status = 200, description = "Server-scoped and global game bans", body = Vec<ServerBan>),
+        (status = 401, description = "Authentication is required", body = crate::errors::ErrorResponse)
+    )
+)]
+async fn list_server_bans(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ServerBan>>, AppError> {
+    require_admin(&state, &headers).await?;
+    Ok(Json(load_server_bans(&state.db).await?))
 }
 
 async fn create_server(
@@ -383,8 +433,9 @@ async fn create_server(
         INSERT INTO servers (
             id, name, map, description, community_id, status, host, port, region,
             tickrate, max_players, latency_ms, tags, map_image, featured,
-            requires_whitelist
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            requires_whitelist, sort_order
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+                  (SELECT COALESCE(MAX(sort_order) + 1, 0) FROM servers))
         ",
     )
     .bind(&id)
@@ -406,6 +457,55 @@ async fn create_server(
     .execute(&state.db)
     .await?;
     Ok((StatusCode::CREATED, Json(CreateServerResponse { id })))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/admin/servers/order",
+    tag = "admin",
+    request_body = ReorderServersRequest,
+    responses(
+        (status = 204, description = "Server order updated"),
+        (status = 400, description = "Invalid order", body = crate::errors::ErrorResponse),
+        (status = 401, description = "Authentication is required", body = crate::errors::ErrorResponse),
+        (status = 404, description = "Server not found", body = crate::errors::ErrorResponse)
+    )
+)]
+async fn reorder_servers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ReorderServersRequest>,
+) -> Result<StatusCode, AppError> {
+    require_admin(&state, &headers).await?;
+    if request.server_ids.is_empty() {
+        return Err(AppError::Validation(
+            "serverIds must not be empty".to_owned(),
+        ));
+    }
+
+    let mut seen = std::collections::HashSet::with_capacity(request.server_ids.len());
+    for id in &request.server_ids {
+        if !seen.insert(id) {
+            return Err(AppError::Validation("serverIds must be unique".to_owned()));
+        }
+    }
+
+    let mut transaction = state.db.begin().await?;
+    for (index, id) in request.server_ids.iter().enumerate() {
+        let position = i32::try_from(index)
+            .map_err(|_| AppError::Validation("serverIds is too large".to_owned()))?;
+        let result =
+            sqlx::query("UPDATE servers SET sort_order = $2, updated_at = now() WHERE id = $1")
+                .bind(id)
+                .bind(position)
+                .execute(&mut *transaction)
+                .await?;
+        if result.rows_affected() == 0 {
+            return Err(AppError::NotFound);
+        }
+    }
+    transaction.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(
@@ -803,6 +903,7 @@ async fn kick_player(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn ban_player(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -812,6 +913,15 @@ async fn ban_player(
     let admin = require_admin(&state, &headers).await?;
     validate_steam_id(&steam_id64)?;
     let reason = validate_reason(&request.reason)?;
+    let scope = match request.scope.as_deref().unwrap_or("global") {
+        "global" => "global",
+        "server" => "server",
+        _ => {
+            return Err(AppError::Validation(
+                "scope must be \"global\" or \"server\"".to_owned(),
+            ));
+        }
+    };
     let player_name = request
         .player_name
         .map(|value| value.trim().to_owned())
@@ -826,10 +936,18 @@ async fn ban_player(
         return Err(AppError::NotFound);
     }
     let already_banned = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM server_bans WHERE server_id = $1 AND steam_id64 = $2 AND lifted_at IS NULL AND (expires_at IS NULL OR expires_at > now()))",
+        r"
+        SELECT EXISTS (
+            SELECT 1 FROM server_bans
+            WHERE steam_id64 = $1
+              AND lifted_at IS NULL
+              AND (expires_at IS NULL OR expires_at > now())
+              AND (server_id IS NULL OR server_id = $2)
+        )
+        ",
     )
-    .bind(&server_id)
     .bind(&steam_id64)
+    .bind(&server_id)
     .fetch_one(&state.db)
     .await?;
     if already_banned {
@@ -845,11 +963,27 @@ async fn ban_player(
         None => None,
     };
 
+    // Capture the IP before the transaction removes the player from the
+    // roster; it is used to mirror this ban into an IP ban.
+    let player_ip = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT ip_address FROM server_players WHERE server_id = $1 AND steam_id64 = $2",
+    )
+    .bind(&server_id)
+    .bind(&steam_id64)
+    .fetch_optional(&state.db)
+    .await?
+    .flatten();
+
     let mut transaction = state.db.begin().await?;
+    let ban_server_id = if scope == "server" {
+        Some(server_id.as_str())
+    } else {
+        None
+    };
     sqlx::query(
         "INSERT INTO server_bans (server_id, steam_id64, player_name, reason, expires_at, created_by) VALUES ($1,$2,$3,$4,$5,$6)",
     )
-    .bind(&server_id)
+    .bind(ban_server_id)
     .bind(&steam_id64)
     .bind(player_name)
     .bind(&reason)
@@ -857,21 +991,90 @@ async fn ban_player(
     .bind(admin.id)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query(
-        "INSERT INTO server_actions (server_id, steam_id64, action, reason, created_by) VALUES ($1,$2,'ban',$3,$4)",
-    )
-    .bind(&server_id)
-    .bind(&steam_id64)
-    .bind(&reason)
-    .bind(admin.id)
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query("DELETE FROM server_players WHERE server_id = $1 AND steam_id64 = $2")
-        .bind(&server_id)
+
+    if scope == "global" {
+        // One action per active server so every plugin receives and acks it.
+        sqlx::query(
+            r"
+            INSERT INTO server_actions (server_id, steam_id64, action, reason, created_by)
+            SELECT id, $1, 'ban', $2, $3 FROM servers WHERE is_active = true
+            ",
+        )
         .bind(&steam_id64)
+        .bind(&reason)
+        .bind(admin.id)
         .execute(&mut *transaction)
         .await?;
+        sqlx::query("DELETE FROM server_players WHERE steam_id64 = $1")
+            .bind(&steam_id64)
+            .execute(&mut *transaction)
+            .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO server_actions (server_id, steam_id64, action, reason, created_by) VALUES ($1,$2,'ban',$3,$4)",
+        )
+        .bind(&server_id)
+        .bind(&steam_id64)
+        .bind(&reason)
+        .bind(admin.id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query("DELETE FROM server_players WHERE server_id = $1 AND steam_id64 = $2")
+            .bind(&server_id)
+            .bind(&steam_id64)
+            .execute(&mut *transaction)
+            .await?;
+    }
     transaction.commit().await?;
+
+    // Mirror the server ban to an IP ban. Prefer the IP reported by plugin
+    // 1.6.0+; fall back to the account's last website login IP.
+    let ip = match player_ip {
+        Some(ip) => Some(ip),
+        None => {
+            sqlx::query_scalar::<_, Option<String>>(
+                r"
+            SELECT coalesce(
+                (SELECT u.last_login_ip FROM users u WHERE u.steam_id64 = $1),
+                (
+                    SELECT s.ip_address
+                    FROM sessions s
+                    JOIN users u ON u.id = s.user_id
+                    WHERE u.steam_id64 = $1
+                      AND s.ip_address IS NOT NULL
+                      AND s.expires_at > now()
+                    ORDER BY s.created_at DESC
+                    LIMIT 1
+                )
+            )
+            ",
+            )
+            .bind(&steam_id64)
+            .fetch_one(&state.db)
+            .await?
+        }
+    };
+    if let Some(ip) = ip
+        && client_ip(&headers).as_deref() != Some(ip.as_str())
+    {
+        let auto_reason: String = format!("服务器封禁自动关联 IP：{reason}")
+            .chars()
+            .take(2000)
+            .collect();
+        if let Err(error) = crate::modules::bans::create_ip_ban(
+            &state.db,
+            Some(admin.id),
+            &ip,
+            None,
+            &auto_reason,
+            expires_at,
+        )
+        .await
+        {
+            tracing::warn!(%error, %steam_id64, "failed to auto-create IP ban");
+        }
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -882,7 +1085,7 @@ async fn lift_server_ban(
 ) -> Result<StatusCode, AppError> {
     let admin = require_admin(&state, &headers).await?;
     let mut transaction = state.db.begin().await?;
-    let lifted = sqlx::query_as::<_, (String, String)>(
+    let lifted = sqlx::query_as::<_, (Option<String>, String)>(
         r"
         UPDATE server_bans
         SET lifted_at = now(), lifted_by = $2
@@ -898,21 +1101,36 @@ async fn lift_server_ban(
 
     // A kick/ban action may still be waiting for the plugin. If the admin
     // lifts the ban first, drop that queued ban so the plugin cannot apply it
-    // after the unban.
-    sqlx::query(
-        r"
-        UPDATE server_actions
-        SET processed_at = COALESCE(processed_at, now())
-        WHERE server_id = $1
-          AND steam_id64 = $2
-          AND action = 'ban'
-          AND processed_at IS NULL
-        ",
-    )
-    .bind(&lifted.0)
-    .bind(&lifted.1)
-    .execute(&mut *transaction)
-    .await?;
+    // after the unban. A global ban has actions on every active server.
+    if let Some(server_id) = &lifted.0 {
+        sqlx::query(
+            r"
+            UPDATE server_actions
+            SET processed_at = COALESCE(processed_at, now())
+            WHERE server_id = $1
+              AND steam_id64 = $2
+              AND action = 'ban'
+              AND processed_at IS NULL
+            ",
+        )
+        .bind(server_id)
+        .bind(&lifted.1)
+        .execute(&mut *transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            r"
+            UPDATE server_actions
+            SET processed_at = COALESCE(processed_at, now())
+            WHERE steam_id64 = $1
+              AND action = 'ban'
+              AND processed_at IS NULL
+            ",
+        )
+        .bind(&lifted.1)
+        .execute(&mut *transaction)
+        .await?;
+    }
 
     transaction.commit().await?;
     Ok(StatusCode::NO_CONTENT)

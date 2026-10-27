@@ -304,6 +304,7 @@ export function ForumModerationManager({
     setBusy(`user-ban-${user.steamId64}`);
     try {
       await createBan(getBrowserApiClient(), {
+        banType: "steam",
         steamId64: user.steamId64,
         playerName: user.name,
         reason,
