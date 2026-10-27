@@ -36,6 +36,9 @@
   避免一条坏请求卡住后续封禁同步。
 - `ThRei_Players` 1.7.3 改为读取原始参数串，支持不加引号的 SteamID2/3 和 IPv6；Source
   引擎的 `:` 分词不再把 `STEAM_0:0:...` 拆成多个参数。
+- `ThRei_Players` 1.8.0 改成纯插件封禁：不再写 basebans/引擎封禁，封禁持久化到
+  `configs/threi_bans.cfg`，连接时用自定义提示踢出；解封删除条目后立即可以重连。basebans
+  未加载时自动接管 `sm_ban` / `sm_unban` / `sm_banip` 等命令。代价是插件未加载时封禁失效。
 - 白名单改为全服共享：玩家申请一次、管理员审核一次，所有开启白名单的服务器通用；
   新增 `global_whitelist` 并迁移旧的 `server_whitelist` 数据。
 - 游戏服务器封禁默认作用于全部服务器（`scope: "global"`），封禁弹窗可选择“仅本服”；

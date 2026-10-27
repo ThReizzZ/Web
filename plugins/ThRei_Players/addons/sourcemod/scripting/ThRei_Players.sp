@@ -27,7 +27,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.7.3"
+#define PLUGIN_VERSION "1.8.0"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -99,9 +99,13 @@ bool g_bAccessRequired;
 StringMap g_smWhitelist;
 StringMap g_smBans;
 StringMap g_smBanReasons;
+StringMap g_smIpBans;
+StringMap g_smIpBanReasons;
 ArrayList g_aAckQueue;
 ArrayList g_aBanReportQueue;
 ArrayList g_aBanReportKinds;
+char g_sBanStorePath[PLATFORM_MAX_PATH];
+bool g_bEngineBansMigrated;
 
 char g_sBody[BODY_BUFFER_SIZE];
 char g_sErrorBody[ERROR_BODY_SIZE + 1];
@@ -152,9 +156,13 @@ public void OnPluginStart() {
     g_smWhitelist = new StringMap();
     g_smBans = new StringMap();
     g_smBanReasons = new StringMap();
+    g_smIpBans = new StringMap();
+    g_smIpBanReasons = new StringMap();
     g_aAckQueue = new ArrayList(ByteCountToCells(64));
     g_aBanReportQueue = new ArrayList(ByteCountToCells(BAN_REPORT_BODY_SIZE));
     g_aBanReportKinds = new ArrayList();
+    BuildPath(Path_SM, g_sBanStorePath, sizeof(g_sBanStorePath), "configs/threi_bans.cfg");
+    LoadBanStore();
 
     ResolveHostPort();
 
@@ -179,6 +187,23 @@ public void OnPluginStart() {
         "封禁 IP 并同步网站：sm_threi_banip <IP> <分钟> [原因]");
     RegAdminCmd("sm_threi_unbanip", Command_UnbanIp, ADMFLAG_BAN,
         "解封 IP 并同步网站：sm_threi_unbanip <IP>");
+
+    // When basebans is gone, take over its command names so !ban / sm_ban
+    // continue to work and use the plugin-only ban store.
+    Handle basebans = FindPluginByFile("basebans.smx");
+    bool basebansRunning = basebans != null && GetPluginStatus(basebans) == Plugin_Running;
+    if (!basebansRunning) {
+        RegAdminCmd("sm_ban", Command_Ban, ADMFLAG_BAN,
+            "封禁玩家：sm_ban <目标|SteamID> <分钟> [原因]");
+        RegAdminCmd("sm_addban", Command_AddBan, ADMFLAG_BAN,
+            "按 SteamID 封禁：sm_addban <SteamID> <分钟> [原因]");
+        RegAdminCmd("sm_unban", Command_Unban, ADMFLAG_BAN,
+            "解封：sm_unban <SteamID64|STEAM_x:y:z|[U:1:account]>");
+        RegAdminCmd("sm_banip", Command_BanIp, ADMFLAG_BAN,
+            "封禁 IP：sm_banip <IP> <分钟> [原因]");
+        RegAdminCmd("sm_unbanip", Command_UnbanIp, ADMFLAG_BAN,
+            "解封 IP：sm_unbanip <IP>");
+    }
 
     float now = GetGameTime();
     g_fNextReport = now + 5.0;
@@ -302,6 +327,8 @@ public void OnPluginEnd() {
     g_hBanReportRequest = null;
     g_hUnbanRequest = null;
 
+    SaveBanStore();
+
     if (g_smWhitelist != null) {
         delete g_smWhitelist;
         g_smWhitelist = null;
@@ -313,6 +340,14 @@ public void OnPluginEnd() {
     if (g_smBanReasons != null) {
         delete g_smBanReasons;
         g_smBanReasons = null;
+    }
+    if (g_smIpBans != null) {
+        delete g_smIpBans;
+        g_smIpBans = null;
+    }
+    if (g_smIpBanReasons != null) {
+        delete g_smIpBanReasons;
+        g_smIpBanReasons = null;
     }
     if (g_aAckQueue != null) {
         delete g_aAckQueue;
@@ -527,9 +562,11 @@ public Action Command_BanIp(int client, int args) {
         strcopy(reason, sizeof(reason), "管理员封禁");
     }
 
-    if (!BanIdentity(ip, minutes, BANFLAG_IP, reason, "threi_banip", 0)) {
-        LogError("[ThRei_Players] Could not write local IP ban for %s.", ip);
-    }
+    int expiresAt = minutes > 0 ? GetTime() + minutes * 60 : 0;
+    g_smIpBans.SetValue(ip, expiresAt, true);
+    g_smIpBanReasons.SetString(ip, reason, true);
+    SaveBanStore();
+
     for (int i = 1; i <= MaxClients; i++) {
         if (!IsClientInGame(i) || IsFakeClient(i) || IsClientSourceTV(i)
                 || IsClientReplay(i)) {
@@ -540,9 +577,7 @@ public Action Command_BanIp(int client, int args) {
                 || !StrEqual(clientIp, ip, false)) {
             continue;
         }
-        char message[512];
-        Format(message, sizeof(message), "你已被服务器封禁。原因：%s", reason);
-        KickClient(i, "%s", message);
+        KickForBan(i, "", reason);
     }
 
     char ipJson[256];
@@ -703,19 +738,12 @@ void ApplySteamBan(int adminClient, const char[] steamId, const char[] name,
     if (g_smBans != null) {
         g_smBans.SetValue(steamId, expiresAt, true);
         g_smBanReasons.SetString(steamId, safeReason, true);
-    }
-
-    char steamId2[64];
-    BuildSteamId2From64(steamId, steamId2, sizeof(steamId2));
-    if (!BanIdentity(steamId2, minutes, BANFLAG_AUTHID, safeReason, "threi_ban", 0)) {
-        LogError("[ThRei_Players] Could not write local ban for %s.", steamId);
+        SaveBanStore();
     }
 
     int target = FindClientBySteamId(steamId);
     if (target > 0) {
-        char message[512];
-        Format(message, sizeof(message), "你已被服务器封禁。原因：%s", safeReason);
-        KickClient(target, "%s", message);
+        KickForBan(target, steamId, safeReason);
     }
 
     char nameJson[FRAGMENT_BUFFER_SIZE];
@@ -1609,19 +1637,19 @@ public void OnUnbanReportComplete(Handle request, bool failure, bool requestSucc
             || statusCode == k_EHTTPStatusCode200OK);
     if (success) {
         if (g_bUnbanIsIp) {
-            if (!RemoveBan(g_sUnbanIp, BANFLAG_IP, "threi_unbanip", 0)) {
-                LogError("[ThRei_Players] Could not remove local IP ban for %s.",
-                    g_sUnbanIp);
-            }
+            g_smIpBans.Remove(g_sUnbanIp);
+            g_smIpBanReasons.Remove(g_sUnbanIp);
+            SaveBanStore();
+            // Legacy engine bans from 1.7.x.
+            RemoveBan(g_sUnbanIp, BANFLAG_IP, "threi_unbanip", 0);
         } else {
             g_smBans.Remove(g_sUnbanSteamId);
             g_smBanReasons.Remove(g_sUnbanSteamId);
+            SaveBanStore();
+            // Legacy engine bans from 1.7.x/basebans.
             char steamId2[64];
             BuildSteamId2From64(g_sUnbanSteamId, steamId2, sizeof(steamId2));
-            if (!RemoveBan(steamId2, BANFLAG_AUTHID, "threi_unban", 0)) {
-                LogError("[ThRei_Players] Could not remove local ban for %s.",
-                    g_sUnbanSteamId);
-            }
+            RemoveBan(steamId2, BANFLAG_AUTHID, "threi_unban", 0);
         }
         ReplyToCommand(client, "[ThRei] 已解封并同步网站。");
         if (g_bUnbanIsIp) {
@@ -1706,6 +1734,12 @@ public void OnAccessComplete(Handle request, bool failure, bool requestSuccessfu
     if (firstLoad) {
         LogMessage("[ThRei_Players] Access snapshot loaded: whitelist=%d bans=%d required=%d.",
             g_smWhitelist.Size, g_smBans.Size, g_bAccessRequired);
+    }
+
+    SaveBanStore();
+    if (!g_bEngineBansMigrated) {
+        g_bEngineBansMigrated = true;
+        RemoveLegacyEngineBans();
     }
 
     for (int client = 1; client <= MaxClients; client++) {
@@ -1800,6 +1834,151 @@ float BackoffDelay(int baseSeconds, int failures) {
         delay = 300;
     }
     return float(delay);
+}
+
+void LoadBanStore() {
+    if (g_sBanStorePath[0] == '\0' || g_smBans == null || g_smIpBans == null) {
+        return;
+    }
+
+    KeyValues kv = CreateKeyValues("ThReiBans");
+    if (!FileToKeyValues(kv, g_sBanStorePath)) {
+        CloseHandle(kv);
+        return;
+    }
+
+    if (KvJumpToKey(kv, "steam")) {
+        if (KvGotoFirstSubKey(kv)) {
+            do {
+                char steamId[32];
+                KvGetSectionName(kv, steamId, sizeof(steamId));
+                if (!IsSteamId64(steamId)) {
+                    continue;
+                }
+                int expires = KvGetNum(kv, "expires", 0);
+                if (expires != 0 && expires <= GetTime()) {
+                    continue;
+                }
+                char reason[MAX_REASON_LENGTH];
+                KvGetString(kv, "reason", reason, sizeof(reason), "");
+                g_smBans.SetValue(steamId, expires, true);
+                g_smBanReasons.SetString(steamId, reason, true);
+            } while (KvGotoNextKey(kv));
+            KvGoBack(kv);
+        }
+        KvGoBack(kv);
+    }
+
+    if (KvJumpToKey(kv, "ip")) {
+        if (KvGotoFirstSubKey(kv)) {
+            do {
+                char ip[64];
+                KvGetSectionName(kv, ip, sizeof(ip));
+                if (!LooksLikeIp(ip)) {
+                    continue;
+                }
+                int expires = KvGetNum(kv, "expires", 0);
+                if (expires != 0 && expires <= GetTime()) {
+                    continue;
+                }
+                char reason[MAX_REASON_LENGTH];
+                KvGetString(kv, "reason", reason, sizeof(reason), "");
+                g_smIpBans.SetValue(ip, expires, true);
+                g_smIpBanReasons.SetString(ip, reason, true);
+            } while (KvGotoNextKey(kv));
+            KvGoBack(kv);
+        }
+        KvGoBack(kv);
+    }
+
+    CloseHandle(kv);
+}
+
+void SaveBanStore() {
+    if (g_sBanStorePath[0] == '\0' || g_smBans == null || g_smIpBans == null) {
+        return;
+    }
+
+    KeyValues kv = CreateKeyValues("ThReiBans");
+    KvJumpToKey(kv, "steam", true);
+    SaveBanMapToKeyValues(kv, g_smBans, g_smBanReasons);
+    KvGoBack(kv);
+
+    KvJumpToKey(kv, "ip", true);
+    SaveBanMapToKeyValues(kv, g_smIpBans, g_smIpBanReasons);
+    KvGoBack(kv);
+
+    KvRewind(kv);
+    if (!kv.ExportToFile(g_sBanStorePath)) {
+        LogError("[ThRei_Players] Could not write ban store: %s", g_sBanStorePath);
+    }
+    CloseHandle(kv);
+}
+
+void SaveBanMapToKeyValues(KeyValues kv, StringMap bans, StringMap reasons) {
+    if (bans == null) {
+        return;
+    }
+    StringMapSnapshot snapshot = bans.Snapshot();
+    for (int index = 0; index < snapshot.Length; index++) {
+        char key[64];
+        snapshot.GetKey(index, key, sizeof(key));
+        int expires = 0;
+        if (!bans.GetValue(key, expires)) {
+            continue;
+        }
+        if (expires != 0 && expires <= GetTime()) {
+            continue;
+        }
+        KvJumpToKey(kv, key, true);
+        KvSetNum(kv, "expires", expires);
+        char reason[MAX_REASON_LENGTH];
+        reason[0] = '\0';
+        if (reasons != null) {
+            reasons.GetString(key, reason, sizeof(reason));
+        }
+        KvSetString(kv, "reason", reason);
+        KvGoBack(kv);
+    }
+    delete snapshot;
+}
+
+/**
+ * 1.8+ enforces bans in the plugin so the custom kick message is shown on
+ * reconnect. Remove engine-ban entries written by older ThRei versions for
+ * the identities we now manage ourselves.
+ */
+void RemoveLegacyEngineBans() {
+    int removed = 0;
+    if (g_smBans != null) {
+        StringMapSnapshot snapshot = g_smBans.Snapshot();
+        for (int index = 0; index < snapshot.Length; index++) {
+            char steamId[32];
+            snapshot.GetKey(index, steamId, sizeof(steamId));
+            if (!IsSteamId64(steamId)) {
+                continue;
+            }
+            char steamId2[64];
+            BuildSteamId2From64(steamId, steamId2, sizeof(steamId2));
+            RemoveBan(steamId2, BANFLAG_AUTHID, "threi_migrate", 0);
+            removed++;
+        }
+        delete snapshot;
+    }
+    if (g_smIpBans != null) {
+        StringMapSnapshot snapshot = g_smIpBans.Snapshot();
+        for (int index = 0; index < snapshot.Length; index++) {
+            char ip[64];
+            snapshot.GetKey(index, ip, sizeof(ip));
+            RemoveBan(ip, BANFLAG_IP, "threi_migrate", 0);
+            removed++;
+        }
+        delete snapshot;
+    }
+    if (removed > 0) {
+        LogMessage("[ThRei_Players] Cleared %d legacy engine ban(s); plugin store is authoritative.",
+            removed);
+    }
 }
 
 bool ParseAccessSnapshot(const char[] body) {
@@ -1983,28 +2162,13 @@ void ExecuteBanAction(const char[] steamId, int expiresAt, const char[] reason) 
         return;
     }
 
-    // Persist website-issued bans in the local SourceMod ban list too. This
-    // keeps them effective across plugin reloads and API outages; the website
-    // unban action removes the same identity.
-    int minutes = 0;
-    if (expiresAt > 0) {
-        int remaining = expiresAt - GetTime();
-        minutes = (remaining + 59) / 60;
-        if (minutes < 1) {
-            minutes = 1;
-        }
-    }
-    char steamId2[64];
-    BuildSteamId2From64(steamId, steamId2, sizeof(steamId2));
-    if (!BanIdentity(steamId2, minutes, BANFLAG_AUTHID, reason, "threi_website_ban", 0)) {
-        LogError("[ThRei_Players] Could not write local ban for website action %s.", steamId);
-    }
-
     // Cache the ban immediately so a reconnect cannot slip through before the
     // next access snapshot arrives. The snapshot will replace this entry with
-    // the authoritative expiry/reason from the database.
+    // the authoritative expiry/reason from the database. Persisting it to the
+    // plugin ban store keeps the custom kick message on reconnect.
     g_smBans.SetValue(steamId, expiresAt, true);
     g_smBanReasons.SetString(steamId, reason, true);
+    SaveBanStore();
 
     int target = FindClientBySteamId(steamId);
     if (target > 0) {
@@ -2013,20 +2177,19 @@ void ExecuteBanAction(const char[] steamId, int expiresAt, const char[] reason) 
 }
 
 void ExecuteUnbanAction(const char[] steamId, const char[] reason) {
-    // Drop the website-enforced cache immediately so a reconnect cannot be
-    // blocked before the next access snapshot arrives.
-    g_smBans.Remove(steamId);
-    g_smBanReasons.Remove(steamId);
+    // Drop the plugin-enforced cache and persisted entry immediately so a
+    // reconnect cannot be blocked before the next access snapshot arrives.
+    if (g_smBans != null) {
+        g_smBans.Remove(steamId);
+        g_smBanReasons.Remove(steamId);
+        SaveBanStore();
+    }
 
-    // RemoveBan(BANFLAG_AUTHID) issues the engine `removeid` command. Convert
-    // SteamID64 to SteamID2 because basebans' numeric-argument handling treats
-    // a raw SteamID64 as an IP address.
+    // Clean up an engine ban written by an older ThRei/basebans version. New
+    // 1.8+ bans are plugin-only, so this is a no-op for them.
     char steamId2[64];
     BuildSteamId2From64(steamId, steamId2, sizeof(steamId2));
-    if (!RemoveBan(steamId2, BANFLAG_AUTHID, "threi_unban", 0)) {
-        LogError("[ThRei_Players] Could not remove the local ban for %s.", steamId);
-        return;
-    }
+    RemoveBan(steamId2, BANFLAG_AUTHID, "threi_unban", 0);
 
     if (reason[0] != '\0') {
         LogMessage("[ThRei_Players] Removed local ban for %s (%s).", steamId, reason);
@@ -2080,16 +2243,31 @@ void CheckClientAccess(int client) {
         return;
     }
 
+    // Enforce the persisted ban store even before the first API snapshot
+    // loads. Whitelist fail-open must not let a banned player in.
+    int expiresAt = 0;
+    if (g_smBans.GetValue(steamId, expiresAt) && (expiresAt == 0 || expiresAt > GetTime())) {
+        KickForBan(client, steamId, "");
+        return;
+    }
+
+    char clientIp[64];
+    if (GetClientIP(client, clientIp, sizeof(clientIp), true)) {
+        int ipExpiresAt = 0;
+        if (g_smIpBans.GetValue(clientIp, ipExpiresAt)
+                && (ipExpiresAt == 0 || ipExpiresAt > GetTime())) {
+            char ipReason[MAX_REASON_LENGTH];
+            ipReason[0] = '\0';
+            g_smIpBanReasons.GetString(clientIp, ipReason, sizeof(ipReason));
+            KickForBan(client, steamId, ipReason);
+            return;
+        }
+    }
+
     if (!g_bAccessLoaded) {
         if (!g_cvAccessFailOpen.BoolValue) {
             KickForWhitelist(client, true);
         }
-        return;
-    }
-
-    int expiresAt = 0;
-    if (g_smBans.GetValue(steamId, expiresAt) && (expiresAt == 0 || expiresAt > GetTime())) {
-        KickForBan(client, steamId, "");
         return;
     }
 

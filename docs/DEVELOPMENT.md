@@ -17,6 +17,58 @@
 
 ---
 
+## 2026年10月28日 02时32分15秒 纯插件封禁与脱离 basebans（1.8.0）
+
+### 背景
+
+用户要求完全脱离 basebans，并达到：秒封禁、秒解封、解封后立即可以进入服务器，重连时显示
+我们自己的封禁提示，而不是 Valve 的“您已被禁止使用此服务器”。
+
+### 原因
+
+1.7.x 为防止插件重载/API 故障，把 ThRei 封禁写成引擎封禁（`BanIdentity`/`BanClient`）。
+引擎会在 SourceMod 检查之前拒绝连接，客户端显示 Valve 默认提示；解封还要等待 `removeid`
+和封禁文件重写。
+
+### 变更内容
+
+- 版本 1.8.0。
+- 移除本插件所有 `BanIdentity` 调用：`sm_threi_ban` / `sm_threi_addban` / 网站下发封禁 /
+  `sm_threi_banip` 都不再写引擎封禁。
+- 新增插件封禁存储 `addons/sourcemod/configs/threi_bans.cfg`（KeyValues）：
+  - 启动时加载 SteamID/IP 封禁、到期时间和原因；
+  - 封禁/解封/快照刷新时保存；
+  - `CheckClientAccess` 在第一次快照加载前也先检查文件封禁，避免 fail-open 放行；
+  - 连接时同时检查 SteamID 和 IP，用 `KickForBan` 显示 `sm_threi_ban_kick_message` + 原因。
+- `sm_threi_unban` / `sm_threi_unbanip` 成功后直接删除内存和文件条目，不再等待引擎解封；
+  仍保留一次 `RemoveBan` 用于清理 1.7.x/basebans 旧引擎封禁。
+- 首次成功加载快照时，对当前网站封禁和插件 IP 封禁执行一次 `RemoveBan`，清理旧版引擎封禁，
+  使重连由插件接管并显示自定义提示。
+- basebans 未运行时自动注册 `sm_ban` / `sm_addban` / `sm_unban` / `sm_banip` / `sm_unbanip`
+  兼容命令；basebans 仍加载时只注册 `sm_threi_*`，避免冲突。
+- 更新安装说明：先安装 1.8.0，再卸载 basebans 并重载插件；说明旧引擎封禁清理和
+  `configs/threi_bans.cfg` 权限。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+
+### 插件包
+
+- `ThRei_Players-1.8.0`：`/home/threi/ThRei_Players-1.8.0/`、`.zip`、`.tar.gz`，并复制到
+  `/mnt/c/Users/15155/Downloads/`。
+- `.smx` SHA-256：`85277af242872d364539eec9031bf071edbdb6d3a80e21e28b1b9910757906bf`。
+
+### 测试与结果
+
+- SourcePawn Compiler 1.11.0.6970 编译通过，无警告。
+- **未执行**：真实游戏服务器测试；需要用户安装 1.8.0、卸载 basebans、重载插件后验证：
+  封禁后重连显示自定义原因；网站解封后立即重连；`configs/threi_bans.cfg` 正确写入。
+- 网站/API 没有变更，不需要重新部署 API。
+- 已知取舍：封禁只在插件加载时生效；插件未加载会失去封禁保护。封禁文件需要可写并纳入备份。
+
 ## 2026年10月28日 02时18分29秒 支持不加引号的 SteamID2/3 参数（1.7.3）
 
 ### 背景
