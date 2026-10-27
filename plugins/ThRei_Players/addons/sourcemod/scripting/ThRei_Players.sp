@@ -27,7 +27,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.7.1"
+#define PLUGIN_VERSION "1.7.2"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -251,14 +251,20 @@ public Action OnBanClient(int client, int time, int flags, const char[] reason,
     JsonEscape(ip, ipJson, sizeof(ipJson));
 
     char name[MAX_NAME_LENGTH];
+    char safeName[MAX_NAME_LENGTH];
     char nameJson[FRAGMENT_BUFFER_SIZE];
     GetClientName(client, name, sizeof(name));
-    JsonEscape(name, nameJson, sizeof(nameJson));
+    if (name[0] != '\0' && IsValidUtf8(name)) {
+        strcopy(safeName, sizeof(safeName), name);
+    } else {
+        strcopy(safeName, sizeof(safeName), steamId);
+    }
+    JsonEscape(safeName, nameJson, sizeof(nameJson));
 
     char safeReason[MAX_REASON_LENGTH];
     strcopy(safeReason, sizeof(safeReason), reason);
     TrimString(safeReason);
-    if (safeReason[0] == '\0') {
+    if (safeReason[0] == '\0' || !IsValidUtf8(safeReason)) {
         strcopy(safeReason, sizeof(safeReason), "服务器封禁");
     }
     char reasonJson[FRAGMENT_BUFFER_SIZE];
@@ -519,6 +525,9 @@ public Action Command_BanIp(int client, int args) {
     }
     char reason[MAX_REASON_LENGTH];
     ReadBanReason(3, reason, sizeof(reason));
+    if (!IsValidUtf8(reason)) {
+        strcopy(reason, sizeof(reason), "管理员封禁");
+    }
 
     if (!BanIdentity(ip, minutes, BANFLAG_IP, reason, "threi_banip", 0)) {
         LogError("[ThRei_Players] Could not write local IP ban for %s.", ip);
@@ -640,31 +649,44 @@ bool ResolveBanTarget(int adminClient, const char[] arg, char[] steamId, int ste
 
 void ApplySteamBan(int adminClient, const char[] steamId, const char[] name,
         const char[] ip, int minutes, const char[] reason) {
+    char safeName[MAX_NAME_LENGTH];
+    char safeReason[MAX_REASON_LENGTH];
+    if (name[0] != '\0' && IsValidUtf8(name)) {
+        strcopy(safeName, sizeof(safeName), name);
+    } else {
+        strcopy(safeName, sizeof(safeName), steamId);
+    }
+    if (reason[0] != '\0' && IsValidUtf8(reason)) {
+        strcopy(safeReason, sizeof(safeReason), reason);
+    } else {
+        strcopy(safeReason, sizeof(safeReason), "管理员封禁");
+    }
+
     int expiresAt = minutes > 0 ? GetTime() + minutes * 60 : 0;
     if (g_smBans != null) {
         g_smBans.SetValue(steamId, expiresAt, true);
-        g_smBanReasons.SetString(steamId, reason, true);
+        g_smBanReasons.SetString(steamId, safeReason, true);
     }
 
     char steamId2[64];
     BuildSteamId2From64(steamId, steamId2, sizeof(steamId2));
-    if (!BanIdentity(steamId2, minutes, BANFLAG_AUTHID, reason, "threi_ban", 0)) {
+    if (!BanIdentity(steamId2, minutes, BANFLAG_AUTHID, safeReason, "threi_ban", 0)) {
         LogError("[ThRei_Players] Could not write local ban for %s.", steamId);
     }
 
     int target = FindClientBySteamId(steamId);
     if (target > 0) {
         char message[512];
-        Format(message, sizeof(message), "你已被服务器封禁。原因：%s", reason);
+        Format(message, sizeof(message), "你已被服务器封禁。原因：%s", safeReason);
         KickClient(target, "%s", message);
     }
 
     char nameJson[FRAGMENT_BUFFER_SIZE];
     char ipJson[256];
     char reasonJson[FRAGMENT_BUFFER_SIZE];
-    JsonEscape(name, nameJson, sizeof(nameJson));
+    JsonEscape(safeName, nameJson, sizeof(nameJson));
     JsonEscape(ip, ipJson, sizeof(ipJson));
-    JsonEscape(reason, reasonJson, sizeof(reasonJson));
+    JsonEscape(safeReason, reasonJson, sizeof(reasonJson));
 
     char body[BAN_REPORT_BODY_SIZE];
     Format(body, sizeof(body),
@@ -761,6 +783,61 @@ void SendUnbanRequest(int client, const char[] steamId, const char[] ip) {
         return;
     }
     ReplyToCommand(client, "[ThRei] 已提交网站解封请求，等待服务器确认...");
+}
+
+bool IsValidUtf8(const char[] value) {
+    int length = strlen(value);
+    int index = 0;
+    while (index < length) {
+        int first = value[index] & 0xFF;
+        if (first < 0x80) {
+            index++;
+            continue;
+        }
+
+        int needed;
+        int secondMin = 0x80;
+        int secondMax = 0xBF;
+        if (first >= 0xC2 && first <= 0xDF) {
+            needed = 1;
+        } else if (first == 0xE0) {
+            needed = 2;
+            secondMin = 0xA0;
+        } else if (first >= 0xE1 && first <= 0xEC) {
+            needed = 2;
+        } else if (first == 0xED) {
+            needed = 2;
+            secondMax = 0x9F;
+        } else if (first >= 0xEE && first <= 0xEF) {
+            needed = 2;
+        } else if (first == 0xF0) {
+            needed = 3;
+            secondMin = 0x90;
+        } else if (first >= 0xF1 && first <= 0xF3) {
+            needed = 3;
+        } else if (first == 0xF4) {
+            needed = 3;
+            secondMax = 0x8F;
+        } else {
+            return false;
+        }
+
+        if (index + needed >= length) {
+            return false;
+        }
+        int second = value[index + 1] & 0xFF;
+        if (second < secondMin || second > secondMax) {
+            return false;
+        }
+        for (int offset = 2; offset <= needed; offset++) {
+            int continuation = value[index + offset] & 0xFF;
+            if (continuation < 0x80 || continuation > 0xBF) {
+                return false;
+            }
+        }
+        index += needed + 1;
+    }
+    return true;
 }
 
 bool AllDigits(const char[] value) {
@@ -1446,10 +1523,16 @@ public void OnBanReportComplete(Handle request, bool failure, bool requestSucces
         g_iBanReportFailures = 0;
         g_fNextBanReport = 0.0;
     } else {
-        if (view_as<int>(statusCode) == 422) {
-            // Invalid payload: retrying cannot succeed. Keep the server-side
-            // local ban, but drop the report.
-            LogError("[ThRei_Players] Ban report rejected with 422; dropping it.");
+        int code = view_as<int>(statusCode);
+        bool permanent = code >= 400 && code < 500
+            && code != 408 && code != 429;
+        if (permanent) {
+            // A malformed payload / bad token / unknown route cannot succeed
+            // by retrying; drop it so later reports are not blocked. The
+            // local SourceMod ban is already in effect.
+            LogHttpStatus("ban report", request, statusCode);
+            LogError("[ThRei_Players] Ban report rejected with HTTP %d; dropping it.",
+                code);
             if (g_aBanReportQueue != null && g_aBanReportQueue.Length > 0) {
                 g_aBanReportQueue.Erase(0);
             }

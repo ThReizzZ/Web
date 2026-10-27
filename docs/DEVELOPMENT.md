@@ -17,6 +17,49 @@
 
 ---
 
+## 2026年10月28日 02时14分29秒 修复封禁上报 400 与队列堵塞（1.7.2）
+
+### 背景
+
+用户反馈 1.7.1 使用后“没有同步网站”。生产日志显示：
+
+- 2026-10-27 18:02:35 UTC：`/plugin/ban-report` 返回 204，账号/服务器/IP 记录已生成；
+- 18:04:44 UTC：`/plugin/unban-report` 返回 204；
+- 18:10:57 UTC：`/plugin/ban-report` 返回 **400**，之后没有新记录。
+
+400 的原因是 JSON 请求体解析失败（典型为玩家名包含非法 UTF-8 字节）。1.7.1 的上报失败
+逻辑只丢弃 422，400 会一直退避重试并停留在队列头部，导致后续封禁上报全部被堵住。
+
+### 变更内容
+
+- 新增 `IsValidUtf8` 校验：
+  - 玩家名非法时回退为 SteamID；
+  - 原因非法时回退为“管理员封禁”/“服务器封禁”；
+  - 避免 `serde_json` 因非法 Unicode 返回 400。
+- `OnBanReportComplete` 对 HTTP 4xx（408/429 除外）记录响应体后丢弃该条上报，不再无限
+  重试；网络错误和 5xx 继续退避重试。这样一条坏请求不会堵塞后续队列。
+- 版本 1.7.2。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+
+### 插件包
+
+- `ThRei_Players-1.7.2`：`/home/threi/ThRei_Players-1.7.2/`、`.zip`、`.tar.gz`，并复制到
+  `/mnt/c/Users/15155/Downloads/`。
+- `.smx` SHA-256：`d8b36033a75f287902375e3f50e1a2378fa95c69497e10d726adb781a01f2d0e`。
+
+### 测试与结果
+
+- SourcePawn Compiler 1.11.0.6970 编译通过，无警告。
+- 用非法 UTF-8 的 `playerName` 请求生产 `/plugin/ban-report`，确认返回 400
+  `invalid unicode code point`；合法请求无令牌返回 401，说明 400 确为 JSON 解析失败。
+- 生产 18:02 的成功记录和 18:04 的解封记录已核对，测试未新增数据。
+- **未执行**：真实游戏服务器 1.7.2 上报测试。需要用户安装 1.7.2 后重新封禁一次确认。
+
 ## 2026年10月28日 02时07分14秒 插件封禁命令支持 SteamID2/3（1.7.1）
 
 ### 背景
@@ -64,7 +107,7 @@
 
 用户希望最终用 `ThRei_Players` 完全替代 `basebans.smx`。本阶段先实现 1.7.0：新增自己的
 封禁/解封/IP 封禁命令，同时写本地引擎封禁和网站记录；basebans 暂时保留，在 1服 验证后再
-于 1.7.2 提供 `sm_ban` / `sm_unban` 兼容命令并逐台卸载。
+于 1.7.3 提供 `sm_ban` / `sm_unban` 兼容命令并逐台卸载。
 
 ### 变更内容
 

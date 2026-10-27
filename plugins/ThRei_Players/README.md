@@ -44,8 +44,9 @@ sm_threi_status
 1.7.0 新增 `sm_threi_ban` / `sm_threi_addban` / `sm_threi_unban` / `sm_threi_banip` /
 `sm_threi_unbanip`，把本地引擎封禁和网站同步合并到自己的命令中；网站解封会按分组清理
 同一次游戏内封禁产生的账号、服务器和 IP 记录。1.7.1 让封禁/解封命令都支持 SteamID64、
-SteamID2（`STEAM_0:0:...`）和 SteamID3（`[U:1:...]`）。1.6.1 增加了网站解封时的本地
-`unban` 指令。
+SteamID2（`STEAM_0:0:...`）和 SteamID3（`[U:1:...]`）。1.7.2 修复玩家名含非法 UTF-8 时
+网站返回 400 的问题，并让 4xx 上报不再堵塞后续队列。1.6.1 增加了网站解封时的本地 `unban`
+指令。
 1.6.0 增加了在线玩家 IP 上报与游戏内封禁回传。1.5.0 使用 `/plugin/actions?wait=20`
 长轮询，新指令通常 1 秒内到达；1.4.0 的白名单/封禁同步仍依赖本仓库带
 `plugin/access-snapshot` 与 `plugin/actions` 接口的 API。旧 API 会返回 404，此时插件仍会
@@ -243,7 +244,7 @@ CS:GO 的 `sv_hibernate_when_empty` 会在空服时暂停游戏帧与 SourceMod 
 
 1.7.0 仍建议保留 `basebans.smx`：上述命令使用 `sm_threi_*` 名称，不会与 basebans 冲突。
 basebans 的 `sm_ban` 仍会被 `OnBanClient` 捕获并回传网站。等 1.7.0 在 1服 验证稳定后，
-1.7.2 再提供 `sm_ban` / `sm_unban` 兼容名称并逐台卸载 basebans。
+1.7.3 再提供 `sm_ban` / `sm_unban` 兼容名称并逐台卸载 basebans。
 
 ### 封禁行为
 
@@ -259,6 +260,9 @@ basebans 的 `sm_ban` 仍会被 `OnBanClient` 捕获并回传网站。等 1.7.0 
 - SteamID64、SteamID2（`STEAM_0:0:...` 或 `STEAM_1:...`）和 SteamID3（`[U:1:...]` 或
   `U:1:...`）都可以用于 `sm_threi_ban` / `sm_threi_addban` / `sm_threi_unban`；内部统一
   转成 SteamID64 再匹配。
+- 上报前会校验玩家名/原因的 UTF-8；非法名字回退为 SteamID，非法原因回退为“管理员封禁”，
+  避免网站 JSON 解析返回 400。HTTP 4xx（408/429 除外）会记录并丢弃该条上报，避免堵塞后续
+  封禁；网络错误和 5xx 继续退避重试。
 - `sm_threi_banip` 只写本地 IP 封禁和网站 IP 封禁，不会自动封禁该 IP 下已登录的网站账号；
   网站 `create_ip_ban` 会自动关联已知普通账号。
 - 手动用 basebans `sm_ban` 产生的封禁仍可通过 `sm_threi_unban` 同步解除；旧版插件产生的
@@ -511,7 +515,7 @@ sm_unban "[U:1:24691356]"
 
 **游戏内封禁没有出现在网站**
 
-- 确认插件版本为 1.7.1 或更高：`sm_threi_status` 应显示 `version=1.7.1`。网站解封和分组
+- 确认插件版本为 1.7.2 或更高：`sm_threi_status` 应显示 `version=1.7.2`。网站解封和分组
   清理需要 1.7.0+；1.6.0 只支持封禁回传。
 - 只有通过 `BanClient` 执行的封禁（如 `sm_ban`）会回传；控制台原始 `banid` / `addip`
   不会触发 `OnBanClient`。
