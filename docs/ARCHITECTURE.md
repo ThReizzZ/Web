@@ -294,7 +294,7 @@ modules/<name>/
 - **多实例**：同一主机上的多个实例共用一份 `cfg/sourcemod/threi_players.cfg`，每个实例写一行 `sm_threi_instance <hostport> "<token>"`，插件按自身端口选择令牌并以令牌上报；管理员通过 `server_communities` 社区组把同一主机的实例归在一起，服务器目录显示组名并支持筛选。
 - **输入校验**：`serverId` 最多 80 字符；地图最多 128 字符；`maxPlayers` 为 1–1024；最多 1024 名玩家；SteamID64 必须是 17 位数字；昵称截断到 80 字符；连接秒数限制在 0–2592000；玩家 IP 必须是合法 IPv4/IPv6，非法值按 `NULL` 保存。无效或重复玩家记入 `skipped`，不会让整次上报失败。
 - **写入**：在单个事务中更新服务器快照（状态、地图、人数上限、人数、`last_reported_at`），删除本次不再出现的 `server_players`，并 upsert 当前玩家及其 IP；upsert 保留已有 `connected_at`，新插件未上报 IP 时保留旧值。`maintenance` 状态不会被上报改为 `online`。
-- **游戏内封禁回传**：`POST /api/v1/plugin/ban-report` 接受插件 ThRei 封禁命令的数据，写入一条**全服** `server_bans`，并为所有启用服务器写入 `ban` 指令；有 IP 时再写入 `server_ip_bans` 并下发 `banip`。SteamID 与 IP 记录共享 `ban_group_id`。已有生效的全服封禁时跳过，避免重复。`POST /api/v1/plugin/ip-ban-report` 处理纯 IP 封禁，`POST /api/v1/plugin/unban-report` 处理游戏内解封；后者不触碰管理员手动封禁，存在管理员封禁时返回 `409`。这些流程都不读写旧 `bans` 表，也不影响网站登录。
+- **游戏内封禁回传**：`POST /api/v1/plugin/ban-report` 接受插件 ThRei 封禁命令的数据，写入一条**全服** `server_bans`，并为所有启用服务器写入 `ban` 指令；有 IP 时再写入 `server_ip_bans` 并下发 `banip`。SteamID 与 IP 记录共享 `ban_group_id`。已有生效的全服封禁时跳过，避免重复。1.9.1+ 还支持 `associateIpOnly`：SteamID 封禁玩家重连时，插件在踢出前把当前 IP 上报给 API，API 只把 IP 关联到原封禁组并下发 `banip`，不重复创建 SteamID 封禁。`POST /api/v1/plugin/ip-ban-report` 处理纯 IP 封禁，`POST /api/v1/plugin/unban-report` 处理游戏内解封；后者不触碰管理员手动封禁，存在管理员封禁时返回 `409`。这些流程都不读写旧 `bans` 表，也不影响网站登录。
 - **过期清理**：后台任务每 30 秒扫描一次；没有 RCON 兜底的插件服务器超过 90 秒未上报时，状态改为 `offline`、人数清零、延迟清空、删除在线名单，`maintenance` 保持不变。启用 RCON 兜底且服务器有密码时，清理任务跳过该服务器，交给休眠探测任务判断。
 - **管理状态**：`pluginState` 由 `plugin_token` 与 `last_reported_at` 派生：`disabled`（无令牌）、`waiting`（有令牌但没有最近上报）、`connected`（90 秒内有上报）。
 - **令牌生命周期**：生成/轮换会清空在线快照并标记离线；撤销令牌执行同样的清理。旧令牌立即失效。

@@ -31,7 +31,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.9.0"
+#define PLUGIN_VERSION "1.9.1"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -2225,6 +2225,7 @@ void ExecuteBanAction(const char[] steamId, int expiresAt, const char[] reason) 
 
     int target = FindClientBySteamId(steamId);
     if (target > 0) {
+        CaptureBannedClientIp(target, steamId, expiresAt, reason);
         KickForBan(target, steamId, reason);
     }
 }
@@ -2346,6 +2347,16 @@ void CheckClientAccess(int client) {
     // loads. Whitelist fail-open must not let a banned player in.
     int expiresAt = 0;
     if (g_smBans.GetValue(steamId, expiresAt) && (expiresAt == 0 || expiresAt > GetTime())) {
+        char banReason[MAX_REASON_LENGTH];
+        banReason[0] = '\0';
+        if (g_smBanReasons != null) {
+            g_smBanReasons.GetString(steamId, banReason, sizeof(banReason));
+        }
+        // A SteamID-only website ban may have been created while the player
+        // was offline, so the API had no IP to associate. Capture it now and
+        // report it before kicking, letting every server block alt accounts
+        // from the same IP.
+        CaptureBannedClientIp(client, steamId, expiresAt, banReason);
         KickForBan(client, steamId, "");
         return;
     }
@@ -2411,6 +2422,50 @@ void KickForBan(int client, const char[] steamId, const char[] actionReason) {
         strcopy(message, sizeof(message), base);
     }
     KickClient(client, "%s", message);
+}
+
+/**
+ * Captures the IP of a SteamID-banned player who is already connected.
+ * The local cache blocks alt accounts instantly on this server; the API call
+ * shares the IP with every other server and links it to the existing ban.
+ */
+void CaptureBannedClientIp(int client, const char[] steamId, int expiresAt,
+        const char[] reason) {
+    char ip[64];
+    if (!GetClientIP(client, ip, sizeof(ip), true) || !LooksLikeIp(ip)) {
+        return;
+    }
+
+    char safeReason[MAX_REASON_LENGTH];
+    if (reason[0] != '\0' && IsValidUtf8(reason)) {
+        strcopy(safeReason, sizeof(safeReason), reason);
+    } else {
+        strcopy(safeReason, sizeof(safeReason), "封禁玩家 IP 自动关联");
+    }
+
+    if (g_smIpBans != null) {
+        int current = 0;
+        bool hasCurrent = g_smIpBans.GetValue(ip, current);
+        bool shouldUpdate = !hasCurrent
+            || (current != 0 && (expiresAt == 0 || expiresAt > current));
+        if (shouldUpdate) {
+            g_smIpBans.SetValue(ip, expiresAt, true);
+            g_smIpBanReasons.SetString(ip, safeReason, true);
+            SaveBanStore();
+        }
+    }
+
+    char ipJson[256];
+    char reasonJson[FRAGMENT_BUFFER_SIZE];
+    JsonEscape(ip, ipJson, sizeof(ipJson));
+    JsonEscape(safeReason, reasonJson, sizeof(reasonJson));
+
+    char body[BAN_REPORT_BODY_SIZE];
+    Format(body, sizeof(body),
+        "{\"steamId64\":\"%s\",\"ipAddress\":\"%s\",\"reason\":\"%s\","
+        ... "\"associateIpOnly\":true}",
+        steamId, ipJson, reasonJson);
+    QueueBanReport(1, body);
 }
 
 bool IsSteamId64(const char[] value) {

@@ -243,6 +243,8 @@ action 5c8b2d3e-... unbanip 203.0.113.10 网站解除 IP 封禁
 ```
 
 - `durationMinutes` 为分钟数，`0` 或省略表示永久；最大 52,560,000 分钟。
+- `associateIpOnly: true` 供插件 1.9.1+ 在 SteamID 封禁玩家重连时补关联 IP：不会新建 SteamID
+  封禁，只用该玩家当前 IP 创建同 `ban_group_id`、同到期时间的游戏 IP 封禁并下发 `banip`。
 - 成功返回 `204 No Content`。API 会写入一条**全服**游戏封禁（`server_id = NULL`，若尚无生效的全服封禁），并为所有启用服务器写入 `ban` 指令。
 - 如果请求带 `ipAddress`，还会创建游戏 IP 封禁；已有生效 IP 封禁时跳过。SteamID 封禁、IP 封禁共享 `ban_group_id`。
 - **不会写入网站账号封禁，也不会撤销网站会话**；网站账号仍然可以登录，用户中心会显示游戏封禁原因。

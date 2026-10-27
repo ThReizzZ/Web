@@ -92,6 +92,10 @@ pub struct PluginBanReportRequest {
     /// `SourceMod` ban length in minutes. `0` or omitted means permanent.
     #[serde(default)]
     pub duration_minutes: Option<i64>,
+    /// Set by the plugin when a banned player reconnects and the API only
+    /// needs to associate the reported IP with the existing active ban.
+    #[serde(default)]
+    pub associate_ip_only: bool,
 }
 
 /// Pure IP ban reported by the plugin's `sm_threi_banip` command.
@@ -241,6 +245,13 @@ pub async fn ban_report(
             "steamId64 must be a 17-digit number".to_owned(),
         ));
     }
+    let server_id =
+        resolve_server_for_token(&state.db, token, requested_server_id.as_deref()).await?;
+    if request.associate_ip_only {
+        let requested_ip = normalize_player_ip(request.ip_address.as_deref());
+        return associate_banned_player_ip(&state, steam_id64, requested_ip, &server_id).await;
+    }
+
     let game_reason = validate_ban_reason(&request.reason)?;
     let expires_at = ban_expiry(request.duration_minutes)?;
     let requested_ip = normalize_player_ip(request.ip_address.as_deref());
@@ -255,8 +266,6 @@ pub async fn ban_report(
         .collect();
     let ban_group_id = uuid::Uuid::new_v4();
 
-    let server_id =
-        resolve_server_for_token(&state.db, token, requested_server_id.as_deref()).await?;
     // A ban command can name an offline SteamID, in which case the plugin has
     // no IP to report. Fall back to the server roster or the account's last
     // website IP so alt accounts on the same IP are still covered.
@@ -344,6 +353,83 @@ pub async fn ban_report(
         }
     }
 
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn associate_banned_player_ip(
+    state: &AppState,
+    steam_id64: &str,
+    requested_ip: Option<String>,
+    server_id: &str,
+) -> Result<StatusCode, AppError> {
+    let existing = sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            Option<uuid::Uuid>,
+            Option<DateTime<Utc>>,
+            String,
+        ),
+    >(
+        r"
+        SELECT id, ban_group_id, expires_at, reason
+        FROM server_bans
+        WHERE steam_id64 = $1
+          AND (server_id IS NULL OR server_id = $2)
+          AND lifted_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
+        ORDER BY (server_id IS NOT NULL) DESC, created_at DESC
+        LIMIT 1
+        ",
+    )
+    .bind(steam_id64)
+    .bind(server_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((ban_id, existing_group, expires_at, ban_reason)) = existing else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
+
+    let ip = match requested_ip {
+        Some(ip) => Some(ip),
+        None => find_recent_game_ip(&state.db, steam_id64, Some(server_id)).await?,
+    };
+    let Some(ip) = ip else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
+
+    let ban_group_id = if let Some(group_id) = existing_group {
+        group_id
+    } else {
+        let candidate = uuid::Uuid::new_v4();
+        sqlx::query_scalar::<_, uuid::Uuid>(
+            r"
+            UPDATE server_bans
+            SET ban_group_id = $2
+            WHERE id = $1 AND ban_group_id IS NULL
+            RETURNING ban_group_id
+            ",
+        )
+        .bind(ban_id)
+        .bind(candidate)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or(candidate)
+    };
+
+    let auto_reason: String = format!("封禁玩家再次进入自动关联 IP：{ban_reason}")
+        .chars()
+        .take(1000)
+        .collect();
+    crate::modules::server_admin::create_server_ip_ban_row(
+        &state.db,
+        None,
+        &ip,
+        &auto_reason,
+        expires_at,
+        Some(ban_group_id),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
