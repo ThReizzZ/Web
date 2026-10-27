@@ -109,25 +109,17 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
   );
   const sort = useSyncExternalStore(subscribeToSort, getSortSnapshot, getServerSortSnapshot);
   const [query, setQuery] = useState("");
-  const [communityFilter, setCommunityFilter] = useState<string | null>(null);
-  const communities = Array.from(
-    new Set(servers.map((server) => server.community).filter(Boolean)),
-  ).sort((left, right) => left.localeCompare(right, "zh-CN"));
   const searchedServers = searchServers(servers, query);
-  const filteredServers = communityFilter
-    ? searchedServers.filter((server) => server.community === communityFilter)
-    : searchedServers;
-  const orderedServers = sortServers(filteredServers, sort);
+  const orderedServers = sortServers(searchedServers, sort);
   const columns = Array.from({ length: columnCount }, () => [] as typeof orderedServers);
   orderedServers.forEach((server, index) => {
     columns[index % columnCount]!.push(server);
   });
   const onlineTotal = getOnlinePlayerTotal(servers);
-  const hasFilters = query.length > 0 || communityFilter !== null;
+  const hasFilters = query.length > 0;
 
   function clearFilters() {
     setQuery("");
-    setCommunityFilter(null);
   }
 
   function selectView(nextView: ViewMode) {
@@ -199,8 +191,8 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索服务器、社区组、地图或玩家"
-            aria-label="搜索服务器、社区组、地图或玩家"
+            placeholder="搜索服务器、地图或玩家"
+            aria-label="搜索服务器、地图或玩家"
             className="pr-9 pl-9"
           />
           {query ? (
@@ -232,42 +224,13 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
             </select>
           </label>
           <p className="text-xs text-muted-foreground" aria-live="polite">
-            显示 <span className="font-medium text-foreground">{filteredServers.length}</span> /{" "}
+            显示 <span className="font-medium text-foreground">{searchedServers.length}</span> /{" "}
             {servers.length} 个服务器
           </p>
         </div>
       </div>
 
-      {communities.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">社区组</span>
-          <Button
-            type="button"
-            size="sm"
-            variant={communityFilter === null ? "secondary" : "outline"}
-            aria-pressed={communityFilter === null}
-            onClick={() => setCommunityFilter(null)}
-            className="h-7"
-          >
-            全部
-          </Button>
-          {communities.map((community) => (
-            <Button
-              key={community}
-              type="button"
-              size="sm"
-              variant={communityFilter === community ? "secondary" : "outline"}
-              aria-pressed={communityFilter === community}
-              onClick={() => setCommunityFilter(community)}
-              className="h-7"
-            >
-              {community}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-
-      {filteredServers.length === 0 ? (
+      {searchedServers.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border bg-card py-14 text-center">
           <Search className="size-8 text-muted-foreground" aria-hidden="true" />
           <div>
@@ -277,7 +240,7 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
             <p className="mt-1 text-sm text-muted-foreground">
               {servers.length === 0
                 ? "服务器接入后，这里会显示真实的地图、在线玩家与连接地址。"
-                : "可以尝试服务器名称、社区组、地图名、地区或玩家昵称。"}
+                : "可以尝试服务器名称、地图名、地区或玩家昵称。"}
             </p>
           </div>
           {servers.length > 0 && hasFilters ? (

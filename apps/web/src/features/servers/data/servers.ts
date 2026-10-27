@@ -109,7 +109,6 @@ export function searchServers(servers: KzServer[], query: string): KzServer[] {
     [
       server.name,
       server.map,
-      server.community,
       server.region,
       server.description,
       ...server.tags,
