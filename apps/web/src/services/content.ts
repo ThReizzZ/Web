@@ -8,10 +8,10 @@ import type {
   AdminForumUser,
   AdminLookupResponse,
   AdminOverview,
-  Ban,
   PluginTokenResponse,
   ServerAdminOverview,
   ServerBan,
+  ServerIpBan,
   WhitelistOverview,
 } from "@/features/admin/types";
 import type {
@@ -127,33 +127,47 @@ export async function setAdminDisabled(
   );
 }
 
-export async function fetchBans(client: ApiClient): Promise<Ban[]> {
-  return client.get<Ban[]>("/api/v1/admin/bans", noStore);
-}
-
 export async function fetchServerBans(client: ApiClient): Promise<ServerBan[]> {
   return client.get<ServerBan[]>("/api/v1/admin/server-bans", noStore);
 }
 
-export async function createBan(
+export async function createServerBan(
   client: ApiClient,
   input: {
-    banType: "steam" | "ip";
-    steamId64?: string;
-    ipAddress?: string;
+    steamId64: string;
     reason: string;
     playerName?: string;
     expiresInHours?: number | null;
+    scope: "global" | "server";
+    serverId?: string;
   },
-): Promise<Ban> {
-  return client.request<Ban>("/api/v1/admin/bans", {
+): Promise<void> {
+  await client.request<void>("/api/v1/admin/server-bans", {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export async function liftBan(client: ApiClient, id: string, reason?: string): Promise<void> {
-  await client.request<void>(`/api/v1/admin/bans/${encodeURIComponent(id)}/lift`, {
+export async function fetchServerIpBans(client: ApiClient): Promise<ServerIpBan[]> {
+  return client.get<ServerIpBan[]>("/api/v1/admin/server-ip-bans", noStore);
+}
+
+export async function createServerIpBan(
+  client: ApiClient,
+  input: { ipAddress: string; reason: string; expiresInHours?: number | null },
+): Promise<void> {
+  await client.request<void>("/api/v1/admin/server-ip-bans", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function liftServerIpBan(
+  client: ApiClient,
+  id: string,
+  reason?: string,
+): Promise<void> {
+  await client.request<void>(`/api/v1/admin/server-ip-bans/${encodeURIComponent(id)}/lift`, {
     method: "POST",
     body: JSON.stringify({ reason }),
   });

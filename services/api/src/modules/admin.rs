@@ -90,8 +90,10 @@ async fn overview(
              WHERE last_seen_at > now() - interval '5 minutes')::bigint AS online_players,
             (SELECT count(*) FROM whitelist_applications
              WHERE status = 'pending')::bigint AS pending_whitelist,
-            (SELECT count(*) FROM bans
-             WHERE lifted_at IS NULL AND (expires_at IS NULL OR expires_at > now()))::bigint AS active_bans
+            ((SELECT count(*) FROM server_bans
+              WHERE lifted_at IS NULL AND (expires_at IS NULL OR expires_at > now()))
+             + (SELECT count(*) FROM server_ip_bans
+                WHERE lifted_at IS NULL AND (expires_at IS NULL OR expires_at > now())))::bigint AS active_bans
         ",
     )
     .fetch_one(&state.db)

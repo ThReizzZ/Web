@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -87,11 +89,57 @@ pub struct ServerBan {
     pub is_active: bool,
 }
 
+#[derive(Debug, Serialize, FromRow, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerIpBan {
+    pub id: uuid::Uuid,
+    pub ip_address: String,
+    pub reason: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub created_by: String,
+    pub lifted_at: Option<DateTime<Utc>>,
+    pub lifted_by: Option<String>,
+    pub lift_reason: Option<String>,
+    pub is_active: bool,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerAdminOverview {
     pub servers: Vec<AdminServer>,
     pub bans: Vec<ServerBan>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateServerBanRequest {
+    pub steam_id64: String,
+    #[serde(default)]
+    pub player_name: Option<String>,
+    pub reason: String,
+    #[serde(default)]
+    pub expires_in_hours: Option<i64>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub server_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateServerIpBanRequest {
+    pub ip_address: String,
+    pub reason: String,
+    #[serde(default)]
+    pub expires_in_hours: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiftServerIpBanRequest {
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -244,8 +292,16 @@ pub fn router() -> Router<AppState> {
             "/admin/servers/{id}/rcon-password",
             put(set_rcon_password).delete(clear_rcon_password),
         )
-        .route("/admin/server-bans", get(list_server_bans))
+        .route(
+            "/admin/server-bans",
+            get(list_server_bans).post(create_server_ban),
+        )
         .route("/admin/server-bans/{id}/lift", post(lift_server_ban))
+        .route(
+            "/admin/server-ip-bans",
+            get(list_server_ip_bans).post(create_server_ip_ban),
+        )
+        .route("/admin/server-ip-bans/{id}/lift", post(lift_server_ip_ban))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -386,6 +442,365 @@ async fn list_server_bans(
 ) -> Result<Json<Vec<ServerBan>>, AppError> {
     require_admin(&state, &headers).await?;
     Ok(Json(load_server_bans(&state.db).await?))
+}
+
+#[allow(clippy::too_many_lines)]
+async fn create_server_ban(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateServerBanRequest>,
+) -> Result<StatusCode, AppError> {
+    let admin = require_admin(&state, &headers).await?;
+    let steam_id64 = request.steam_id64.trim();
+    validate_steam_id(steam_id64)?;
+    if steam_id64 == admin.steam_id64 {
+        return Err(AppError::bad_request(
+            "You cannot game-ban your own account",
+        ));
+    }
+    let reason = validate_reason(&request.reason)?;
+    let expires_at = validate_ban_expiry(request.expires_in_hours)?;
+    let scope = request.scope.as_deref().unwrap_or("global");
+    let server_id = if scope == "server" {
+        let id = non_empty(request.server_id.as_deref()).ok_or_else(|| {
+            AppError::Validation("serverId is required for scope=server".to_owned())
+        })?;
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM servers WHERE id = $1 AND is_active = true)",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+        if !exists {
+            return Err(AppError::NotFound);
+        }
+        Some(id)
+    } else if scope == "global" {
+        None
+    } else {
+        return Err(AppError::Validation(
+            "scope must be \"global\" or \"server\"".to_owned(),
+        ));
+    };
+
+    let already_banned = if let Some(server_id) = server_id {
+        sqlx::query_scalar::<_, bool>(
+            r"
+            SELECT EXISTS (
+                SELECT 1 FROM server_bans
+                WHERE steam_id64 = $1
+                  AND (server_id IS NULL OR server_id = $2)
+                  AND lifted_at IS NULL
+                  AND (expires_at IS NULL OR expires_at > now())
+            )
+            ",
+        )
+        .bind(steam_id64)
+        .bind(server_id)
+        .fetch_one(&state.db)
+        .await?
+    } else {
+        sqlx::query_scalar::<_, bool>(
+            r"
+            SELECT EXISTS (
+                SELECT 1 FROM server_bans
+                WHERE steam_id64 = $1
+                  AND server_id IS NULL
+                  AND lifted_at IS NULL
+                  AND (expires_at IS NULL OR expires_at > now())
+            )
+            ",
+        )
+        .bind(steam_id64)
+        .fetch_one(&state.db)
+        .await?
+    };
+    if already_banned {
+        return Err(AppError::Conflict);
+    }
+
+    let player_name = request
+        .player_name
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(80).collect::<String>());
+    let target_ip = find_recent_game_ip(&state.db, steam_id64, server_id).await?;
+    let ban_group_id = Uuid::new_v4();
+
+    let mut transaction = state.db.begin().await?;
+    sqlx::query(
+        r"
+        INSERT INTO server_bans (
+            server_id, steam_id64, player_name, reason, expires_at, created_by,
+            ban_group_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ",
+    )
+    .bind(server_id)
+    .bind(steam_id64)
+    .bind(player_name)
+    .bind(&reason)
+    .bind(expires_at)
+    .bind(admin.id)
+    .bind(ban_group_id)
+    .execute(&mut *transaction)
+    .await?;
+
+    if let Some(server_id) = server_id {
+        sqlx::query(
+            r"
+            INSERT INTO server_actions (server_id, steam_id64, action, reason, created_by)
+            VALUES ($1, $2, 'ban', $3, $4)
+            ",
+        )
+        .bind(server_id)
+        .bind(steam_id64)
+        .bind(&reason)
+        .bind(admin.id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query("DELETE FROM server_players WHERE server_id = $1 AND steam_id64 = $2")
+            .bind(server_id)
+            .bind(steam_id64)
+            .execute(&mut *transaction)
+            .await?;
+    } else {
+        sqlx::query(
+            r"
+            INSERT INTO server_actions (server_id, steam_id64, action, reason, created_by)
+            SELECT id, $1, 'ban', $2, $3
+            FROM servers
+            WHERE is_active = true
+            ",
+        )
+        .bind(steam_id64)
+        .bind(&reason)
+        .bind(admin.id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query("DELETE FROM server_players WHERE steam_id64 = $1")
+            .bind(steam_id64)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    transaction.commit().await?;
+
+    if let Some(ip) = target_ip
+        && client_ip(&headers).as_deref() != Some(ip.as_str())
+    {
+        let auto_reason: String = format!("服务器封禁自动关联 IP：{reason}")
+            .chars()
+            .take(1000)
+            .collect();
+        if let Err(error) = create_server_ip_ban_row(
+            &state.db,
+            Some(admin.id),
+            &ip,
+            &auto_reason,
+            expires_at,
+            Some(ban_group_id),
+        )
+        .await
+        {
+            tracing::warn!(%error, %steam_id64, "failed to auto-create game IP ban");
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_server_ip_bans(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ServerIpBan>>, AppError> {
+    require_admin(&state, &headers).await?;
+    let bans = sqlx::query_as::<_, ServerIpBan>(
+        r"
+        SELECT b.id, b.ip_address, b.reason, b.expires_at, b.created_at,
+               coalesce(creator.persona_name, '系统') AS created_by,
+               b.lifted_at, lifter.persona_name AS lifted_by, b.lift_reason,
+               (b.lifted_at IS NULL AND (b.expires_at IS NULL OR b.expires_at > now()))
+                   AS is_active
+        FROM server_ip_bans b
+        LEFT JOIN users creator ON creator.id = b.created_by
+        LEFT JOIN users lifter ON lifter.id = b.lifted_by
+        ORDER BY is_active DESC, b.created_at DESC
+        ",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(bans))
+}
+
+async fn create_server_ip_ban(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateServerIpBanRequest>,
+) -> Result<StatusCode, AppError> {
+    let admin = require_admin(&state, &headers).await?;
+    let ip = validate_ip(&request.ip_address)?;
+    let reason = validate_reason(&request.reason)?;
+    let expires_at = validate_ban_expiry(request.expires_in_hours)?;
+    let created =
+        create_server_ip_ban_row(&state.db, Some(admin.id), &ip, &reason, expires_at, None).await?;
+    if created.is_none() {
+        return Err(AppError::Conflict);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn lift_server_ip_ban(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(request): Json<LiftServerIpBanRequest>,
+) -> Result<StatusCode, AppError> {
+    let admin = require_admin(&state, &headers).await?;
+    let reason = request
+        .reason
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(500).collect::<String>());
+    let lifted_ip = sqlx::query_scalar::<_, String>(
+        r"
+        UPDATE server_ip_bans
+        SET lifted_at = now(), lifted_by = $2, lift_reason = $3
+        WHERE id = $1 AND lifted_at IS NULL
+        RETURNING ip_address
+        ",
+    )
+    .bind(id)
+    .bind(admin.id)
+    .bind(reason)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::Conflict)?;
+
+    sqlx::query(
+        r"
+        INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
+        SELECT id, $1, 'unbanip', '网站解除 IP 封禁', $2
+        FROM servers
+        WHERE is_active = true AND plugin_token IS NOT NULL
+        ",
+    )
+    .bind(&lifted_ip)
+    .bind(admin.id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn create_server_ip_ban_row(
+    db: &sqlx::PgPool,
+    created_by: Option<Uuid>,
+    ip: &str,
+    reason: &str,
+    expires_at: Option<DateTime<Utc>>,
+    ban_group_id: Option<Uuid>,
+) -> Result<Option<Uuid>, AppError> {
+    let ip = validate_ip(ip)?;
+    let already_banned = sqlx::query_scalar::<_, bool>(
+        r"
+        SELECT EXISTS (
+            SELECT 1 FROM server_ip_bans
+            WHERE ip_address = $1
+              AND lifted_at IS NULL
+              AND (expires_at IS NULL OR expires_at > now())
+        )
+        ",
+    )
+    .bind(&ip)
+    .fetch_one(db)
+    .await?;
+    if already_banned {
+        return Ok(None);
+    }
+    let reason: String = reason.chars().take(1000).collect();
+    let mut transaction = db.begin().await?;
+    let id = sqlx::query_scalar::<_, Uuid>(
+        r"
+        INSERT INTO server_ip_bans (
+            ip_address, reason, expires_at, created_by, ban_group_id
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
+        ",
+    )
+    .bind(&ip)
+    .bind(&reason)
+    .bind(expires_at)
+    .bind(created_by)
+    .bind(ban_group_id)
+    .fetch_one(&mut *transaction)
+    .await?;
+
+    sqlx::query(
+        r"
+        INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
+        SELECT id, $1, 'banip', $2, $3
+        FROM servers
+        WHERE is_active = true
+        ",
+    )
+    .bind(&ip)
+    .bind(&reason)
+    .bind(created_by)
+    .execute(&mut *transaction)
+    .await?;
+
+    transaction.commit().await?;
+    Ok(Some(id))
+}
+
+pub(crate) async fn find_recent_game_ip(
+    db: &sqlx::PgPool,
+    steam_id64: &str,
+    server_id: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    let roster_ip = sqlx::query_scalar::<_, Option<String>>(
+        r"
+        SELECT ip_address
+        FROM server_players
+        WHERE steam_id64 = $1
+          AND ip_address IS NOT NULL
+          AND ($2::text IS NULL OR server_id = $2)
+        ORDER BY last_seen_at DESC
+        LIMIT 1
+        ",
+    )
+    .bind(steam_id64)
+    .bind(server_id)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+    if roster_ip.is_some() {
+        return Ok(roster_ip);
+    }
+
+    let session_ip = sqlx::query_scalar::<_, Option<String>>(
+        r"
+        SELECT coalesce(
+            (SELECT u.last_login_ip FROM users u WHERE u.steam_id64 = $1),
+            (
+                SELECT s.ip_address
+                FROM sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE u.steam_id64 = $1
+                  AND s.ip_address IS NOT NULL
+                  AND s.expires_at > now()
+                ORDER BY s.created_at DESC
+                LIMIT 1
+            )
+        )
+        ",
+    )
+    .bind(steam_id64)
+    .fetch_one(db)
+    .await?;
+    Ok(session_ip)
 }
 
 async fn create_server(
@@ -965,15 +1380,9 @@ async fn ban_player(
 
     // Capture the IP before the transaction removes the player from the
     // roster; it is used to mirror this ban into an IP ban.
-    let player_ip = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT ip_address FROM server_players WHERE server_id = $1 AND steam_id64 = $2",
-    )
-    .bind(&server_id)
-    .bind(&steam_id64)
-    .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    let player_ip = find_recent_game_ip(&state.db, &steam_id64, Some(&server_id)).await?;
 
+    let ban_group_id = Uuid::new_v4();
     let mut transaction = state.db.begin().await?;
     let ban_server_id = if scope == "server" {
         Some(server_id.as_str())
@@ -981,7 +1390,13 @@ async fn ban_player(
         None
     };
     sqlx::query(
-        "INSERT INTO server_bans (server_id, steam_id64, player_name, reason, expires_at, created_by) VALUES ($1,$2,$3,$4,$5,$6)",
+        r"
+        INSERT INTO server_bans (
+            server_id, steam_id64, player_name, reason, expires_at, created_by,
+            ban_group_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ",
     )
     .bind(ban_server_id)
     .bind(&steam_id64)
@@ -989,6 +1404,7 @@ async fn ban_player(
     .bind(&reason)
     .bind(expires_at)
     .bind(admin.id)
+    .bind(ban_group_id)
     .execute(&mut *transaction)
     .await?;
 
@@ -1029,50 +1445,24 @@ async fn ban_player(
 
     // Mirror the server ban to an IP ban. Prefer the IP reported by plugin
     // 1.6.0+; fall back to the account's last website login IP.
-    let ip = match player_ip {
-        Some(ip) => Some(ip),
-        None => {
-            sqlx::query_scalar::<_, Option<String>>(
-                r"
-            SELECT coalesce(
-                (SELECT u.last_login_ip FROM users u WHERE u.steam_id64 = $1),
-                (
-                    SELECT s.ip_address
-                    FROM sessions s
-                    JOIN users u ON u.id = s.user_id
-                    WHERE u.steam_id64 = $1
-                      AND s.ip_address IS NOT NULL
-                      AND s.expires_at > now()
-                    ORDER BY s.created_at DESC
-                    LIMIT 1
-                )
-            )
-            ",
-            )
-            .bind(&steam_id64)
-            .fetch_one(&state.db)
-            .await?
-        }
-    };
-    if let Some(ip) = ip
+    if let Some(ip) = player_ip
         && client_ip(&headers).as_deref() != Some(ip.as_str())
     {
         let auto_reason: String = format!("服务器封禁自动关联 IP：{reason}")
             .chars()
-            .take(2000)
+            .take(1000)
             .collect();
-        if let Err(error) = crate::modules::bans::create_ip_ban(
+        if let Err(error) = create_server_ip_ban_row(
             &state.db,
             Some(admin.id),
             &ip,
-            None,
             &auto_reason,
             expires_at,
-            None,
+            Some(ban_group_id),
         )
         .await
         {
-            tracing::warn!(%error, %steam_id64, "failed to auto-create IP ban");
+            tracing::warn!(%error, %steam_id64, "failed to auto-create game IP ban");
         }
     }
 
@@ -1087,12 +1477,12 @@ async fn lift_server_ban(
 ) -> Result<StatusCode, AppError> {
     let admin = require_admin(&state, &headers).await?;
     let mut transaction = state.db.begin().await?;
-    let lifted = sqlx::query_as::<_, (Option<String>, String, Option<Uuid>, Option<Uuid>)>(
+    let lifted = sqlx::query_as::<_, (Option<String>, String, Option<Uuid>)>(
         r"
         UPDATE server_bans
         SET lifted_at = now(), lifted_by = $2, lift_reason = '网站解除服务器封禁'
         WHERE id = $1 AND lifted_at IS NULL
-        RETURNING server_id, steam_id64, ban_group_id, created_by
+        RETURNING server_id, steam_id64, ban_group_id
         ",
     )
     .bind(id)
@@ -1134,12 +1524,20 @@ async fn lift_server_ban(
         .await?;
     }
 
-    // In-game bans are written as one group (website account ban, server ban,
-    // optional IP ban). Lifting the server ban should clear the whole group
-    // when it was created by the plugin, not by a website administrator.
-    if let Some(group_id) = lifted.2
-        && lifted.3.is_none()
-    {
+    // A game ban and its optional IP ban share a group. Lifting the server
+    // ban clears the whole group; website accounts are no longer involved.
+    if let Some(group_id) = lifted.2 {
+        let group_ips = sqlx::query_scalar::<_, String>(
+            r"
+            SELECT ip_address
+            FROM server_ip_bans
+            WHERE ban_group_id = $1 AND lifted_at IS NULL
+            ",
+        )
+        .bind(group_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+
         sqlx::query(
             r"
             UPDATE server_bans
@@ -1155,12 +1553,10 @@ async fn lift_server_ban(
 
         sqlx::query(
             r"
-            UPDATE bans
+            UPDATE server_ip_bans
             SET lifted_at = now(), lifted_by = $2,
                 lift_reason = '网站解除服务器封禁'
-            WHERE ban_group_id = $1
-              AND created_by IS NULL
-              AND lifted_at IS NULL
+            WHERE ban_group_id = $1 AND lifted_at IS NULL
             ",
         )
         .bind(group_id)
@@ -1168,22 +1564,20 @@ async fn lift_server_ban(
         .execute(&mut *transaction)
         .await?;
 
-        sqlx::query(
-            r"
-            UPDATE bans
-            SET lifted_at = now(), lifted_by = $2,
-                lift_reason = '源 IP 封禁已解除'
-            WHERE source_ban_id IN (
-                SELECT id FROM bans
-                WHERE ban_group_id = $1 AND ban_type = 'ip'
+        for ip in group_ips {
+            sqlx::query(
+                r"
+                INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
+                SELECT id, $1, 'unbanip', '网站解除服务器封禁', $2
+                FROM servers
+                WHERE is_active = true AND plugin_token IS NOT NULL
+                ",
             )
-              AND lifted_at IS NULL
-            ",
-        )
-        .bind(group_id)
-        .bind(admin.id)
-        .execute(&mut *transaction)
-        .await?;
+            .bind(&ip)
+            .bind(admin.id)
+            .execute(&mut *transaction)
+            .await?;
+        }
     }
 
     // Ask the plugin to remove the local SourceMod/engine ban created by
@@ -1285,4 +1679,23 @@ fn validate_reason(value: &str) -> Result<String, AppError> {
         ));
     }
     Ok(value.to_owned())
+}
+
+fn validate_ban_expiry(hours: Option<i64>) -> Result<Option<DateTime<Utc>>, AppError> {
+    match hours {
+        Some(hours) if hours > 0 && hours <= 87_600 => {
+            Ok(Some(Utc::now() + Duration::hours(hours)))
+        }
+        Some(_) => Err(AppError::Validation(
+            "expiresInHours must be between 1 and 87600".to_owned(),
+        )),
+        None => Ok(None),
+    }
+}
+
+fn validate_ip(value: &str) -> Result<String, AppError> {
+    let parsed: IpAddr = value.trim().parse().map_err(|_| {
+        AppError::Validation("ipAddress must be a valid IPv4 or IPv6 address".to_owned())
+    })?;
+    Ok(parsed.to_string())
 }

@@ -245,37 +245,23 @@ pub async fn ban_report(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .map(|value| value.chars().take(MAX_NAME_CHARS).collect::<String>());
-    let ban_reason: String = format!("服务器封禁：{game_reason}")
-        .chars()
-        .take(2000)
-        .collect();
     let server_reason: String = format!("服务器封禁：{game_reason}")
         .chars()
         .take(1000)
         .collect();
     let ban_group_id = uuid::Uuid::new_v4();
 
-    let server_id = sqlx::query_scalar::<_, String>(
-        r"
-        SELECT id FROM servers
-        WHERE plugin_token = $1
-          AND ($2::text IS NULL OR id = $2)
-        ",
-    )
-    .bind(token)
-    .bind(requested_server_id.as_deref())
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::Unauthorized)?;
+    let _server_id =
+        resolve_server_for_token(&state.db, token, requested_server_id.as_deref()).await?;
 
     let mut transaction = state.db.begin().await?;
 
-    let already_website_banned = sqlx::query_scalar::<_, bool>(
+    let already_globally_banned = sqlx::query_scalar::<_, bool>(
         r"
         SELECT EXISTS (
-            SELECT 1 FROM bans
-            WHERE ban_type = 'steam'
-              AND steam_id64 = $1
+            SELECT 1 FROM server_bans
+            WHERE steam_id64 = $1
+              AND server_id IS NULL
               AND lifted_at IS NULL
               AND (expires_at IS NULL OR expires_at > now())
         )
@@ -284,14 +270,15 @@ pub async fn ban_report(
     .bind(steam_id64)
     .fetch_one(&mut *transaction)
     .await?;
-    if !already_website_banned {
+    if !already_globally_banned {
         sqlx::query(
             r"
-            INSERT INTO bans (
-                ban_type, steam_id64, player_name, reason, expires_at, ban_group_id
+            INSERT INTO server_bans (
+                server_id, steam_id64, player_name, reason, expires_at,
+                ban_group_id
             )
             VALUES (
-                'steam', $1,
+                NULL, $1,
                 COALESCE($2, (SELECT persona_name FROM users WHERE steam_id64 = $1)),
                 $3, $4, $5
             )
@@ -299,55 +286,30 @@ pub async fn ban_report(
         )
         .bind(steam_id64)
         .bind(player_name.as_deref())
-        .bind(&ban_reason)
-        .bind(expires_at)
-        .bind(ban_group_id)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE steam_id64 = $1)",
-        )
-        .bind(steam_id64)
-        .execute(&mut *transaction)
-        .await?;
-    }
-
-    let already_server_banned = sqlx::query_scalar::<_, bool>(
-        r"
-        SELECT EXISTS (
-            SELECT 1 FROM server_bans
-            WHERE steam_id64 = $1
-              AND (server_id IS NULL OR server_id = $2)
-              AND lifted_at IS NULL
-              AND (expires_at IS NULL OR expires_at > now())
-        )
-        ",
-    )
-    .bind(steam_id64)
-    .bind(&server_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if !already_server_banned {
-        sqlx::query(
-            r"
-            INSERT INTO server_bans (
-                server_id, steam_id64, player_name, reason, expires_at, ban_group_id
-            )
-            VALUES (
-                $1, $2,
-                COALESCE($3, (SELECT persona_name FROM users WHERE steam_id64 = $2)),
-                $4, $5, $6
-            )
-            ",
-        )
-        .bind(&server_id)
-        .bind(steam_id64)
-        .bind(player_name.as_deref())
         .bind(&server_reason)
         .bind(expires_at)
         .bind(ban_group_id)
         .execute(&mut *transaction)
         .await?;
+
+        // An in-game ban now applies to every active server immediately.
+        sqlx::query(
+            r"
+            INSERT INTO server_actions (server_id, steam_id64, action, reason, created_by)
+            SELECT id, $1, 'ban', $2, NULL
+            FROM servers
+            WHERE is_active = true
+            ",
+        )
+        .bind(steam_id64)
+        .bind(&server_reason)
+        .execute(&mut *transaction)
+        .await?;
+
+        sqlx::query("DELETE FROM server_players WHERE steam_id64 = $1")
+            .bind(steam_id64)
+            .execute(&mut *transaction)
+            .await?;
     }
 
     transaction.commit().await?;
@@ -355,20 +317,19 @@ pub async fn ban_report(
     if let Some(ip) = ip_address {
         let auto_reason: String = format!("服务器封禁自动关联 IP：{game_reason}")
             .chars()
-            .take(2000)
+            .take(1000)
             .collect();
-        if let Err(error) = crate::modules::bans::create_ip_ban(
+        if let Err(error) = crate::modules::server_admin::create_server_ip_ban_row(
             &state.db,
             None,
             &ip,
-            None,
             &auto_reason,
             expires_at,
             Some(ban_group_id),
         )
         .await
         {
-            tracing::warn!(%error, %steam_id64, "failed to auto-create IP ban from game ban");
+            tracing::warn!(%error, %steam_id64, "failed to auto-create game IP ban");
         }
     }
 
@@ -392,38 +353,6 @@ async fn resolve_server_for_token(
     .fetch_optional(db)
     .await?
     .ok_or(AppError::Unauthorized)
-}
-
-/// Lifts IP bans plus the account bans that were automatically derived from
-/// them. Used by in-game unbans only for plugin-origin records.
-async fn lift_ip_bans(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    ids: &[uuid::Uuid],
-) -> Result<(), sqlx::Error> {
-    if ids.is_empty() {
-        return Ok(());
-    }
-    sqlx::query(
-        r"
-        UPDATE bans
-        SET lifted_at = now(), lift_reason = '游戏内解封'
-        WHERE id = ANY($1) AND lifted_at IS NULL
-        ",
-    )
-    .bind(ids)
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query(
-        r"
-        UPDATE bans
-        SET lifted_at = now(), lift_reason = '游戏内解封'
-        WHERE source_ban_id = ANY($1) AND lifted_at IS NULL
-        ",
-    )
-    .bind(ids)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
 }
 
 #[utoipa::path(
@@ -456,14 +385,13 @@ pub async fn ip_ban_report(
     let expires_at = ban_expiry(request.duration_minutes)?;
     let reason: String = format!("服务器 IP 封禁：{game_reason}")
         .chars()
-        .take(2000)
+        .take(1000)
         .collect();
     let ban_group_id = uuid::Uuid::new_v4();
-    let _ = crate::modules::bans::create_ip_ban(
+    let _ = crate::modules::server_admin::create_server_ip_ban_row(
         &state.db,
         None,
         &ip,
-        None,
         &reason,
         expires_at,
         Some(ban_group_id),
@@ -517,7 +445,7 @@ pub async fn unban_report(
         ));
     }
 
-    let server_id =
+    let _server_id =
         resolve_server_for_token(&state.db, token, requested_server_id.as_deref()).await?;
     let mut transaction = state.db.begin().await?;
     let lift_reason = "游戏内解封";
@@ -527,22 +455,13 @@ pub async fn unban_report(
             r"
             SELECT EXISTS (
                 SELECT 1 FROM server_bans
-                WHERE server_id = $1
-                  AND steam_id64 = $2
-                  AND lifted_at IS NULL
-                  AND (expires_at IS NULL OR expires_at > now())
-                  AND created_by IS NOT NULL
-                UNION ALL
-                SELECT 1 FROM bans
-                WHERE ban_type = 'steam'
-                  AND steam_id64 = $2
+                WHERE steam_id64 = $1
                   AND lifted_at IS NULL
                   AND (expires_at IS NULL OR expires_at > now())
                   AND created_by IS NOT NULL
             )
             ",
         )
-        .bind(&server_id)
         .bind(steam_id64)
         .fetch_one(&mut *transaction)
         .await?;
@@ -552,50 +471,38 @@ pub async fn unban_report(
 
         let groups = sqlx::query_scalar::<_, uuid::Uuid>(
             r"
-            SELECT ban_group_id
+            SELECT DISTINCT ban_group_id
             FROM server_bans
-            WHERE server_id = $1
-              AND steam_id64 = $2
-              AND lifted_at IS NULL
-              AND created_by IS NULL
-              AND ban_group_id IS NOT NULL
-            UNION
-            SELECT ban_group_id
-            FROM bans
-            WHERE ban_type = 'steam'
-              AND steam_id64 = $2
+            WHERE steam_id64 = $1
               AND lifted_at IS NULL
               AND created_by IS NULL
               AND ban_group_id IS NOT NULL
             ",
         )
-        .bind(&server_id)
         .bind(steam_id64)
         .fetch_all(&mut *transaction)
         .await?;
 
-        sqlx::query(
-            r"
-            UPDATE server_bans
-            SET lifted_at = now(), lift_reason = $3
-            WHERE server_id = $1
-              AND steam_id64 = $2
-              AND lifted_at IS NULL
-              AND created_by IS NULL
-            ",
-        )
-        .bind(&server_id)
-        .bind(steam_id64)
-        .bind(lift_reason)
-        .execute(&mut *transaction)
-        .await?;
+        let group_ips = if groups.is_empty() {
+            Vec::new()
+        } else {
+            sqlx::query_scalar::<_, String>(
+                r"
+                SELECT ip_address
+                FROM server_ip_bans
+                WHERE ban_group_id = ANY($1) AND lifted_at IS NULL
+                ",
+            )
+            .bind(&groups)
+            .fetch_all(&mut *transaction)
+            .await?
+        };
 
         sqlx::query(
             r"
-            UPDATE bans
+            UPDATE server_bans
             SET lifted_at = now(), lift_reason = $2
-            WHERE ban_type = 'steam'
-              AND steam_id64 = $1
+            WHERE steam_id64 = $1
               AND lifted_at IS NULL
               AND created_by IS NULL
             ",
@@ -606,32 +513,57 @@ pub async fn unban_report(
         .await?;
 
         if !groups.is_empty() {
-            let ip_ban_ids = sqlx::query_scalar::<_, uuid::Uuid>(
+            sqlx::query(
                 r"
-                SELECT id FROM bans
-                WHERE ban_type = 'ip'
-                  AND ban_group_id = ANY($1)
-                  AND lifted_at IS NULL
+                UPDATE server_ip_bans
+                SET lifted_at = now(), lift_reason = $2
+                WHERE ban_group_id = ANY($1) AND lifted_at IS NULL
                 ",
             )
             .bind(&groups)
-            .fetch_all(&mut *transaction)
+            .bind(lift_reason)
+            .execute(&mut *transaction)
             .await?;
-            lift_ip_bans(&mut transaction, &ip_ban_ids).await?;
+        }
+
+        for ip in group_ips {
+            sqlx::query(
+                r"
+                INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
+                SELECT id, $1, 'unbanip', $2, NULL
+                FROM servers
+                WHERE is_active = true AND plugin_token IS NOT NULL
+                ",
+            )
+            .bind(&ip)
+            .bind(lift_reason)
+            .execute(&mut *transaction)
+            .await?;
         }
 
         sqlx::query(
             r"
             UPDATE server_actions
             SET processed_at = COALESCE(processed_at, now())
-            WHERE server_id = $1
-              AND steam_id64 = $2
+            WHERE steam_id64 = $1
               AND action = 'ban'
               AND processed_at IS NULL
             ",
         )
-        .bind(&server_id)
         .bind(steam_id64)
+        .execute(&mut *transaction)
+        .await?;
+
+        sqlx::query(
+            r"
+            INSERT INTO server_actions (server_id, steam_id64, action, reason, created_by)
+            SELECT id, $1, 'unban', $2, NULL
+            FROM servers
+            WHERE is_active = true
+            ",
+        )
+        .bind(steam_id64)
+        .bind(lift_reason)
         .execute(&mut *transaction)
         .await?;
     }
@@ -640,9 +572,8 @@ pub async fn unban_report(
         let admin_ip_banned = sqlx::query_scalar::<_, bool>(
             r"
             SELECT EXISTS (
-                SELECT 1 FROM bans
-                WHERE ban_type = 'ip'
-                  AND ip_address = $1
+                SELECT 1 FROM server_ip_bans
+                WHERE ip_address = $1
                   AND lifted_at IS NULL
                   AND (expires_at IS NULL OR expires_at > now())
                   AND created_by IS NOT NULL
@@ -656,19 +587,33 @@ pub async fn unban_report(
             return Err(AppError::Conflict);
         }
 
-        let ip_ban_ids = sqlx::query_scalar::<_, uuid::Uuid>(
+        let lifted = sqlx::query(
             r"
-            SELECT id FROM bans
-            WHERE ban_type = 'ip'
-              AND ip_address = $1
+            UPDATE server_ip_bans
+            SET lifted_at = now(), lift_reason = $2
+            WHERE ip_address = $1
               AND lifted_at IS NULL
               AND created_by IS NULL
             ",
         )
         .bind(&ip)
-        .fetch_all(&mut *transaction)
+        .bind(lift_reason)
+        .execute(&mut *transaction)
         .await?;
-        lift_ip_bans(&mut transaction, &ip_ban_ids).await?;
+        if lifted.rows_affected() > 0 {
+            sqlx::query(
+                r"
+                INSERT INTO server_actions (server_id, ip_address, action, reason, created_by)
+                SELECT id, $1, 'unbanip', $2, NULL
+                FROM servers
+                WHERE is_active = true AND plugin_token IS NOT NULL
+                ",
+            )
+            .bind(&ip)
+            .bind(lift_reason)
+            .execute(&mut *transaction)
+            .await?;
+        }
     }
 
     transaction.commit().await?;

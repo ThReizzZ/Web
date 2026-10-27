@@ -41,10 +41,18 @@ export interface AccountWhitelist {
   pending: boolean;
 }
 
+export interface AccountGameBan {
+  scope: "global" | "server" | "ip";
+  serverName: string;
+  reason: string;
+  expiresAt: string | null;
+}
+
 export interface AccountOverview {
   user: AccountUser;
   stats: AccountStats;
   whitelist: AccountWhitelist;
+  gameBans: AccountGameBan[];
   recentTopics: ForumTopic[];
   favorites: FavoriteServer[];
   recentActivity: AccountActivity[];

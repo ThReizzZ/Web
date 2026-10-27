@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { BansManager } from "@/features/admin/components/bans-manager";
 import { getServerApiClient } from "@/lib/api/server";
-import { fetchBans, fetchServerBans } from "@/services/content";
+import { fetchAdminServers, fetchServerBans, fetchServerIpBans } from "@/services/content";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,16 @@ export const metadata: Metadata = {
 
 export default async function AdminBansPage() {
   const client = await getServerApiClient();
-  const [bans, serverBans] = await Promise.all([fetchBans(client), fetchServerBans(client)]);
-  return <BansManager bans={bans} serverBans={serverBans} />;
+  const [serverBans, ipBans, overview] = await Promise.all([
+    fetchServerBans(client),
+    fetchServerIpBans(client),
+    fetchAdminServers(client),
+  ]);
+  return (
+    <BansManager
+      serverBans={serverBans}
+      ipBans={ipBans}
+      servers={overview.servers.map((server) => ({ id: server.id, name: server.name }))}
+    />
+  );
 }

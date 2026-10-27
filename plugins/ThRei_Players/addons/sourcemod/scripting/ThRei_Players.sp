@@ -11,9 +11,13 @@
  * snapshot in memory and checks players when they finish connecting, so an
  * API outage does not block normal play. Kick/ban commands from the website
  * are consumed from the action queue and acknowledged after execution.
- * Bans executed in game through BanClient are reported back to the website.
- * Website lifts also enqueue an `unban` action that removes the local
- * SourceMod/engine ban created by sm_ban.
+ * Bans executed in game through the ThRei ban commands are reported back to
+ * the website and applied to every server. Website lifts enqueue an `unban`
+ * or `unbanip` action that clears the plugin's local ban immediately.
+ *
+ * ThRei bans are enforced by the plugin only. No engine ban is written, so a
+ * banned player sees the configured message instead of the engine default.
+ * Game bans never affect website login.
  *
  * Requirements:
  *   - SourceMod 1.11+
@@ -27,7 +31,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.8.1"
+#define PLUGIN_VERSION "1.9.0"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -1985,6 +1989,8 @@ bool ParseAccessSnapshot(const char[] body) {
     StringMap whitelist = new StringMap();
     StringMap bans = new StringMap();
     StringMap banReasons = new StringMap();
+    StringMap ipBans = new StringMap();
+    StringMap ipBanReasons = new StringMap();
     bool sawRequirements = false;
     bool requiresWhitelist = false;
 
@@ -2014,7 +2020,9 @@ bool ParseAccessSnapshot(const char[] body) {
             }
             continue;
         }
-        if (StartsWith(line, "ban ")) {
+        if (StartsWith(line, "banip ")) {
+            ParseIpBanLine(line, ipBans, ipBanReasons);
+        } else if (StartsWith(line, "ban ")) {
             ParseBanLine(line, bans, banReasons);
         }
     }
@@ -2023,6 +2031,8 @@ bool ParseAccessSnapshot(const char[] body) {
         delete whitelist;
         delete bans;
         delete banReasons;
+        delete ipBans;
+        delete ipBanReasons;
         return false;
     }
 
@@ -2035,11 +2045,44 @@ bool ParseAccessSnapshot(const char[] body) {
     if (g_smBanReasons != null) {
         delete g_smBanReasons;
     }
+    if (g_smIpBans != null) {
+        delete g_smIpBans;
+    }
+    if (g_smIpBanReasons != null) {
+        delete g_smIpBanReasons;
+    }
     g_smWhitelist = whitelist;
     g_smBans = bans;
     g_smBanReasons = banReasons;
+    g_smIpBans = ipBans;
+    g_smIpBanReasons = ipBanReasons;
     g_bAccessRequired = requiresWhitelist;
     return true;
+}
+
+void ParseIpBanLine(const char[] line, StringMap bans, StringMap banReasons) {
+    char rest[MAX_ACTION_LINE];
+    strcopy(rest, sizeof(rest), line[6]);
+
+    int position = 0;
+    char ip[64];
+    char expiryText[32];
+    if (!NextToken(rest, position, ip, sizeof(ip))
+            || !NextToken(rest, position, expiryText, sizeof(expiryText))) {
+        return;
+    }
+    if (!LooksLikeIp(ip)) {
+        return;
+    }
+
+    char reason[MAX_REASON_LENGTH];
+    CopyRest(rest, position, reason, sizeof(reason));
+    int expiresAt = StringToInt(expiryText);
+    if (expiresAt > 0 && expiresAt <= GetTime()) {
+        return;
+    }
+    bans.SetValue(ip, expiresAt, true);
+    banReasons.SetString(ip, reason, true);
 }
 
 void ParseBanLine(const char[] line, StringMap bans, StringMap banReasons) {
@@ -2090,30 +2133,44 @@ void ParseAndExecuteActions(const char[] body) {
         int cursor = 0;
         char id[64];
         char action[16];
-        char steamId[32];
+        char target[64];
         if (!NextToken(rest, cursor, id, sizeof(id))
                 || !NextToken(rest, cursor, action, sizeof(action))
-                || !NextToken(rest, cursor, steamId, sizeof(steamId))) {
+                || !NextToken(rest, cursor, target, sizeof(target))) {
             continue;
         }
-        if (id[0] == '\0' || !IsSteamId64(steamId)) {
+        if (id[0] == '\0') {
+            continue;
+        }
+        bool isIpAction = StrEqual(action, "banip") || StrEqual(action, "unbanip");
+        if (isIpAction ? !LooksLikeIp(target) : !IsSteamId64(target)) {
             continue;
         }
 
         char reason[MAX_REASON_LENGTH];
         if (StrEqual(action, "kick")) {
             CopyRest(rest, cursor, reason, sizeof(reason));
-            ExecuteKickAction(steamId, reason);
+            ExecuteKickAction(target, reason);
         } else if (StrEqual(action, "ban")) {
             char expiryText[32];
             if (!NextToken(rest, cursor, expiryText, sizeof(expiryText))) {
                 continue;
             }
             CopyRest(rest, cursor, reason, sizeof(reason));
-            ExecuteBanAction(steamId, StringToInt(expiryText), reason);
+            ExecuteBanAction(target, StringToInt(expiryText), reason);
         } else if (StrEqual(action, "unban")) {
             CopyRest(rest, cursor, reason, sizeof(reason));
-            ExecuteUnbanAction(steamId, reason);
+            ExecuteUnbanAction(target, reason);
+        } else if (StrEqual(action, "banip")) {
+            char expiryText[32];
+            if (!NextToken(rest, cursor, expiryText, sizeof(expiryText))) {
+                continue;
+            }
+            CopyRest(rest, cursor, reason, sizeof(reason));
+            ExecuteBanIpAction(target, StringToInt(expiryText), reason);
+        } else if (StrEqual(action, "unbanip")) {
+            CopyRest(rest, cursor, reason, sizeof(reason));
+            ExecuteUnbanIpAction(target, reason);
         } else {
             // Acknowledge unsupported actions so a newer API action cannot
             // remain at the head of the queue forever.
@@ -2191,6 +2248,52 @@ void ExecuteUnbanAction(const char[] steamId, const char[] reason) {
         LogMessage("[ThRei_Players] Removed local ban for %s (%s).", steamId, reason);
     } else {
         LogMessage("[ThRei_Players] Removed local ban for %s.", steamId);
+    }
+}
+
+void ExecuteBanIpAction(const char[] ip, int expiresAt, const char[] reason) {
+    if (expiresAt > 0 && expiresAt <= GetTime()) {
+        return;
+    }
+    if (g_smIpBans == null) {
+        return;
+    }
+
+    g_smIpBans.SetValue(ip, expiresAt, true);
+    g_smIpBanReasons.SetString(ip, reason, true);
+    SaveBanStore();
+
+    for (int client = 1; client <= MaxClients; client++) {
+        if (!IsClientInGame(client) || IsFakeClient(client)
+                || IsClientSourceTV(client) || IsClientReplay(client)) {
+            continue;
+        }
+        char clientIp[64];
+        if (!GetClientIP(client, clientIp, sizeof(clientIp), true)
+                || !StrEqual(clientIp, ip, false)) {
+            continue;
+        }
+        char steamId[32];
+        steamId[0] = '\0';
+        GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId), true);
+        KickForBan(client, steamId, reason);
+    }
+}
+
+void ExecuteUnbanIpAction(const char[] ip, const char[] reason) {
+    if (g_smIpBans != null) {
+        g_smIpBans.Remove(ip);
+        g_smIpBanReasons.Remove(ip);
+        SaveBanStore();
+    }
+
+    // Remove an IP engine ban from older ThRei/basebans versions.
+    RemoveBan(ip, BANFLAG_IP, "threi_unbanip", 0);
+
+    if (reason[0] != '\0') {
+        LogMessage("[ThRei_Players] Removed local IP ban for %s (%s).", ip, reason);
+    } else {
+        LogMessage("[ThRei_Players] Removed local IP ban for %s.", ip);
     }
 }
 

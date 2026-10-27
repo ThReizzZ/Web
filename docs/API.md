@@ -195,12 +195,13 @@ requires_whitelist 1
 whitelist 76561199125125759
 ban 76561198000000000 0 永久封禁
 ban 76561198000000001 1792914155 临时封禁
+banip 203.0.113.10 0 恶意刷屏
 ```
 
 - `requires_whitelist` 为 `0` 时插件只执行封禁，不检查白名单。
 - `whitelist` 每行一个 SteamID64，来自全服白名单；同一份名单用于所有开启白名单的服务器。
-- `ban` 的第二个字段是到期 Unix 时间戳，`0` 表示永久；第三个字段起为已压平为单行的原因。
-- 最多返回 10,000 条白名单与 10,000 条生效封禁。已解除、已过期封禁不会出现在快照中。
+- `ban` / `banip` 的第二个字段是到期 Unix 时间戳，`0` 表示永久；第三个字段起为已压平为单行的原因。
+- 最多返回 10,000 条白名单、10,000 条生效 SteamID 封禁与 10,000 条生效 IP 封禁。已解除、已过期封禁不会出现在快照中。
 - 令牌缺失或错误返回 `401`，不泄露服务器是否存在。
 
 ### `GET /api/v1/plugin/actions`
@@ -214,13 +215,13 @@ ban 76561198000000001 1792914155 临时封禁
 action 7e4f0d8a-... kick 76561199125125759 管理员踢出
 action 8a1d2c3b-... ban 76561198000000000 1792914155 临时封禁
 action 9c2e3d4f-... unban 76561198000000000 网站解除封禁
+action 4b7a1c2d-... banip 203.0.113.10 0 恶意刷屏
+action 5c8b2d3e-... unbanip 203.0.113.10 网站解除 IP 封禁
 ```
 
 - 最多返回 100 条未确认指令，按创建时间排序。
-- `kick` 不带到期时间；`ban` 的到期时间用于插件本地拦截临时封禁。
-- `unban` 在网站解除游戏服务器封禁时下发；插件 1.6.1+ 会把它转换为 SteamID2 并执行
-  `RemoveBan(BANFLAG_AUTHID)`，删除 `sm_ban` / `BanClient` 写入服务器本地的 SteamID 封禁，
-  同时清除插件缓存。旧插件不识别该指令，需要升级到 1.6.1+。
+- `kick` 不带到期时间；`ban` / `banip` 的到期时间用于插件本地拦截临时封禁。
+- `unban` / `unbanip` 在网站解除游戏服务器封禁或 IP 封禁时下发；插件 1.9.0+ 会立即清除对应本地封禁。
 - 原因中的控制字符会替换为空格并限制为 400 字符，防止注入额外协议行。
 
 ### `POST /api/v1/plugin/actions/{id}/ack`
@@ -229,7 +230,7 @@ action 9c2e3d4f-... unban 76561198000000000 网站解除封禁
 
 ### `POST /api/v1/plugin/ban-report`
 
-供 `ThRei_Players` 1.6.0+ 回传游戏内由 `BanClient`（包括 `sm_ban`）执行的封禁。请求头与上报相同。
+供 `ThRei_Players` 1.9.0+ 回传游戏内的 ThRei 封禁命令。请求头与上报相同。
 
 ```json
 {
@@ -242,11 +243,11 @@ action 9c2e3d4f-... unban 76561198000000000 网站解除封禁
 ```
 
 - `durationMinutes` 为分钟数，`0` 或省略表示永久；最大 52,560,000 分钟。
-- 成功返回 `204 No Content`。API 会写入一条网站账号封禁（若尚无生效的 SteamID 封禁）和一条该服务器的游戏封禁（若尚无生效的全服/单服封禁）。
-- 如果请求带 `ipAddress`，还会创建 IP 封禁并自动关联该 IP 下已知的普通账号；已有生效 IP 封禁时跳过。
-- 本次产生的账号封禁、服务器封禁和 IP 封禁共享 `ban_group_id`；网站解除服务器封禁时会按分组清理。
+- 成功返回 `204 No Content`。API 会写入一条**全服**游戏封禁（`server_id = NULL`，若尚无生效的全服封禁），并为所有启用服务器写入 `ban` 指令。
+- 如果请求带 `ipAddress`，还会创建游戏 IP 封禁；已有生效 IP 封禁时跳过。SteamID 封禁、IP 封禁共享 `ban_group_id`。
+- **不会写入网站账号封禁，也不会撤销网站会话**；网站账号仍然可以登录，用户中心会显示游戏封禁原因。
 - `serverId` 可省略，由令牌解析；提供时必须与令牌所属服务器一致。
-- 原始控制台 `banid` / `addip` 不触发 `OnBanClient`，不会回传；网站下发的指令也不会回传，避免循环。
+- 网站下发的指令不会回传，避免循环。
 - 令牌缺失或错误返回 `401`；SteamID64、原因或时长不合法返回 `422`。
 
 ### `POST /api/v1/plugin/ip-ban-report`
@@ -262,8 +263,8 @@ action 9c2e3d4f-... unban 76561198000000000 网站解除封禁
 ```
 
 - `durationMinutes` 规则同 `ban-report`。
-- 成功返回 `204`；写入网站 IP 封禁并自动关联该 IP 下已知的普通账号，记录带 `ban_group_id`。
-- 已有生效 IP 封禁时跳过，仍返回 `204`。
+- 成功返回 `204`；写入仅作用于游戏服务器的 IP 封禁，并向所有启用服务器下发 `banip` 指令。
+- 不会写入网站账号封禁，也不影响网站登录；已有生效 IP 封禁时跳过，仍返回 `204`。
 
 ### `POST /api/v1/plugin/unban-report`
 
@@ -278,10 +279,10 @@ action 9c2e3d4f-... unban 76561198000000000 网站解除封禁
 ```
 
 - `steamId64` 和 `ipAddress` 至少提供一个；`steamId64` 必须是 17 位数字。
-- 只解除 `created_by IS NULL` 的插件来源记录：按 SteamID 找到该服务器的插件来源服务器封禁及其
-  `ban_group_id`，解除同组账号/IP 封禁和 IP 封禁的关联账号封禁；IP 参数只解除插件来源 IP 封禁。
-- 如果该服务器或网站仍存在管理员手动封禁，返回 `409`，不修改任何记录，插件保持本地封禁。
-- 成功返回 `204`。插件收到成功后再删除本地 SteamID/IP 封禁。
+- 只解除 `created_by IS NULL` 的插件来源记录：按 SteamID 找到插件来源的全服/单服游戏封禁及其
+  `ban_group_id`，解除同组游戏 IP 封禁；IP 参数只解除插件来源游戏 IP 封禁。
+- 如果仍存在管理员手动封禁，返回 `409`，不修改任何记录，插件保持本地封禁。
+- 成功返回 `204`。插件收到成功后再删除本地 SteamID/IP 封禁；API 同时向所有服务器下发 `unban` / `unbanip`，让其他服务器立即放行。
 
 ## 5. 论坛
 
@@ -380,13 +381,15 @@ Query：
 
 ### 6.5 封禁管理
 
-- `GET /admin/bans` 返回生效和历史封禁记录；每条包含 `banType`（`steam` / `ip`）、`steamId64`、`ipAddress`、`sourceBanId`。
-- `POST /admin/bans` body `{ "banType": "steam" | "ip", "steamId64": "...", "ipAddress": "...", "reason": "...", "expiresInHours": 24 }`；`expiresInHours` 缺省/`null` 为永久。`banType` 默认 `steam`。
-- SteamID 封禁会自动查找该玩家最近一次网站登录 IP、有效会话 IP 或插件上报的服务器 IP，并在存在已知 IP 时创建 IP 封禁；已有生效 IP 封禁时跳过。
-- IP 封禁会为已知使用该 IP 的非管理员账号自动写入 SteamID 封禁（`sourceBanId` 指向 IP 封禁），删除其会话；后续从该 IP 登录的普通账号会被自动关联封禁并拒绝登录。管理员账号保留恢复通道。
-- `POST /admin/bans/{id}/lift` body `{ "reason": "..." }` 解封；解除 IP 封禁会同时解除由它自动关联的账号封禁。
-- 管理员账号不能直接被 SteamID 封禁，需先取消管理员权限。
-- IP 封禁只作用于网站登录，不影响游戏服务器封禁；游戏服务器封禁使用 `/admin/server-bans`。
+封禁只作用于游戏服务器，**任何封禁都不会阻止网站登录**，也不会撤销网站会话。用户中心通过 `GET /account` 的 `gameBans` 显示封禁服务器、原因和到期时间。
+
+- `GET /admin/server-bans` 返回生效和历史的游戏封禁；每项包含 `scope`（`global` / `server`）、`serverId`、`serverName`、`steamId64`、原因、到期时间、操作者与解封记录。
+- `POST /admin/server-bans` body `{ "steamId64": "...", "reason": "...", "playerName": "...", "expiresInHours": 24, "scope": "global" | "server", "serverId": "..." }`；`scope` 缺省为 `global`，`expiresInHours` 缺省/`null` 为永久。
+- 全服封禁对所有启用服务器写入 `ban` 指令；单服封禁只写指定服务器。若已知玩家 IP（插件上报的服务器 IP，或网站最近登录 IP），会自动创建游戏 IP 封禁，且与 SteamID 封禁共享 `ban_group_id`。管理员当前 IP 不会被自动封禁。
+- `POST /admin/server-bans/{id}/lift` 解除封禁；会清理未执行的旧 `ban` 指令，写入 `unban`，并按 `ban_group_id` 解除同组游戏 IP 封禁、下发 `unbanip`。
+- `GET /admin/server-ip-bans` 返回游戏 IP 封禁记录；`POST /admin/server-ip-bans` body `{ "ipAddress": "...", "reason": "...", "expiresInHours": 24 }` 创建并立即下发 `banip`。
+- `POST /admin/server-ip-bans/{id}/lift` body `{ "reason": "..." }` 解除 IP 封禁并下发 `unbanip`。
+- 旧的 `/admin/bans` 网站账号/IP 封禁接口已移除；`bans` 表仅保留历史结构，不再读写或执行。
 
 ### 6.6 白名单
 
@@ -406,9 +409,9 @@ Query：
 - `PATCH /admin/forum/topics/{slug}` body：`title`、`excerpt`、`content`、`categorySlug`、`tags`、`pinned`、`hot`。
 - `DELETE /admin/forum/topics/{slug}` 软删除；`POST .../restore` 恢复。
 - `GET /admin/forum/replies`、`PATCH/DELETE /admin/forum/replies/{id}`、`POST .../restore` 管理回复。
-- `GET /admin/forum/users`：用户、角色、禁言、封禁、禁用状态。
+- `GET /admin/forum/users`：用户、角色、禁言、禁用状态。
 - `POST /admin/forum/users/{steam_id64}/mute` body `{ "reason": "...", "expiresInHours": 168 }`；`DELETE` 解除禁言。
-- 禁言只限制论坛发言，不阻止网站登录；封禁继续使用 `/admin/bans`，会撤销登录会话。
+- 禁言只限制论坛发言，不阻止网站登录；论坛管理不再提供网站封禁操作。
 
 ### 6.8 服务器管理
 
@@ -424,7 +427,7 @@ Query：
 - `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions`，由 `ThRei_Players` 1.5.0+ 通过 long-poll 通常在 1 秒内执行；插件离线时恢复后执行。
 - `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "...", "scope": "global" }`：原子写入 `server_bans` 与 `server_actions`。`scope` 为 `global`（默认，`server_id = NULL`，对所有启用服务器生效）或 `server`（仅路径指定的服务器）；全局封禁会为每台启用服务器写入一条指令，插件立即踢出在线目标并阻止重连。若已知玩家 IP（插件 1.6.0+ 上报的服务器 IP，或网站最近登录 IP），还会自动创建 IP 封禁；管理员当前 IP 不会被自动封禁。
 - `GET /admin/server-bans`：返回所有游戏服务器封禁（含全服封禁），每项带 `scope`（`global` / `server`）和 `serverName`（全服封禁为 `全服`）。
-- `POST /admin/server-bans/{id}/lift` 解除服务器封禁；会同时把该玩家尚未执行的封禁指令标记为已处理，避免解封后旧指令再次生效，并写入 `unban` 指令：单服封禁写入对应服务器，全服封禁写入所有配置了插件令牌的服务器。插件 1.6.1+ 收到后删除服务器本地 SteamID 封禁；旧插件不识别该指令。若该服务器封禁是插件来源且带 `ban_group_id`，还会解除同组账号封禁、IP 封禁及其关联账号封禁。
+- `POST /admin/server-bans/{id}/lift` 解除服务器封禁；会同时把尚未执行的封禁指令标记为已处理，避免解封后旧指令再次生效，并写入 `unban` 指令。若该封禁带 `ban_group_id`，还会解除同组游戏 IP 封禁并下发 `unbanip`。所有封禁生效和解封都只影响游戏服务器，网站登录不受影响。
 - 踢出/封禁指令由插件确认后写入 `processed_at`；`pendingActions` 是尚未确认的指令数。封禁到期或已解除时，插件不会执行对应指令，但仍会确认队列项。
 - RCON 只发送 `status` 用于休眠/存活判断，白名单、踢出与封禁都不依赖 RCON。
 

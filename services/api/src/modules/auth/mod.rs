@@ -213,86 +213,6 @@ async fn complete_steam_login(
     if user.is_disabled {
         return Err(AppError::Forbidden);
     }
-    let active_ban = sqlx::query_scalar::<_, bool>(
-        r"
-        SELECT EXISTS (
-            SELECT 1 FROM bans
-            WHERE steam_id64 = $1
-              AND lifted_at IS NULL
-              AND (expires_at IS NULL OR expires_at > now())
-        )
-        ",
-    )
-    .bind(&user.steam_id64)
-    .fetch_one(&state.db)
-    .await?;
-    if active_ban {
-        return Err(AppError::Forbidden);
-    }
-
-    if let Some(ip) = ip_address {
-        let ip_ban = sqlx::query_as::<_, (Uuid, String, Option<DateTime<Utc>>, Option<Uuid>)>(
-            r"
-            SELECT id, reason, expires_at, created_by
-            FROM bans
-            WHERE ban_type = 'ip'
-              AND ip_address = $1
-              AND lifted_at IS NULL
-              AND (expires_at IS NULL OR expires_at > now())
-            ORDER BY created_at DESC
-            LIMIT 1
-            ",
-        )
-        .bind(ip)
-        .fetch_optional(&state.db)
-        .await?;
-
-        if let Some((ip_ban_id, ip_reason, ip_expires_at, ip_created_by)) = ip_ban {
-            if user.role == "admin" {
-                // Keep an operator recovery path: admins can still sign in from
-                // a banned IP, but the event is logged.
-                tracing::warn!(
-                    steam_id64 = %user.steam_id64,
-                    ip = %ip,
-                    "administrator signed in from a banned IP"
-                );
-            } else {
-                let reason: String = format!("IP 封禁自动关联：{ip_reason}")
-                    .chars()
-                    .take(2000)
-                    .collect();
-                sqlx::query(
-                    r"
-                    INSERT INTO bans (
-                        ban_type, steam_id64, player_name, reason, expires_at,
-                        created_by, source_ban_id
-                    )
-                    SELECT 'steam', $1, $2, $3, $4, $5, $6
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM bans b
-                        WHERE b.ban_type = 'steam'
-                          AND b.steam_id64 = $1
-                          AND b.lifted_at IS NULL
-                          AND (b.expires_at IS NULL OR b.expires_at > now())
-                    )
-                    ",
-                )
-                .bind(&user.steam_id64)
-                .bind(&user.persona_name)
-                .bind(&reason)
-                .bind(ip_expires_at)
-                .bind(ip_created_by)
-                .bind(ip_ban_id)
-                .execute(&state.db)
-                .await?;
-                sqlx::query("DELETE FROM sessions WHERE user_id = $1")
-                    .bind(user.id)
-                    .execute(&state.db)
-                    .await?;
-                return Err(AppError::Forbidden);
-            }
-        }
-    }
 
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let token_hash = hash_token(&token);
@@ -390,21 +310,7 @@ async fn exchange_magic_token(
     .fetch_one(&mut *tx)
     .await?;
 
-    let active_ban = sqlx::query_scalar::<_, bool>(
-        r"
-        SELECT EXISTS (
-            SELECT 1 FROM bans
-            WHERE steam_id64 = $1
-              AND lifted_at IS NULL
-              AND (expires_at IS NULL OR expires_at > now())
-        )
-        ",
-    )
-    .bind(&user.steam_id64)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    if user.role != "admin" || user.is_disabled || active_ban {
+    if user.role != "admin" || user.is_disabled {
         tx.commit().await?;
         return Err(AppError::Forbidden);
     }
@@ -527,12 +433,6 @@ pub async fn optional_user(
         JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = $1 AND s.expires_at > now()
           AND u.is_disabled = false
-          AND NOT EXISTS (
-              SELECT 1 FROM bans b
-              WHERE b.steam_id64 = u.steam_id64
-                AND b.lifted_at IS NULL
-                AND (b.expires_at IS NULL OR b.expires_at > now())
-          )
         ",
     )
     .bind(hash_token(&token))

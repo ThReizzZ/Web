@@ -146,19 +146,6 @@ async fn add_admin(
     {
         return Err(AppError::Conflict);
     }
-    if let Some((id, _, _, _)) = &existing {
-        let banned = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM bans WHERE steam_id64 = $1 AND lifted_at IS NULL AND (expires_at IS NULL OR expires_at > now()))",
-        )
-        .bind(&steam_id64)
-        .fetch_one(&state.db)
-        .await?;
-        if banned {
-            return Err(AppError::Conflict);
-        }
-        let _ = id;
-    }
-
     let fallback_name = format!("Steam 用户 {}", &steam_id64[steam_id64.len() - 6..]);
     let admin = sqlx::query_as::<_, AdminAccount>(
         r"

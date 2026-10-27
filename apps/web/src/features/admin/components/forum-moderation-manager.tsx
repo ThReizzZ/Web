@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  Ban,
   Check,
   LoaderCircle,
   MessageSquareText,
@@ -28,7 +27,6 @@ import { roleLabel } from "@/lib/roles";
 import { getBrowserApiClient } from "@/lib/api/browser";
 import { useToast } from "@/components/ui/toast";
 import {
-  createBan,
   deleteAdminReply,
   deleteAdminTopic,
   muteForumUser,
@@ -290,39 +288,6 @@ export function ForumModerationManager({
     }
   }
 
-  async function banUser(user: AdminForumUser) {
-    if (user.isBanned) {
-      return;
-    }
-    const reason = window.prompt(`永久封禁 ${user.name} 的原因`);
-    if (!reason) {
-      return;
-    }
-    if (!window.confirm(`确认永久封禁 ${user.name}？可在封禁管理页解封。`)) {
-      return;
-    }
-    setBusy(`user-ban-${user.steamId64}`);
-    try {
-      await createBan(getBrowserApiClient(), {
-        banType: "steam",
-        steamId64: user.steamId64,
-        playerName: user.name,
-        reason,
-        expiresInHours: null,
-      });
-      setUsers((current) =>
-        current.map((item) =>
-          item.steamId64 === user.steamId64 ? { ...item, isBanned: true } : item,
-        ),
-      );
-      setFeedback(`${user.name} 已封禁。`);
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "封禁失败。");
-    } finally {
-      setBusy(null);
-    }
-  }
-
   useEffect(() => {
     if (feedback) {
       const tone = /失败|错误|不能|请先|无效|不符合/.test(feedback) ? "error" : "success";
@@ -337,7 +302,7 @@ export function ForumModerationManager({
           <p className="text-sm font-medium text-primary">论坛</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">论坛管理</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            编辑、删除或恢复主题和回复，禁言论坛用户，或对违规用户执行封禁。
+            编辑、删除或恢复主题和回复，或禁言论坛用户。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -630,7 +595,7 @@ export function ForumModerationManager({
           <div className="border-b px-5 py-4">
             <h2 className="font-semibold">论坛用户</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              禁言只限制论坛发言；封禁会撤销网站会话并阻止登录。封禁后可在封禁管理页解封。
+              禁言只限制论坛发言；网站账号不会因为游戏封禁而无法登录。
             </p>
           </div>
           <div className="divide-y">
@@ -647,7 +612,6 @@ export function ForumModerationManager({
                       <Badge variant={user.role === "admin" ? "success" : "muted"}>
                         {roleLabel(user.role)}
                       </Badge>
-                      {user.isBanned ? <Badge variant="destructive">已封禁</Badge> : null}
                       {user.isMuted ? <Badge variant="warning">已禁言</Badge> : null}
                       {user.isDisabled ? <Badge variant="muted">已禁用</Badge> : null}
                     </div>
@@ -665,32 +629,21 @@ export function ForumModerationManager({
                 </div>
                 <div className="flex flex-wrap gap-2 md:shrink-0 md:justify-end">
                   {user.role !== "admin" ? (
-                    <>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={busy === `user-mute-${user.steamId64}` || user.isDisabled}
-                        onClick={() => void toggleMute(user)}
-                      >
-                        {user.isMuted ? <Volume2 /> : <VolumeX />}
-                        {user.isMuted ? "解除禁言" : "禁言"}
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={user.isBanned || busy === `user-ban-${user.steamId64}`}
-                        onClick={() => void banUser(user)}
-                      >
-                        <Ban /> 封禁
-                      </Button>
-                    </>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={busy === `user-mute-${user.steamId64}` || user.isDisabled}
+                      onClick={() => void toggleMute(user)}
+                    >
+                      {user.isMuted ? <Volume2 /> : <VolumeX />}
+                      {user.isMuted ? "解除禁言" : "禁言"}
+                    </Button>
                   ) : (
                     <Badge variant="muted">管理员</Badge>
                   )}
                   <Button asChild size="sm" variant="ghost">
-                    <Link href="/admin/bans">封禁管理</Link>
+                    <Link href="/admin/bans">游戏封禁</Link>
                   </Button>
                 </div>
               </article>

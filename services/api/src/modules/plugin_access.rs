@@ -62,10 +62,17 @@ struct BanRow {
 }
 
 #[derive(Debug, FromRow)]
+struct IpBanRow {
+    ip_address: String,
+    reason: String,
+    expires_at_unix: i64,
+}
+
+#[derive(Debug, FromRow)]
 struct ActionRow {
     id: Uuid,
     action: String,
-    steam_id64: String,
+    target: String,
     reason: String,
     expires_at_unix: i64,
 }
@@ -134,7 +141,24 @@ async fn access_snapshot(
     .fetch_all(&state.db)
     .await?;
 
-    let body = render_access_snapshot(&server, &whitelist, &bans);
+    let ip_bans = sqlx::query_as::<_, IpBanRow>(
+        r"
+        SELECT
+            ip_address,
+            reason,
+            COALESCE(EXTRACT(EPOCH FROM expires_at)::bigint, 0) AS expires_at_unix
+        FROM server_ip_bans
+        WHERE lifted_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
+        ORDER BY ip_address
+        LIMIT $1
+        ",
+    )
+    .bind(MAX_SNAPSHOT_ENTRIES)
+    .fetch_all(&state.db)
+    .await?;
+
+    let body = render_access_snapshot(&server, &whitelist, &bans, &ip_bans);
     Ok(text_response(body))
 }
 
@@ -167,9 +191,16 @@ async fn actions(
             SELECT
                 a.id,
                 a.action,
-                a.steam_id64,
+                COALESCE(a.steam_id64, a.ip_address) AS target,
                 a.reason,
-                COALESCE((
+                CASE WHEN a.action = 'banip' THEN COALESCE((
+                    SELECT EXTRACT(EPOCH FROM b.expires_at)::bigint
+                    FROM server_ip_bans b
+                    WHERE b.ip_address = a.ip_address
+                      AND b.lifted_at IS NULL
+                    ORDER BY b.created_at DESC
+                    LIMIT 1
+                ), 0) ELSE COALESCE((
                     SELECT EXTRACT(EPOCH FROM b.expires_at)::bigint
                     FROM server_bans b
                     WHERE (b.server_id = a.server_id OR b.server_id IS NULL)
@@ -177,7 +208,7 @@ async fn actions(
                       AND b.lifted_at IS NULL
                     ORDER BY b.created_at DESC
                     LIMIT 1
-                ), 0) AS expires_at_unix
+                ), 0) END AS expires_at_unix
             FROM server_actions a
             WHERE a.server_id = $1
               AND a.processed_at IS NULL
@@ -264,8 +295,9 @@ fn render_access_snapshot(
     server: &AccessServerRow,
     whitelist: &[WhitelistRow],
     bans: &[BanRow],
+    ip_bans: &[IpBanRow],
 ) -> String {
-    let mut body = String::with_capacity(80 + (whitelist.len() + bans.len()) * 32);
+    let mut body = String::with_capacity(80 + (whitelist.len() + bans.len() + ip_bans.len()) * 32);
     body.push_str("# ThRei access snapshot v1\n");
     body.push_str("server ");
     body.push_str(&server.id);
@@ -288,6 +320,15 @@ fn render_access_snapshot(
         body.push_str(&one_line_reason(&ban.reason));
         body.push('\n');
     }
+    for ban in ip_bans {
+        body.push_str("banip ");
+        body.push_str(&ban.ip_address);
+        body.push(' ');
+        body.push_str(&ban.expires_at_unix.to_string());
+        body.push(' ');
+        body.push_str(&one_line_reason(&ban.reason));
+        body.push('\n');
+    }
 
     body
 }
@@ -301,12 +342,12 @@ fn render_actions(actions: &[ActionRow]) -> String {
         body.push(' ');
         body.push_str(&action.action);
         body.push(' ');
-        body.push_str(&action.steam_id64);
+        body.push_str(&action.target);
         body.push(' ');
         // Bans carry an expiry so the plugin can refuse an action that raced
-        // with a lift/expiry and enforce temporary bans locally. Kick actions
-        // keep the shorter four-field form.
-        if action.action == "ban" {
+        // with a lift/expiry and enforce temporary bans locally. Kick and
+        // unban actions keep the shorter four-field form.
+        if action.action == "ban" || action.action == "banip" {
             body.push_str(&action.expires_at_unix.to_string());
             body.push(' ');
         }
@@ -350,18 +391,23 @@ mod tests {
             reason: "  作弊\n换行  ".to_owned(),
             expires_at_unix: 0,
         }];
+        let ip_bans = vec![IpBanRow {
+            ip_address: "203.0.113.10".to_owned(),
+            reason: "IP 封禁".to_owned(),
+            expires_at_unix: 0,
+        }];
 
-        let body = render_access_snapshot(&server(true), &whitelist, &bans);
+        let body = render_access_snapshot(&server(true), &whitelist, &bans, &ip_bans);
 
         assert_eq!(
             body,
-            "# ThRei access snapshot v1\nserver srv-test\nrequires_whitelist 1\nwhitelist 76561199125125759\nban 76561198000000000 0 作弊 换行\n"
+            "# ThRei access snapshot v1\nserver srv-test\nrequires_whitelist 1\nwhitelist 76561199125125759\nban 76561198000000000 0 作弊 换行\nbanip 203.0.113.10 0 IP 封禁\n"
         );
     }
 
     #[test]
     fn disabled_whitelist_is_rendered_as_zero() {
-        let body = render_access_snapshot(&server(false), &[], &[]);
+        let body = render_access_snapshot(&server(false), &[], &[], &[]);
         assert!(body.contains("requires_whitelist 0\n"));
         assert!(!body.lines().any(|line| line.starts_with("whitelist ")));
     }
@@ -372,21 +418,21 @@ mod tests {
             ActionRow {
                 id: Uuid::nil(),
                 action: "kick".to_owned(),
-                steam_id64: "76561199125125759".to_owned(),
+                target: "76561199125125759".to_owned(),
                 reason: "测试".to_owned(),
                 expires_at_unix: 0,
             },
             ActionRow {
                 id: Uuid::from_u128(1),
                 action: "ban".to_owned(),
-                steam_id64: "76561198000000000".to_owned(),
+                target: "76561198000000000".to_owned(),
                 reason: "刷屏".to_owned(),
                 expires_at_unix: 1_800_000_000,
             },
             ActionRow {
                 id: Uuid::from_u128(2),
                 action: "unban".to_owned(),
-                steam_id64: "76561198000000001".to_owned(),
+                target: "76561198000000001".to_owned(),
                 reason: "网站解除封禁".to_owned(),
                 expires_at_unix: 0,
             },

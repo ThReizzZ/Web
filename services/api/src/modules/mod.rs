@@ -2,7 +2,6 @@ pub mod account;
 pub mod admin;
 pub mod admin_users;
 pub mod auth;
-pub mod bans;
 pub mod community;
 pub mod forum;
 pub mod forum_admin;

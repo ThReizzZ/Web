@@ -296,7 +296,8 @@ async fn admin_endpoints_require_authentication() {
         "/api/v1/admin/forum/topics",
         "/api/v1/admin/servers",
         "/api/v1/admin/server-communities",
-        "/api/v1/admin/bans",
+        "/api/v1/admin/server-bans",
+        "/api/v1/admin/server-ip-bans",
         "/api/v1/admin/whitelist",
     ] {
         let router = test_router(&test_settings(false, ""));

@@ -59,12 +59,23 @@ pub struct AccountWhitelist {
     pub pending: bool,
 }
 
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountGameBan {
+    /// `global`, `server`, or `ip`.
+    pub scope: String,
+    pub server_name: String,
+    pub reason: String,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountOverview {
     pub user: MeUser,
     pub stats: AccountStats,
     pub whitelist: AccountWhitelist,
+    pub game_bans: Vec<AccountGameBan>,
     pub recent_topics: Vec<TopicSummary>,
     pub favorites: Vec<FavoriteServer>,
     pub recent_activity: Vec<Activity>,
@@ -89,6 +100,7 @@ async fn account_overview(
     Ok(Json(overview))
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn build_overview(
     state: &AppState,
     user: &AuthUser,
@@ -167,6 +179,32 @@ pub(crate) async fn build_overview(
     .fetch_one(&state.db)
     .await?;
 
+    let game_bans = sqlx::query_as::<_, AccountGameBan>(
+        r"
+        SELECT
+            CASE WHEN b.server_id IS NULL THEN 'global' ELSE 'server' END AS scope,
+            coalesce(s.name, '全服') AS server_name,
+            b.reason,
+            b.expires_at
+        FROM server_bans b
+        LEFT JOIN servers s ON s.id = b.server_id
+        WHERE b.steam_id64 = $1
+          AND b.lifted_at IS NULL
+          AND (b.expires_at IS NULL OR b.expires_at > now())
+        UNION ALL
+        SELECT 'ip' AS scope, 'IP 封禁' AS server_name, b.reason, b.expires_at
+        FROM server_ip_bans b
+        WHERE b.ip_address = (SELECT last_login_ip FROM users WHERE id = $2)
+          AND b.lifted_at IS NULL
+          AND (b.expires_at IS NULL OR b.expires_at > now())
+        ORDER BY expires_at DESC NULLS FIRST
+        ",
+    )
+    .bind(&user.steam_id64)
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await?;
+
     Ok(AccountOverview {
         user: MeUser::from(user.clone()),
         stats: account_stats,
@@ -174,6 +212,7 @@ pub(crate) async fn build_overview(
             whitelisted,
             pending,
         },
+        game_bans,
         recent_topics,
         favorites,
         recent_activity: activity

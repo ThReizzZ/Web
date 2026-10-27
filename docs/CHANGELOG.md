@@ -17,12 +17,15 @@
 
 ### Changed
 
-- 新增 IP 封禁：封禁 IP 后自动关联该 IP 下已知的非管理员账号，并拦截后续从该 IP 的登录；
-  管理员账号保留恢复通道，解除 IP 封禁会联动解除关联账号封禁。
-- SteamID 封禁和服务器管理里的玩家封禁会自动查找玩家最近 IP（网站登录、有效会话或插件上报的
-  服务器 IP）并创建 IP 封禁；管理员当前 IP 不会被自动封禁。
-- `ThRei_Players` 1.6.0 上报在线玩家 IP，并通过 `POST /api/v1/plugin/ban-report` 回传游戏内
-  `BanClient` / `sm_ban` 封禁；网站记录账号封禁、该服务器游戏封禁并自动创建 IP 封禁。
+- **2026-10-28 封禁模型改为仅作用于游戏服务器：** 不论封禁来自游戏内还是网站，都不再封禁
+  网站账号、不撤销网站会话、不阻止网站登录；用户中心展示当前游戏封禁的服务器、原因和到期时间。
+  旧 `bans` 表停用并清空记录，新增 `server_ip_bans` 保存游戏 IP 封禁。
+- SteamID 游戏封禁和服务器管理里的玩家封禁会自动查找玩家最近 IP（网站登录、有效会话或插件
+  上报的服务器 IP）并创建游戏 IP 封禁；管理员当前 IP 不会被自动封禁。
+- 网站解除游戏封禁会同时解除同组 IP 封禁；新增 `banip` / `unbanip` 即时指令，网站和游戏内
+  的 IP 封禁解除都能在约 1 秒内到达所有服务器。
+- `ThRei_Players` 1.6.0 上报在线玩家 IP；1.9.0 通过 `POST /api/v1/plugin/ban-report` 回传
+  游戏内 ThRei 封禁，网站写入全服游戏封禁和 IP 封禁，不再写入账号封禁。
 - 网站解除游戏服务器封禁时写入 `unban` 指令；`ThRei_Players` 1.6.1 会把 SteamID64 转为
   SteamID2 并调用 `RemoveBan`，删除服务器本地由 `sm_ban` 写入的 SteamID 封禁。
 - `ThRei_Players` 1.7.0 新增 `sm_threi_ban` / `sm_threi_addban` / `sm_threi_unban` /
@@ -41,6 +44,8 @@
   未加载时自动接管 `sm_ban` / `sm_unban` / `sm_banip` 等命令。代价是插件未加载时封禁失效。
 - `ThRei_Players` 1.8.1 取消 basebans 检测，始终注册 `sm_ban` / `sm_addban` / `sm_unban` /
   `sm_banip` / `sm_unbanip`；安装前直接删除 `basebans.smx` 即可。
+- `ThRei_Players` 1.9.0 支持访问快照 `banip`、指令 `banip` / `unbanip`；游戏内封禁默认全服，
+  网站解封 IP 立即清除所有服务器本地封禁。封禁不写引擎封禁，也不影响网站账号。
 - 白名单改为全服共享：玩家申请一次、管理员审核一次，所有开启白名单的服务器通用；
   新增 `global_whitelist` 并迁移旧的 `server_whitelist` 数据。
 - 游戏服务器封禁默认作用于全部服务器（`scope: "global"`），封禁弹窗可选择“仅本服”；

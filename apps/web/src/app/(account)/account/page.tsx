@@ -10,6 +10,7 @@ import {
   Heart,
   MapPin,
   MessageCircle,
+  ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 
@@ -137,6 +138,38 @@ export default async function AccountPage({ searchParams }: AccountPageProps) {
         <StatCard label="收藏服务器" value={account.stats.favorites} detail="已收藏的服务器" />
         <StatCard label="活跃会话" value={account.stats.sessions} detail="当前登录设备" />
       </section>
+
+      {account.gameBans.length > 0 ? (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldAlert className="size-4 text-destructive" aria-hidden="true" />
+              游戏服务器封禁
+            </CardTitle>
+            <CardDescription>你仍然可以登录官网，但无法进入下列游戏服务器。</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {account.gameBans.map((ban, index) => (
+              <div
+                key={`${ban.scope}-${ban.serverName}-${ban.reason}-${index}`}
+                className="rounded-lg border border-destructive/25 bg-background/60 px-3 py-2.5"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="destructive">
+                    {ban.scope === "global" ? "全服封禁" : ban.serverName}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {ban.expiresAt ? `${formatDate(ban.expiresAt)} 到期` : "永久"}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm whitespace-pre-wrap">
+                  您因为以下原因已被该服务器封禁：{ban.reason}
+                </p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div className="space-y-6">

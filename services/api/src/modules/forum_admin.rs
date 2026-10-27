@@ -57,7 +57,6 @@ pub struct AdminForumUser {
     pub avatar_url: Option<String>,
     pub role: String,
     pub is_disabled: bool,
-    pub is_banned: bool,
     pub is_muted: bool,
     pub mute_reason: Option<String>,
     pub muted_until: Option<DateTime<Utc>>,
@@ -311,11 +310,6 @@ async fn list_users(
         r"
         SELECT u.steam_id64, u.persona_name AS name, u.avatar_url, u.role,
                u.is_disabled,
-               EXISTS (
-                   SELECT 1 FROM bans b
-                   WHERE b.steam_id64 = u.steam_id64 AND b.lifted_at IS NULL
-                     AND (b.expires_at IS NULL OR b.expires_at > now())
-               ) AS is_banned,
                EXISTS (
                    SELECT 1 FROM forum_mutes m
                    WHERE m.steam_id64 = u.steam_id64 AND m.lifted_at IS NULL

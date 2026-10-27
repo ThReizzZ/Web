@@ -51,24 +51,6 @@ export interface AdminAccount {
   lastLoginAt: string;
 }
 
-export interface Ban {
-  id: string;
-  banType: "steam" | "ip";
-  steamId64: string | null;
-  ipAddress: string | null;
-  sourceBanId: string | null;
-  playerName: string;
-  avatarUrl: string | null;
-  reason: string;
-  expiresAt: string | null;
-  createdAt: string;
-  createdBy: string;
-  liftedAt: string | null;
-  liftedBy: string | null;
-  liftReason: string | null;
-  isActive: boolean;
-}
-
 export interface WhitelistApplication {
   id: string;
   serverId: string | null;
@@ -162,7 +144,6 @@ export interface AdminForumUser {
   avatarUrl: string | null;
   role: string;
   isDisabled: boolean;
-  isBanned: boolean;
   isMuted: boolean;
   muteReason: string | null;
   mutedUntil: string | null;
@@ -251,6 +232,19 @@ export interface ServerBan {
   createdBy: string;
   liftedAt: string | null;
   liftedBy: string | null;
+  isActive: boolean;
+}
+
+export interface ServerIpBan {
+  id: string;
+  ipAddress: string;
+  reason: string;
+  expiresAt: string | null;
+  createdAt: string;
+  createdBy: string;
+  liftedAt: string | null;
+  liftedBy: string | null;
+  liftReason: string | null;
   isActive: boolean;
 }
 

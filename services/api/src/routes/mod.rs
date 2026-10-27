@@ -22,6 +22,5 @@ pub fn api_v1() -> Router<AppState> {
         .merge(modules::account::router())
         .merge(modules::admin::router())
         .merge(modules::admin_users::router())
-        .merge(modules::bans::router())
         .merge(modules::whitelist::router())
 }

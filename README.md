@@ -42,9 +42,9 @@ ThRei 是一个以 CS:GO KZ 攀爬、连跳和长跳玩法为核心的社区系�
 - 管理面板 `/admin` 在服务端校验会话与管理员角色；匿名访问跳转登录，非管理员跳转首页。
 - 管理面板使用 Modal 弹窗处理新增管理员、新增封禁、手动白名单和添加服务器；操作结果通过 Toast 提示，危险操作使用确认弹窗。
 - 管理面板支持按 SteamID64 新增管理员、取消管理员、禁用/启用账号；不能操作自己，也不能移除最后一位可用管理员。
-- 封禁管理支持 SteamID64/IP 封禁、临时/永久封禁与解封；SteamID 封禁会自动查找该玩家的最近 IP 并创建 IP 封禁；IP 封禁会自动关联该 IP 下已知的非管理员账号，封禁会立即撤销目标网站会话并阻止再次登录。
-- 论坛管理支持编辑/删除/恢复主题和回复、置顶/热门/分类调整、论坛用户禁言和封禁。
-- 服务器管理支持添加/删除服务器、启用/停用、生成/轮换/撤销插件令牌、查看在线玩家、踢出或服务器封禁玩家；游戏内执行由 `ThRei_Players` 1.5.0+ 消费 `server_actions` 完成，1.6.0+ 还会把游戏内 `sm_ban` / `BanClient` 封禁回传网站并自动封禁玩家 IP，1.6.1+ 支持网站解封时自动删除服务器本地 SteamID 封禁；1.7.0+ 新增自己的 `sm_threi_ban` / `sm_threi_unban` / `sm_threi_banip` 等命令、本地引擎封禁和分组解封；1.7.1+ 的封禁/解封命令支持 SteamID64、SteamID2 和 SteamID3；1.7.2+ 过滤非法 UTF-8 并避免 4xx 上报堵塞队列；1.7.3+ 支持不加引号的 SteamID2/3/IPv6 参数；1.8.0+ 改成纯插件封禁（`configs/threi_bans.cfg`），不再写引擎封禁，重连显示自定义提示，解封后立即可以进入，并可移除 basebans；1.8.1+ 不再检测 basebans，始终注册兼容命令。
+- 封禁管理只管理游戏服务器封禁（全服/单服）与游戏 IP 封禁；封禁不会阻止网站登录，用户中心会显示封禁服务器、原因和到期时间；SteamID 封禁会自动查找玩家最近 IP 并创建游戏 IP 封禁。
+- 论坛管理支持编辑/删除/恢复主题和回复、置顶/热门/分类调整、论坛用户禁言；网站账号不再提供封禁操作。
+- 服务器管理支持添加/删除服务器、启用/停用、生成/轮换/撤销插件令牌、查看在线玩家、踢出或封禁玩家；游戏内执行由 `ThRei_Players` 1.5.0+ 消费 `server_actions` 完成；1.9.0+ 游戏内 ThRei 封禁默认同步为全服游戏封禁与 IP 封禁，网站解封会即时下发 `unban` / `unbanip`。1.8.0+ 使用纯插件封禁（`configs/threi_bans.cfg`），不写引擎封禁，重连显示自定义提示；1.8.1+ 不再检测 basebans，始终注册兼容命令。
 - 服务器状态由 SourceMod 插件 `ThRei_Players` 主动上报，API 不再使用 A2S/RCON 轮询。插件安装、配置和协议见 [plugins/ThRei_Players/README.md](plugins/ThRei_Players/README.md)。每个服务器使用独立令牌（`X-ThRei-Plugin-Token` 请求头）；超过 90 秒没有上报会自动标记离线并清空在线名单，`maintenance` 状态不会被覆盖。
 - 白名单为全服共享：玩家在用户中心提交一次申请，管理员审核通过或手动授权后，所有开启白名单的服务器通用；服务器管理保留每台服务器的 `requires_whitelist` 开关，`ThRei_Players` 在玩家连接时执行拦截。
 
@@ -207,8 +207,10 @@ cd apps/web && npm run build
 | POST | `/api/v1/admin/servers/{id}/players/{steam_id64}/kick`、`/ban` | 踢出 / 服务器封禁 | 管理员 |
 | DELETE | `/api/v1/admin/admins/{steam_id64}` | 取消管理员权限 | 管理员 |
 | POST | `/api/v1/admin/admins/{steam_id64}/disable`、`/enable` | 禁用 / 启用管理员 | 管理员 |
-| GET/POST | `/api/v1/admin/bans` | 封禁记录 / 创建封禁 | 管理员 |
-| POST | `/api/v1/admin/bans/{id}/lift` | 解封 | 管理员 |
+| GET/POST | `/api/v1/admin/server-bans` | 游戏服务器封禁记录 / 创建全服或单服封禁 | 管理员 |
+| POST | `/api/v1/admin/server-bans/{id}/lift` | 解除游戏服务器封禁 | 管理员 |
+| GET/POST | `/api/v1/admin/server-ip-bans` | 游戏 IP 封禁记录 / 创建 | 管理员 |
+| POST | `/api/v1/admin/server-ip-bans/{id}/lift` | 解除游戏 IP 封禁 | 管理员 |
 | GET/POST | `/api/v1/admin/whitelist` | 白名单审核数据 / 手动授权 | 管理员 |
 | POST | `/api/v1/admin/whitelist/applications/{id}/approve`、`/reject` | 审核申请 | 管理员 |
 | PATCH | `/api/v1/admin/servers/{id}/whitelist` | 开关服务器白名单要求 | 管理员 |
@@ -236,7 +238,7 @@ cd apps/web && npm run build
 - 登录限流、CSRF 令牌（当前已有管理员写接口，但尚未加 CSRF）
 - 论坛发帖/回复、资料编辑、收藏管理的写接口
 - 细粒度 RBAC、管理员操作审计
-- 游戏服务器插件执行管理动作需要安装 `ThRei_Players` 1.5.0+；游戏内封禁回传与玩家 IP 上报需要 1.6.0+，网站解封自动清除服务器本地封禁需要 1.6.1+，内置封禁命令和分组解封需要 1.7.0+，旧插件只上报状态，不消费动作或白名单。
+- 游戏服务器插件执行管理动作需要安装 `ThRei_Players` 1.5.0+；游戏内封禁回传与玩家 IP 上报需要 1.6.0+，游戏 IP 即时封禁/解封与全服游戏封禁同步需要 1.9.0+，旧插件只上报状态，不消费动作或白名单。
 - CSP、HTTPS 证书自动化、备份自动化
 - CI；当前只有本地检查脚本
 - 使用真实 Steam 账号完成一次完整的浏览器登录验收
@@ -249,7 +251,7 @@ cd apps/web && npm run build
 - 新手指南会说明进入服务器和申请白名单的流程；登录玩家可在用户中心提交白名单申请，论坛发帖/回复写接口仍未开放。
 - 在线状态、地图、人数和 SteamID64 玩家名单由游戏服务器上的 `ThRei_Players` 插件上报；未安装插件或超过 90 秒没有上报时显示离线。
 - 论坛发帖/回复写接口仍未开放；管理面板可以编辑、删除已有内容。
-- 踢出/封禁/白名单由 `ThRei_Players` 1.5.0+ 执行；游戏内封禁回传与 IP 上报由 1.6.0+ 提供，网站解封自动清除服务器本地 SteamID 封禁由 1.6.1+ 提供，内置 `sm_threi_*` 封禁命令由 1.7.0+ 提供。IP 封禁只作用于网站登录，不作用于游戏服务器；游戏服务器拦截仍使用 `server_bans`，1.7.0+ 的 `sm_threi_banip` 会写本地 IP 封禁。原始控制台 `banid` 不会回传。
+- 踢出/封禁/白名单由 `ThRei_Players` 1.5.0+ 执行；游戏内封禁回传与 IP 上报由 1.6.0+ 提供，内置 `sm_threi_*` 封禁命令由 1.7.0+ 提供，游戏 IP 即时同步与 1.9.0+ 的全服封禁模型由 1.9.0+ 提供。游戏封禁和 IP 封禁都只作用于游戏服务器，不影响网站登录。
 - 服务器添加表单已提供，但尚未提供完整字段编辑表单；当前可启用/停用、删除和配置白名单。
 - 本机没有 Docker daemon，镜像构建、Compose 启动、`nginx -t` 与 HTTPS 未在本地执行。
 - 当前开发环境连接局域网 PostgreSQL/Redis；生产使用 Compose 内 PostgreSQL/Redis。
