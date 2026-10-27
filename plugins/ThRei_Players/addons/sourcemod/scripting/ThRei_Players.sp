@@ -613,7 +613,7 @@ bool ResolveBanTarget(int adminClient, const char[] arg, char[] steamId, int ste
         strcopy(steamId, steamIdMax, arg);
         target = FindClientBySteamId(steamId);
     } else {
-        target = FindTarget(adminClient, arg, true, false);
+        target = FindTarget(adminClient, arg, true, true);
         if (target <= 0) {
             return false;
         }

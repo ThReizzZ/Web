@@ -68,7 +68,7 @@
 
 - `/home/threi/ThRei_Players-1.7.0/`、`.zip`、`.tar.gz`，并复制到
   `/mnt/c/Users/15155/Downloads/`。
-- `.smx` SHA-256：`1541c80a3e5591ff7467930f7e3c0d8558ee99be04dae4dbe068ff6df5e285f0`。
+- `.smx` SHA-256：`95951d746389343a05eb05d9d699eb54a55fe695deeb3532df9e41e92ecb1d22`。
 
 ### 测试与结果
 
