@@ -17,13 +17,54 @@
 
 ---
 
+## 2026年10月28日 02时07分14秒 插件封禁命令支持 SteamID2/3（1.7.1）
+
+### 背景
+
+用户测试 1.7.0 时反馈：`STEAM_0:0:914966745` 无法识别，只有 SteamID64 可用。
+
+### 原因
+
+`sm_threi_ban` / `sm_threi_addban` 只把 17 位 SteamID64 当 ID，其他格式会进入
+`FindTarget` 当玩家名查找；`TrySteamIdTo64` 只接入了 `sm_threi_unban`。
+
+### 变更内容
+
+- 1.7.1 版本号。
+- `sm_threi_ban` 在解析目标前先调用 `TrySteamIdTo64`，支持 SteamID64、SteamID2
+  （`STEAM_0:0:...` / `STEAM_1:...`）和 SteamID3（`[U:1:...]` / `U:1:...`）。
+- `sm_threi_addban` 同样改为 `TrySteamIdTo64`，离线按转换后的 SteamID64 封禁。
+- `TrySteamIdTo64` 增加数字校验、SteamID3 无方括号形式和 account ID 溢出保护。
+- 在线目标仍遵循 SourceMod immunity；离线 SteamID 直接封禁。
+
+### 涉及文件
+
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `plugins/ThRei_Players/README.md`
+
+### 插件包
+
+- `ThRei_Players-1.7.1`：`/home/threi/ThRei_Players-1.7.1/`、`.zip`、`.tar.gz`，并复制到
+  `/mnt/c/Users/15155/Downloads/`。
+- `.smx` SHA-256：`a3ad0881e58b19f5d36d210e8c6bdb1e9665aadede81ec1b17530e2b89f026b4`。
+
+### 测试与结果
+
+- SourcePawn Compiler 1.11.0.6970 编译通过，无警告。
+- 转换公式核对：`STEAM_0:0:914966745` → account ID `1829933490` → SteamID64
+  `76561199790199218`。
+- **未执行**：真实游戏服务器命令测试；需要用户在 1服 用 `sm_threi_addban "STEAM_0:0:..."`、
+  `sm_threi_unban "STEAM_0:0:..."` 验证。
+- 本次没有网站/API 变更，无需重新部署 API。
+
 ## 2026年10月27日 23时17分08秒 插件内置封禁命令与分组解封（1.7.0）
 
 ### 背景
 
 用户希望最终用 `ThRei_Players` 完全替代 `basebans.smx`。本阶段先实现 1.7.0：新增自己的
 封禁/解封/IP 封禁命令，同时写本地引擎封禁和网站记录；basebans 暂时保留，在 1服 验证后再
-于 1.7.1 提供 `sm_ban` / `sm_unban` 兼容命令并逐台卸载。
+于 1.7.2 提供 `sm_ban` / `sm_unban` 兼容命令并逐台卸载。
 
 ### 变更内容
 

@@ -27,7 +27,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.7.0"
+#define PLUGIN_VERSION "1.7.1"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -408,6 +408,11 @@ public Action Command_Ban(int client, int args) {
     GetCmdArg(1, targetArg, sizeof(targetArg));
     TrimString(targetArg);
 
+    char normalized[32];
+    if (TrySteamIdTo64(targetArg, normalized, sizeof(normalized))) {
+        strcopy(targetArg, sizeof(targetArg), normalized);
+    }
+
     int minutes;
     if (!ParseBanMinutes(2, minutes)) {
         ReplyToCommand(client, "[ThRei] 分钟数必须是 0–52560000 的整数。");
@@ -421,7 +426,7 @@ public Action Command_Ban(int client, int args) {
     char ip[64];
     if (!ResolveBanTarget(client, targetArg, steamId, sizeof(steamId),
             name, sizeof(name), ip, sizeof(ip))) {
-        ReplyToCommand(client, "[ThRei] 找不到目标：%s", targetArg);
+        ReplyToCommand(client, "[ThRei] 找不到目标或无法识别 SteamID：%s", targetArg);
         return Plugin_Handled;
     }
 
@@ -432,14 +437,15 @@ public Action Command_Ban(int client, int args) {
 public Action Command_AddBan(int client, int args) {
     if (args < 2) {
         ReplyToCommand(client,
-            "[ThRei] 用法：sm_threi_addban <SteamID64> <分钟> [原因]（0 = 永久）");
+            "[ThRei] 用法：sm_threi_addban <SteamID64|STEAM_x:y:z|[U:1:account]> <分钟> [原因]");
         return Plugin_Handled;
     }
+    char input[64];
+    GetCmdArg(1, input, sizeof(input));
+    TrimString(input);
     char steamId[32];
-    GetCmdArg(1, steamId, sizeof(steamId));
-    TrimString(steamId);
-    if (!IsSteamId64(steamId)) {
-        ReplyToCommand(client, "[ThRei] SteamID64 必须是 17 位数字。");
+    if (!TrySteamIdTo64(input, steamId, sizeof(steamId))) {
+        ReplyToCommand(client, "[ThRei] 无法识别 SteamID：%s", input);
         return Plugin_Handled;
     }
 
@@ -757,6 +763,18 @@ void SendUnbanRequest(int client, const char[] steamId, const char[] ip) {
     ReplyToCommand(client, "[ThRei] 已提交网站解封请求，等待服务器确认...");
 }
 
+bool AllDigits(const char[] value) {
+    if (value[0] == '\0') {
+        return false;
+    }
+    for (int i = 0; value[i] != '\0'; i++) {
+        if (!IsCharNumeric(value[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool TrySteamIdTo64(const char[] input, char[] output, int maxLength) {
     if (IsSteamId64(input)) {
         strcopy(output, maxLength, input);
@@ -766,22 +784,24 @@ bool TrySteamIdTo64(const char[] input, char[] output, int maxLength) {
     int accountId = -1;
     if (StrContains(input, "STEAM_", false) == 0) {
         char parts[3][32];
-        if (ExplodeString(input, ":", parts, 3, sizeof(parts[])) != 3) {
+        if (ExplodeString(input, ":", parts, 3, sizeof(parts[])) != 3
+                || !AllDigits(parts[1]) || !AllDigits(parts[2])) {
             return false;
         }
         int y = StringToInt(parts[1]);
         int z = StringToInt(parts[2]);
-        if (y < 0 || y > 1 || z < 0) {
+        if (y < 0 || y > 1 || z < 0 || z > 1073741823) {
             return false;
         }
         accountId = 2 * z + y;
-    } else if (input[0] == '[') {
+    } else if (input[0] == '[' || (input[0] == 'U' && input[1] == ':')) {
         char trimmed[64];
         strcopy(trimmed, sizeof(trimmed), input);
         ReplaceString(trimmed, sizeof(trimmed), "[", "", false);
         ReplaceString(trimmed, sizeof(trimmed), "]", "", false);
         char parts[3][32];
-        if (ExplodeString(trimmed, ":", parts, 3, sizeof(parts[])) != 3) {
+        if (ExplodeString(trimmed, ":", parts, 3, sizeof(parts[])) != 3
+                || !AllDigits(parts[2])) {
             return false;
         }
         accountId = StringToInt(parts[2]);
