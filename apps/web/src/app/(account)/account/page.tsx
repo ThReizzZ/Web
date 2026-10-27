@@ -71,60 +71,15 @@ export default async function AccountPage({ searchParams }: AccountPageProps) {
   return (
     <PageContainer className="space-y-6 py-10">
       <section className="overflow-hidden rounded-3xl border bg-card shadow-sm">
-        <div className="relative min-h-40 overflow-hidden bg-[#05080f] sm:min-h-44">
+        <div className="relative h-36 overflow-hidden bg-slate-950">
           <div
             aria-hidden="true"
-            className="absolute inset-0"
-            style={{
-              backgroundImage:
-                "radial-gradient(120% 170% at 8% -20%, rgba(16,185,129,0.46) 0%, transparent 54%), radial-gradient(110% 150% at 100% 120%, rgba(37,99,235,0.34) 0%, transparent 55%)",
-            }}
+            className="absolute inset-0 bg-[radial-gradient(80%_120%_at_15%_0%,rgba(16,185,129,0.32),transparent_65%)]"
           />
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 opacity-60"
-            style={{
-              backgroundImage:
-                "linear-gradient(to right, rgba(255,255,255,0.07) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.07) 1px, transparent 1px)",
-              backgroundSize: "36px 36px",
-              maskImage: "linear-gradient(to bottom, black, transparent 88%)",
-              WebkitMaskImage: "linear-gradient(to bottom, black, transparent 88%)",
-            }}
-          />
-          <div
-            aria-hidden="true"
-            className="absolute -top-24 right-[12%] size-72 rounded-full bg-emerald-400/10 blur-3xl"
-          />
-          <div
-            aria-hidden="true"
-            className="absolute top-1/2 -right-12 hidden size-48 -translate-y-1/2 rounded-full border border-white/10 sm:block"
-          >
-            <div className="absolute inset-6 rounded-full border border-white/[0.07]" />
-            <div className="absolute inset-12 rounded-full border border-emerald-300/20" />
-          </div>
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute -right-2 -bottom-10 text-[9rem] leading-none font-black tracking-[-0.08em] text-white/[0.035] select-none sm:-bottom-14 sm:text-[12rem]"
-          >
-            THREI
-          </span>
-          <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-transparent to-black/10" />
-
-          <div className="relative flex min-h-40 flex-col justify-between p-6 sm:min-h-44 sm:p-8">
-            <div className="flex items-center gap-2.5">
-              <span className="size-1.5 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.9)]" />
-              <span className="text-[10px] font-semibold tracking-[0.28em] text-white/55 uppercase">
-                ThRei Community
-              </span>
-            </div>
-            <div>
-              <p className="max-w-2xl text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-                欢迎来到最神权的服务器
-              </p>
-              <p className="mt-2 text-[11px] tracking-[0.18em] text-white/45">
-                CS:GO KZ · 连跳 · 长跳
-              </p>
-            </div>
+          <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/60 to-transparent" />
+          <div className="absolute inset-x-0 top-0 p-6">
+            <p className="text-xs text-white/60">ThRei 社区成员</p>
+            <p className="mt-1 text-lg font-medium text-white">欢迎回来，{user.name}</p>
           </div>
         </div>
         <div className="relative px-6 pb-6">

@@ -10,7 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { TopicRow } from "@/features/forum/components/topic-row";
 import type { ForumTopic } from "@/features/forum/types";
-import { PlayerRoster } from "@/features/servers/components/player-roster";
 import { ServerCard } from "@/features/servers/components/server-card";
 import { getMaxPlayerTotal, getOnlinePlayerTotal } from "@/features/servers/data/servers";
 import { getServerApiClient } from "@/lib/api/server";
@@ -43,7 +42,7 @@ export default async function HomePage() {
 
   return (
     <>
-      <section className="relative overflow-hidden border-b border-slate-800 bg-slate-950 text-white">
+      <section className="relative isolate overflow-hidden border-b border-slate-800 bg-slate-950 text-white">
         {featured?.mapImage ? (
           <Image
             src={featured.mapImage}
@@ -51,17 +50,52 @@ export default async function HomePage() {
             fill
             priority
             sizes="100vw"
-            className="object-cover opacity-40"
+            className="object-cover opacity-35"
             unoptimized
           />
-        ) : (
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 bg-[radial-gradient(70%_120%_at_20%_0%,rgba(16,185,129,0.24),transparent_60%)]"
-          />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/30" />
-        <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-slate-950 to-transparent" />
+        ) : null}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0"
+          style={{
+            backgroundImage:
+              "radial-gradient(80% 120% at 12% -10%, rgba(16,185,129,0.32) 0%, transparent 58%), radial-gradient(50% 80% at 88% 0%, rgba(59,130,246,0.18) 0%, transparent 65%)",
+          }}
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0"
+          style={{
+            backgroundImage:
+              "linear-gradient(90deg, #020617 0%, rgba(2,6,23,0.92) 38%, rgba(2,6,23,0.55) 72%, rgba(2,6,23,0.82) 100%)",
+          }}
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 opacity-40"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.06) 1px, transparent 1px)",
+            backgroundSize: "44px 44px",
+            maskImage: "linear-gradient(to bottom, black, transparent 85%)",
+            WebkitMaskImage: "linear-gradient(to bottom, black, transparent 85%)",
+          }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute top-1/2 -right-28 hidden size-[32rem] -translate-y-1/2 rounded-full border border-white/[0.06] lg:block"
+        >
+          <div className="absolute inset-20 rounded-full border border-white/[0.05]" />
+          <div className="absolute inset-40 rounded-full border border-emerald-300/10" />
+        </div>
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -right-3 -bottom-16 hidden text-[17rem] leading-none font-black tracking-[-0.1em] text-white/[0.025] select-none lg:block"
+        >
+          KZ
+        </span>
+        <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent" />
+
         <PageContainer className="relative py-20 sm:py-28">
           {announcements[0] ? (
             <Link href={`/forum/topic/${announcements[0].slug}`} className="inline-flex">
@@ -76,13 +110,11 @@ export default async function HomePage() {
               ThRei KZ 社区
             </Badge>
           )}
-          <h1 className="mt-6 max-w-4xl text-3xl font-semibold tracking-tight sm:text-4xl md:text-5xl lg:text-6xl">
-            <span className="block">一个专注 KZ 的社区，</span>
-            <span className="block text-emerald-300">找服务器，记录成绩。</span>
+          <h1 className="mt-6 max-w-4xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl md:text-6xl lg:text-7xl">
+            欢迎来到<span className="text-emerald-300">最神权</span>的服务器
           </h1>
           <p className="mt-6 max-w-2xl text-base leading-relaxed text-white/70 sm:text-lg">
-            这里整理 KZ
-            服务器、地图和玩家记录。可以按难度、人数或延迟挑选，也可以到论坛交流路线与技巧。
+            一个专注 KZ 的社区。找服务器、记录成绩，和玩家一起挑战每一条路线。
           </p>
           <div className="mt-9 flex flex-wrap gap-3">
             <Button asChild size="lg" className="bg-white text-slate-950 hover:bg-white/90">
@@ -102,7 +134,7 @@ export default async function HomePage() {
             </Button>
           </div>
 
-          <dl className="mt-12 grid max-w-3xl grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
+          <dl className="mt-12 grid max-w-3xl grid-cols-2 gap-x-6 gap-y-5 border-t border-white/10 pt-8 sm:grid-cols-4">
             <Stat label="在线玩家" value={onlineTotal} detail={`/ ${maxTotal}`} />
             <Stat label="开放服务器" value={servers.length} />
             <Stat label="本周新主题" value={stats.newTopicsWeek} />
@@ -110,33 +142,6 @@ export default async function HomePage() {
           </dl>
         </PageContainer>
       </section>
-
-      {featured ? (
-        <section className="border-b bg-card py-4">
-          <PageContainer className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm text-muted-foreground">
-                <span className="font-mono text-foreground">{featured.map}</span> 当前有{" "}
-                <span className="font-medium text-foreground">
-                  {featured.players.length} 位玩家
-                </span>
-                在线：
-              </p>
-              <PlayerRoster players={featured.players} variant="list" />
-            </div>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
-                {servers.length} 个服务器已接入
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <MessageSquareText className="size-3.5" aria-hidden="true" />
-                {stats.activeMembersWeek} 位成员本周活跃
-              </span>
-            </div>
-          </PageContainer>
-        </section>
-      ) : null}
 
       <section className="py-16 sm:py-20">
         <PageContainer className="space-y-8">
