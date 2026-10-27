@@ -82,7 +82,7 @@ export function ServerCard({
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
           <span>{server.tickrate} tick</span>
-          <span>{server.latencyMs === null ? "延迟未知" : `延迟 ${server.latencyMs} ms`}</span>
+          {server.latencyMs !== null ? <span>平均延迟 {server.latencyMs} ms</span> : null}
           <span>{server.tags.slice(0, compact ? 2 : 3).join(" · ")}</span>
         </div>
 

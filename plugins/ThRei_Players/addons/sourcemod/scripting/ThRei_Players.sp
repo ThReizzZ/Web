@@ -31,7 +31,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.9.3"
+#define PLUGIN_VERSION "1.9.4"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -1723,6 +1723,8 @@ bool BuildBody(const char[] serverId, int skipUserId) {
     if (maxClients > MAX_REPORT_PLAYERS) {
         maxClients = MAX_REPORT_PLAYERS;
     }
+    float latencyTotal = 0.0;
+    int latencyCount = 0;
 
     for (int client = 1; client <= maxClients; client++) {
         if (!IsClientInGame(client) || IsFakeClient(client)
@@ -1765,10 +1767,24 @@ bool BuildBody(const char[] serverId, int skipUserId) {
             LogError("[ThRei_Players] Report body is too large; aborting report.");
             return false;
         }
+
+        float latency = GetClientAvgLatency(client, NetFlow_Both);
+        if (latency >= 0.0) {
+            latencyTotal += latency * 1000.0;
+            latencyCount++;
+        }
         reported++;
     }
 
-    if (!AppendText(g_sBody, sizeof(g_sBody), "]}")) {
+    char tail[64];
+    if (latencyCount > 0) {
+        int averageLatency = RoundToNearest(latencyTotal / float(latencyCount));
+        averageLatency = averageLatency < 0 ? 0 : (averageLatency > 10000 ? 10000 : averageLatency);
+        Format(tail, sizeof(tail), "],\"latencyMs\":%d}", averageLatency);
+    } else {
+        strcopy(tail, sizeof(tail), "]}");
+    }
+    if (!AppendText(g_sBody, sizeof(g_sBody), tail)) {
         LogError("[ThRei_Players] Report body is too large; aborting report.");
         return false;
     }
