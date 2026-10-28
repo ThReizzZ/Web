@@ -4,6 +4,8 @@ import { ExternalLink, Map as MapIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { kzMapCdnImageUrl, kzMapImageUrl } from "@/features/servers/data/map-images";
+import { ServerMapImage } from "@/features/servers/components/server-map-image";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -28,6 +30,21 @@ function formatKzTime(seconds: number): string {
     return `${minutes}:${String(wholeSeconds).padStart(2, "0")}.${fraction}`;
   }
   return `${wholeSeconds}.${fraction}`;
+}
+
+function KzMapThumbnail({ mapName }: { mapName: string }) {
+  const imageSrc = kzMapCdnImageUrl(mapName);
+  const fallbackSrc = kzMapImageUrl(mapName) ?? "";
+
+  return (
+    <div className="relative h-12 w-20 shrink-0 overflow-hidden rounded-md border bg-slate-900">
+      {imageSrc ? (
+        <ServerMapImage src={imageSrc} fallbackSrc={fallbackSrc} alt={`${mapName} 地图预览`} />
+      ) : (
+        <span className="grid size-full place-items-center text-[10px] text-white/50">KZ</span>
+      )}
+    </div>
+  );
 }
 
 export async function KzMapsCard({
@@ -277,7 +294,10 @@ function KzMapsCardContent({
                       key={map.mapId}
                       className="flex items-center justify-between gap-3 px-4 py-2.5"
                     >
-                      <p className="truncate font-mono text-xs sm:text-sm">{map.mapName}</p>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <KzMapThumbnail mapName={map.mapName} />
+                        <p className="truncate font-mono text-xs sm:text-sm">{map.mapName}</p>
+                      </div>
                       <Badge variant="outline" className="shrink-0">
                         Tier {map.difficulty}
                       </Badge>
@@ -355,12 +375,15 @@ function KzMapsCardContent({
                   key={map.mapId}
                   className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <div className="min-w-0">
-                    <p className="truncate font-mono text-xs sm:text-sm">{map.mapName}</p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      {formatRelativeTime(map.lastPlayedAt)} · {map.points.toLocaleString("zh-CN")}{" "}
-                      分
-                    </p>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <KzMapThumbnail mapName={map.mapName} />
+                    <div className="min-w-0">
+                      <p className="truncate font-mono text-xs sm:text-sm">{map.mapName}</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {formatRelativeTime(map.lastPlayedAt)} ·{" "}
+                        {map.points.toLocaleString("zh-CN")} 分
+                      </p>
+                    </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     {map.proTime !== null ? (
@@ -418,9 +441,12 @@ export function KzMapsCardSkeleton({
       <CardContent>
         <div className="space-y-px overflow-hidden rounded-xl border bg-border">
           {Array.from({ length: 5 }, (_, index) => (
-            <div key={index} className="bg-card px-4 py-3">
-              <div className="h-3.5 w-40 animate-pulse rounded bg-muted" />
-              <div className="mt-2 h-2.5 w-24 animate-pulse rounded bg-muted" />
+            <div key={index} className="flex items-center gap-3 bg-card px-4 py-3">
+              <div className="h-12 w-20 shrink-0 animate-pulse rounded-md bg-muted" />
+              <div>
+                <div className="h-3.5 w-40 animate-pulse rounded bg-muted" />
+                <div className="mt-2 h-2.5 w-24 animate-pulse rounded bg-muted" />
+              </div>
             </div>
           ))}
         </div>
