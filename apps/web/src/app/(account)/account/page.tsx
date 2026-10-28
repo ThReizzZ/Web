@@ -23,6 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { KzMapsCard, KzMapsCardSkeleton } from "@/features/account/components/kz-maps-card";
 import { LogoutButton } from "@/features/account/components/logout-button";
+import { ProfileBio } from "@/features/account/components/profile-bio";
 import { WhitelistApplyCard } from "@/features/account/components/whitelist-apply-card";
 import type { AccountActivity, AccountOverview } from "@/features/account/types";
 import { ServerStatusBadge } from "@/features/servers/components/server-status-badge";
@@ -116,9 +117,7 @@ export default async function AccountPage({ searchParams }: AccountPageProps) {
             </Button>
           </div>
 
-          <p className="mt-5 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            {user.bio || "还没有填写个人简介。"}
-          </p>
+          <ProfileBio bio={user.bio} />
 
           <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">

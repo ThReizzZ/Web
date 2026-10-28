@@ -63,6 +63,7 @@ use crate::{
         crate::modules::players::get_player,
         crate::modules::community::overview,
         crate::modules::account::account_overview,
+        crate::modules::account::update_profile,
         crate::modules::admin::overview
     ),
     components(schemas(
@@ -77,6 +78,7 @@ use crate::{
         PluginReportRequest,
         CreateTopicRequest,
         CreateReplyRequest,
+        crate::modules::account::UpdateProfileRequest,
         PluginPlayer,
         PluginReportResponse,
         PluginTokenResponse,

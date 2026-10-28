@@ -289,6 +289,22 @@ async fn account_requires_authentication() {
 }
 
 #[tokio::test]
+async fn profile_update_requires_authentication() {
+    let router = test_router(&test_settings(false, ""));
+    let request = Request::builder()
+        .method("PATCH")
+        .uri("/api/v1/account/profile")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"bio":"hello"}"#))
+        .expect("request should build");
+
+    let (status, _, body) = send(router, request).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], "unauthorized");
+}
+
+#[tokio::test]
 async fn admin_endpoints_require_authentication() {
     for path in [
         "/api/v1/admin/admins",

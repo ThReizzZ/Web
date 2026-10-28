@@ -122,7 +122,7 @@ export default async function PlayerPage({ params, searchParams }: PlayerPagePro
                 )}
               </div>
 
-              <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              <p className="mt-3 max-w-2xl text-sm leading-relaxed whitespace-pre-wrap text-muted-foreground">
                 {player.bio || "这位玩家还没有填写个人简介。"}
               </p>
 

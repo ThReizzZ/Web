@@ -161,6 +161,13 @@ export function fetchAccount(client: ApiClient): Promise<AccountOverview> {
   return client.get<AccountOverview>("/api/v1/account", noStore);
 }
 
+export function updateAccountProfile(client: ApiClient, input: { bio: string }): Promise<AuthUser> {
+  return client.request<AuthUser>("/api/v1/account/profile", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
 export function fetchAdminOverview(client: ApiClient): Promise<AdminOverview> {
   return client.get<AdminOverview>("/api/v1/admin/overview", noStore);
 }

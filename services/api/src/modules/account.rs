@@ -1,6 +1,11 @@
-use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::HeaderMap,
+    routing::{get, patch},
+};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 use crate::{
@@ -81,8 +86,16 @@ pub struct AccountOverview {
     pub recent_activity: Vec<Activity>,
 }
 
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProfileRequest {
+    pub bio: String,
+}
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/account", get(account_overview))
+    Router::new()
+        .route("/account", get(account_overview))
+        .route("/account/profile", patch(update_profile))
 }
 
 #[utoipa::path(
@@ -98,6 +111,42 @@ async fn account_overview(
     let user = require_user(&state, &headers).await?;
     let overview = build_overview(&state, &user).await?;
     Ok(Json(overview))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/account/profile",
+    tag = "account",
+    request_body = UpdateProfileRequest,
+    responses((status = 200, description = "Updated profile"), (status = 401, description = "Authentication required"), (status = 422, description = "Invalid profile data"))
+)]
+async fn update_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateProfileRequest>,
+) -> Result<Json<MeUser>, AppError> {
+    let user = require_user(&state, &headers).await?;
+
+    let bio = request.bio.trim();
+    if bio.chars().count() > 2000 {
+        return Err(AppError::validation("bio must be at most 2000 characters"));
+    }
+
+    let updated = sqlx::query_as::<_, AuthUser>(
+        r"
+        UPDATE users
+        SET bio = $2, updated_at = now()
+        WHERE id = $1
+        RETURNING id, steam_id64, persona_name, avatar_url, role, bio, location,
+                  is_disabled, created_at, last_login_at
+        ",
+    )
+    .bind(user.id)
+    .bind(bio)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(MeUser::from(updated)))
 }
 
 #[allow(clippy::too_many_lines)]
