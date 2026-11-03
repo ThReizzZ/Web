@@ -1,27 +1,26 @@
-const KZ_TIMER_API = "https://kztimerglobal.com/api/v2.0";
-const KZ_TIMER_TIMEOUT_MS = 15_000;
-const KZ_TIMER_REVALIDATE_SECONDS = 600;
+const KZ_API_BASE = (process.env.KZ_API_URL ?? "https://api.threi.cn").replace(/\/+$/, "");
+const KZ_API_TIMEOUT_MS = 5_000;
+const KZ_MAP_LIBRARY_TIMEOUT_MS = 2_500;
+const KZ_API_REVALIDATE_SECONDS = 600;
 const KZ_MAP_REVALIDATE_SECONDS = 3600;
-// Map tiers are cosmetic. Read them from our own download site (kept in sync
-// with KZ:GO by scripts/sync-map-tiers.sh), never block a page render for more
-// than a couple of seconds, and back off after a failure.
-const MAP_TIERS_URL = process.env.MAP_TIERS_URL ?? "https://files.threi.cn/csgo/map-tiers-v1.json";
-const MAP_TIERS_TIMEOUT_MS = 2_000;
-const MAP_TIERS_RETRY_MS = 60_000;
-// When KZ:GO itself is unreachable, fail fast for a while instead of making
-// every visitor wait for a full request timeout.
+// When the KZ API itself is unreachable, fail fast for a while instead of
+// making every visitor wait for a full request timeout.
 const KZ_API_BACKOFF_MS = 60_000;
-const KZ_RECORD_LIMIT = 9999;
-const KZ_MAP_LIMIT = 9999;
+const KZ_PAGE_SIZE = 200;
+const KZ_PAGE_LIMIT = 40;
 const KZ_RECENT_MAP_LIMIT = 8;
 const KZ_INCOMPLETE_PAGE_SIZE = 30;
 
-const STEAM_ID64_OFFSET = 76561197960265728n;
+// Static fallback for server cards: if api.threi.cn is unreachable, keep
+// showing tiers from the download-site snapshot.
+const MAP_TIERS_URL = process.env.MAP_TIERS_URL ?? "https://files.threi.cn/csgo/map-tiers-v1.json";
+const MAP_TIERS_TIMEOUT_MS = 2_000;
+const MAP_TIERS_RETRY_MS = 60_000;
 
 export const KZ_MODES = [
-  { value: "kz_timer", label: "KZT", name: "KZTimer", rankModeId: 200 },
-  { value: "kz_simple", label: "SKZ", name: "SimpleKZ", rankModeId: 201 },
-  { value: "kz_vanilla", label: "VNL", name: "Vanilla", rankModeId: 202 },
+  { value: "kz_timer", label: "KZT", name: "KZTimer" },
+  { value: "kz_simple", label: "SKZ", name: "SimpleKZ" },
+  { value: "kz_vanilla", label: "VNL", name: "Vanilla" },
 ] as const;
 
 export type KzMode = (typeof KZ_MODES)[number]["value"];
@@ -56,29 +55,57 @@ export function parseKzTier(value: string | string[] | undefined): number | null
   return Number.isInteger(tier) && tier >= 1 && tier <= 7 ? tier : null;
 }
 
-interface KzTimerRecord {
-  map_id: number;
-  map_name: string;
-  time: number;
-  points: number;
-  created_on: string;
-}
-
-interface KzTimerRank {
-  finishes: number;
-  points: number;
-  rating: number;
-}
-
-interface KzTimerMap {
-  id: number;
+interface KzApiMap {
+  id: string;
   name: string;
-  difficulty: number;
+  tier: number | null;
+  validated: boolean;
 }
 
-interface KzTimerRecordFilter {
-  map_id: number;
-  mode_id: number;
+interface KzApiMapList {
+  total: number;
+  items: KzApiMap[];
+}
+
+interface KzApiPb {
+  map_name: string;
+  course: number;
+  mode: number;
+  time_type: string;
+  time_ms: number;
+  points: number;
+  updated_at: string;
+  played_at: string;
+}
+
+interface KzApiPbList {
+  total: number;
+  items: KzApiPb[];
+}
+
+interface KzApiRankInfo {
+  name: string;
+}
+
+interface KzApiModeTotals {
+  mode: number;
+  points: number;
+  records: number;
+  rankInfo: KzApiRankInfo;
+}
+
+interface KzApiPlayerRank {
+  rankInfo: KzApiRankInfo;
+  modes: KzApiModeTotals[];
+}
+
+interface KzApiRanks {
+  players: KzApiPlayerRank[];
+}
+
+interface PlayerRankSummary {
+  totals: KzApiModeTotals | null;
+  rankName: string | null;
 }
 
 interface MutableMapProgress {
@@ -102,18 +129,139 @@ export interface KzMapProgress {
 export interface KzIncompleteMap {
   mapId: number;
   mapName: string;
-  difficulty: number;
+  difficulty: number | null;
 }
 
 export interface KzMapInfo {
   name: string;
-  difficulty: number;
+  difficulty: number | null;
+}
+
+export interface KzPlayerMaps {
+  uniqueMaps: number;
+  proMaps: number;
+  tpMaps: number;
+  totalRuns: number;
+  points: number | null;
+  rankName: string | null;
+  recentMaps: KzMapProgress[];
+  incompleteMaps: KzIncompleteMap[];
+  incompleteCount: number;
+  incompleteFilteredCount: number;
+  incompleteTier: number | null;
+  incompletePage: number;
+  incompletePageCount: number;
+  totalMapLibrary: number | null;
+}
+
+function modeToApiMode(mode: KzMode): number {
+  return mode === "kz_timer" ? 2 : mode === "kz_simple" ? 1 : 0;
+}
+
+function mapIdFromName(name: string): number {
+  let hash = 0;
+  for (let index = 0; index < name.length; index += 1) {
+    hash = (hash * 31 + name.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function normalizeTimestamp(value: string | null | undefined): string {
+  if (!value) {
+    return new Date(0).toISOString();
+  }
+  const parsed = new Date(value.endsWith("Z") ? value : `${value}Z`);
+  return Number.isNaN(parsed.getTime()) ? new Date(0).toISOString() : parsed.toISOString();
+}
+
+let kzApiRetryAt = 0;
+
+async function fetchKzApi<T>(
+  path: string,
+  timeoutMs: number,
+  revalidateSeconds: number,
+): Promise<T> {
+  if (kzApiRetryAt > Date.now()) {
+    throw new Error("KZ API is temporarily unavailable");
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${KZ_API_BASE}${path}`, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "ThRei/0.1 (+https://threi.cn)",
+      },
+      next: { revalidate: revalidateSeconds },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    kzApiRetryAt = Date.now() + KZ_API_BACKOFF_MS;
+    throw error;
+  }
+
+  if (response.status >= 500 || response.status === 429) {
+    kzApiRetryAt = Date.now() + KZ_API_BACKOFF_MS;
+  }
+  if (!response.ok) {
+    throw new Error(`KZ API request failed with ${response.status}`);
+  }
+  kzApiRetryAt = 0;
+  return (await response.json()) as T;
+}
+
+interface MapLibraryCache {
+  value: KzApiMap[];
+  expiresAt: number;
+}
+
+let mapLibraryCache: MapLibraryCache | null = null;
+let mapLibraryRequest: Promise<KzApiMap[]> | null = null;
+
+async function fetchKzMapLibrary(): Promise<KzApiMap[]> {
+  const now = Date.now();
+  if (mapLibraryCache && mapLibraryCache.expiresAt > now) {
+    return mapLibraryCache.value;
+  }
+  if (!mapLibraryRequest) {
+    mapLibraryRequest = (async () => {
+      const first = await fetchKzApi<KzApiMapList>(
+        `/api/v1/maps?validated=true&limit=${KZ_PAGE_SIZE}&offset=0`,
+        KZ_MAP_LIBRARY_TIMEOUT_MS,
+        KZ_MAP_REVALIDATE_SECONDS,
+      );
+      const total = Number.isFinite(first.total) ? first.total : first.items.length;
+      const pageCount = Math.min(KZ_PAGE_LIMIT, Math.max(1, Math.ceil(total / KZ_PAGE_SIZE)));
+      const rest = await Promise.all(
+        Array.from({ length: pageCount - 1 }, (_, index) =>
+          fetchKzApi<KzApiMapList>(
+            `/api/v1/maps?validated=true&limit=${KZ_PAGE_SIZE}&offset=${(index + 1) * KZ_PAGE_SIZE}`,
+            KZ_MAP_LIBRARY_TIMEOUT_MS,
+            KZ_MAP_REVALIDATE_SECONDS,
+          ),
+        ),
+      );
+      const value = [first, ...rest].flatMap((page) => page.items);
+      mapLibraryCache = {
+        value,
+        expiresAt: Date.now() + KZ_MAP_REVALIDATE_SECONDS * 1000,
+      };
+      return value;
+    })().finally(() => {
+      mapLibraryRequest = null;
+    });
+  }
+  return mapLibraryRequest;
 }
 
 interface MapInfoCache {
   value: Map<string, KzMapInfo>;
   expiresAt: number;
 }
+
+let mapInfoCache: MapInfoCache | null = null;
+let mapInfoRetryAt = 0;
+let mapInfoRequest: Promise<Map<string, KzMapInfo>> | null = null;
 
 async function fetchMapTierFile(): Promise<Map<string, KzMapInfo>> {
   const response = await fetch(MAP_TIERS_URL, {
@@ -135,10 +283,6 @@ async function fetchMapTierFile(): Promise<Map<string, KzMapInfo>> {
   return tiers;
 }
 
-let mapInfoCache: MapInfoCache | null = null;
-let mapInfoRetryAt = 0;
-let mapInfoRequest: Promise<Map<string, KzMapInfo>> | null = null;
-
 export async function fetchKzTimerMapInfo(): Promise<Map<string, KzMapInfo>> {
   const now = Date.now();
   if (mapInfoCache && mapInfoCache.expiresAt > now) {
@@ -148,7 +292,19 @@ export async function fetchKzTimerMapInfo(): Promise<Map<string, KzMapInfo>> {
     return mapInfoCache?.value ?? new Map();
   }
   if (!mapInfoRequest) {
-    mapInfoRequest = fetchMapTierFile()
+    mapInfoRequest = (async () => {
+      try {
+        const maps = await fetchKzMapLibrary();
+        return new Map(
+          maps.map((map) => [
+            map.name.trim().toLowerCase(),
+            { name: map.name, difficulty: map.tier },
+          ]),
+        );
+      } catch {
+        return fetchMapTierFile();
+      }
+    })()
       .then((value) => {
         mapInfoCache = {
           value,
@@ -172,175 +328,48 @@ export async function fetchKzTimerMapInfo(): Promise<Map<string, KzMapInfo>> {
   return mapInfoRequest;
 }
 
-export interface KzPlayerMaps {
-  uniqueMaps: number;
-  proMaps: number;
-  tpMaps: number;
-  totalRuns: number;
-  points: number | null;
-  rating: number | null;
-  recentMaps: KzMapProgress[];
-  incompleteMaps: KzIncompleteMap[];
-  incompleteCount: number;
-  incompleteFilteredCount: number;
-  incompleteTier: number | null;
-  incompletePage: number;
-  incompletePageCount: number;
-  totalMapLibrary: number | null;
+async function fetchPlayerPbs(steamId64: string, mode: KzMode): Promise<KzApiPb[]> {
+  const modeId = modeToApiMode(mode);
+  const base = `/api/v1/players/${encodeURIComponent(steamId64)}/pbs?mode=${modeId}&limit=${KZ_PAGE_SIZE}`;
+  const first = await fetchKzApi<KzApiPbList>(
+    `${base}&offset=0`,
+    KZ_API_TIMEOUT_MS,
+    KZ_API_REVALIDATE_SECONDS,
+  );
+  const total = Number.isFinite(first.total) ? first.total : first.items.length;
+  const pageCount = Math.min(KZ_PAGE_LIMIT, Math.max(1, Math.ceil(total / KZ_PAGE_SIZE)));
+  const rest = await Promise.all(
+    Array.from({ length: pageCount - 1 }, (_, index) =>
+      fetchKzApi<KzApiPbList>(
+        `${base}&offset=${(index + 1) * KZ_PAGE_SIZE}`,
+        KZ_API_TIMEOUT_MS,
+        KZ_API_REVALIDATE_SECONDS,
+      ),
+    ),
+  );
+  return [first, ...rest].flatMap((page) => page.items);
 }
 
-function steamId64ToSteamId2(steamId64: string): string {
-  const accountId = BigInt(steamId64) - STEAM_ID64_OFFSET;
-  return `STEAM_1:${accountId & 1n}:${accountId >> 1n}`;
+async function fetchPlayerRank(steamId64: string, mode: KzMode): Promise<PlayerRankSummary | null> {
+  try {
+    const data = await fetchKzApi<KzApiRanks>(
+      `/api/v1/game/ranks?steamids=${encodeURIComponent(steamId64)}`,
+      KZ_API_TIMEOUT_MS,
+      KZ_API_REVALIDATE_SECONDS,
+    );
+    const player = data.players?.[0];
+    const totals = player?.modes?.find((item) => item.mode === modeToApiMode(mode)) ?? null;
+    return {
+      totals,
+      rankName: totals?.rankInfo?.name ?? player?.rankInfo?.name ?? null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function kzgoProfileUrl(steamId64: string): string {
-  return `https://kzgo.eu/players/${steamId64ToSteamId2(steamId64)}`;
-}
-
-function normalizeTimestamp(value: string): string {
-  const parsed = new Date(value.endsWith("Z") ? value : `${value}Z`);
-  return Number.isNaN(parsed.getTime()) ? new Date(0).toISOString() : parsed.toISOString();
-}
-
-let kzApiRetryAt = 0;
-
-async function fetchKzTimer(
-  path: string,
-  timeoutMs: number,
-  revalidateSeconds: number,
-): Promise<Response> {
-  if (kzApiRetryAt > Date.now()) {
-    throw new Error("KZ:GO API is temporarily unavailable");
-  }
-
-  try {
-    const response = await fetch(`${KZ_TIMER_API}${path}`, {
-      headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
-      next: { revalidate: revalidateSeconds },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (response.status >= 500 || response.status === 429) {
-      kzApiRetryAt = Date.now() + KZ_API_BACKOFF_MS;
-    }
-    return response;
-  } catch (error) {
-    kzApiRetryAt = Date.now() + KZ_API_BACKOFF_MS;
-    throw error;
-  }
-}
-
-async function fetchKzTimerRecords(
-  steamId64: string,
-  hasTeleports: boolean,
-  mode: KzMode,
-): Promise<KzTimerRecord[]> {
-  const query = new URLSearchParams({
-    steamid64: steamId64,
-    modes_list_string: mode,
-    stage: "0",
-    tickrate: "128",
-    has_teleports: String(hasTeleports),
-    limit: String(KZ_RECORD_LIMIT),
-  });
-  const response = await fetchKzTimer(
-    `/records/top?${query.toString()}`,
-    KZ_TIMER_TIMEOUT_MS,
-    KZ_TIMER_REVALIDATE_SECONDS,
-  );
-  if (!response.ok) {
-    throw new Error(`KZ:GO records request failed with ${response.status}`);
-  }
-  return (await response.json()) as KzTimerRecord[];
-}
-
-async function fetchKzTimerRank(steamId64: string, mode: KzMode): Promise<KzTimerRank | null> {
-  const modeId = KZ_MODES.find((item) => item.value === mode)?.rankModeId;
-  if (!modeId) {
-    return null;
-  }
-  const query = new URLSearchParams({
-    steamid64s: steamId64,
-    mode_ids: String(modeId),
-  });
-  const response = await fetchKzTimer(
-    `/player_ranks?${query.toString()}`,
-    KZ_TIMER_TIMEOUT_MS,
-    KZ_TIMER_REVALIDATE_SECONDS,
-  );
-  if (!response.ok) {
-    throw new Error(`KZ:GO rank request failed with ${response.status}`);
-  }
-  const ranks = (await response.json()) as KzTimerRank[];
-  return ranks[0] ?? null;
-}
-
-async function fetchKzTimerMaps(): Promise<KzTimerMap[]> {
-  const query = new URLSearchParams({
-    is_validated: "true",
-    limit: String(KZ_MAP_LIMIT),
-  });
-  const response = await fetchKzTimer(
-    `/maps?${query.toString()}`,
-    KZ_TIMER_TIMEOUT_MS,
-    KZ_MAP_REVALIDATE_SECONDS,
-  );
-  if (!response.ok) {
-    throw new Error(`KZ:GO map library request failed with ${response.status}`);
-  }
-  return (await response.json()) as KzTimerMap[];
-}
-
-async function fetchKzTimerRecordFilters(mode: KzMode): Promise<KzTimerRecordFilter[]> {
-  const modeId = KZ_MODES.find((item) => item.value === mode)?.rankModeId;
-  if (!modeId) {
-    return [];
-  }
-  const query = new URLSearchParams({
-    mode_ids: String(modeId),
-    limit: String(KZ_MAP_LIMIT),
-  });
-  const response = await fetchKzTimer(
-    `/record_filters?${query.toString()}`,
-    KZ_TIMER_TIMEOUT_MS,
-    KZ_MAP_REVALIDATE_SECONDS,
-  );
-  if (!response.ok) {
-    throw new Error(`KZ:GO record filter request failed with ${response.status}`);
-  }
-  return (await response.json()) as KzTimerRecordFilter[];
-}
-
-function mergeRecords(
-  maps: Map<number, MutableMapProgress>,
-  records: KzTimerRecord[],
-  teleported: boolean,
-): void {
-  for (const record of records) {
-    let item = maps.get(record.map_id);
-    if (!item) {
-      item = {
-        mapId: record.map_id,
-        mapName: record.map_name,
-        proTime: null,
-        tpTime: null,
-        points: 0,
-        lastPlayedTimestamp: 0,
-      };
-      maps.set(record.map_id, item);
-    }
-
-    if (teleported) {
-      item.tpTime = item.tpTime === null ? record.time : Math.min(item.tpTime, record.time);
-    } else {
-      item.proTime = item.proTime === null ? record.time : Math.min(item.proTime, record.time);
-    }
-    item.points = Math.max(item.points, record.points);
-    const timestamp = Date.parse(normalizeTimestamp(record.created_on));
-    if (timestamp > item.lastPlayedTimestamp) {
-      item.lastPlayedTimestamp = timestamp;
-    }
-  }
+  return `https://kz.threi.cn/players/${encodeURIComponent(steamId64)}`;
 }
 
 export async function fetchKzgoPlayerMaps(
@@ -355,73 +384,58 @@ export async function fetchKzgoPlayerMaps(
   }
 
   try {
-    const [rankResult, proResult, tpResult, mapResult, filterResult] = await Promise.allSettled([
-      fetchKzTimerRank(steamId64, mode),
-      fetchKzTimerRecords(steamId64, false, mode),
-      fetchKzTimerRecords(steamId64, true, mode),
-      view === "incomplete" ? fetchKzTimerMaps() : Promise.resolve(null),
-      view === "incomplete" ? fetchKzTimerRecordFilters(mode) : Promise.resolve(null),
+    const [pbsResult, rankResult, libraryResult] = await Promise.allSettled([
+      fetchPlayerPbs(steamId64, mode),
+      fetchPlayerRank(steamId64, mode),
+      fetchKzMapLibrary(),
     ]);
-    if (proResult.status === "rejected" && tpResult.status === "rejected") {
+
+    if (pbsResult.status === "rejected") {
+      return null;
+    }
+    if (view === "incomplete" && libraryResult.status === "rejected") {
       return null;
     }
 
+    const pbs = pbsResult.value.filter((pb) => Number(pb.course) === 0);
     const rank = rankResult.status === "fulfilled" ? rankResult.value : null;
-    const proRecords = proResult.status === "fulfilled" ? proResult.value : [];
-    const tpRecords = tpResult.status === "fulfilled" ? tpResult.value : [];
+    const library = libraryResult.status === "fulfilled" ? libraryResult.value : [];
+    const idByName = new Map(library.map((map) => [map.name.trim().toLowerCase(), Number(map.id)]));
 
-    const maps = new Map<number, MutableMapProgress>();
-    mergeRecords(maps, proRecords, false);
-    mergeRecords(maps, tpRecords, true);
-
-    let incompleteMaps: KzIncompleteMap[] = [];
-    let incompleteCount = 0;
-    let incompleteFilteredCount = 0;
-    let incompleteTier: number | null = null;
-    let incompletePage = 1;
-    let incompletePageCount = 1;
-    let totalMapLibrary: number | null = null;
-    if (view === "incomplete") {
-      if (
-        mapResult.status !== "fulfilled" ||
-        mapResult.value === null ||
-        filterResult.status !== "fulfilled" ||
-        filterResult.value === null
-      ) {
-        return null;
+    const maps = new Map<string, MutableMapProgress>();
+    for (const pb of pbs) {
+      const mapName = pb.map_name?.trim();
+      if (!mapName) {
+        continue;
       }
-      incompleteTier = tier;
-      const modeMapIds = new Set(
-        filterResult.value.map((filter) => filter.map_id).filter((mapId) => mapId > 0),
-      );
-      const library = mapResult.value.filter((map) => modeMapIds.has(map.id));
-      const completedIds = new Set(maps.keys());
-      const allIncomplete = library
-        .filter((map) => !completedIds.has(map.id))
-        .sort(
-          (left, right) =>
-            left.difficulty - right.difficulty ||
-            left.name.localeCompare(right.name, "en", { sensitivity: "base" }),
-        )
-        .map((map) => ({
-          mapId: map.id,
-          mapName: map.name,
-          difficulty: map.difficulty,
-        }));
-      incompleteCount = allIncomplete.length;
-      const filtered =
-        incompleteTier === null
-          ? allIncomplete
-          : allIncomplete.filter((map) => map.difficulty === incompleteTier);
-      incompleteFilteredCount = filtered.length;
-      incompletePageCount = Math.max(
-        1,
-        Math.ceil(incompleteFilteredCount / KZ_INCOMPLETE_PAGE_SIZE),
-      );
-      incompletePage = Math.min(Math.max(page, 1), incompletePageCount);
-      const start = (incompletePage - 1) * KZ_INCOMPLETE_PAGE_SIZE;
-      incompleteMaps = filtered.slice(start, start + KZ_INCOMPLETE_PAGE_SIZE);
-      totalMapLibrary = library.length;
+      const key = mapName.toLowerCase();
+      let item = maps.get(key);
+      if (!item) {
+        item = {
+          mapId: idByName.get(key) ?? mapIdFromName(mapName),
+          mapName,
+          proTime: null,
+          tpTime: null,
+          points: 0,
+          lastPlayedTimestamp: 0,
+        };
+        maps.set(key, item);
+      }
+
+      const time = Number(pb.time_ms) / 1000;
+      if (Number.isFinite(time)) {
+        if (String(pb.time_type).toLowerCase() === "tp") {
+          item.tpTime = item.tpTime === null ? time : Math.min(item.tpTime, time);
+        } else {
+          item.proTime = item.proTime === null ? time : Math.min(item.proTime, time);
+        }
+      }
+      item.points = Math.max(item.points, Number(pb.points) || 0);
+
+      const timestamp = Date.parse(normalizeTimestamp(pb.updated_at || pb.played_at));
+      if (Number.isFinite(timestamp) && timestamp > item.lastPlayedTimestamp) {
+        item.lastPlayedTimestamp = timestamp;
+      }
     }
 
     const values = [...maps.values()];
@@ -434,16 +448,50 @@ export async function fetchKzgoPlayerMaps(
         proTime: map.proTime,
         tpTime: map.tpTime,
         points: map.points,
-        lastPlayedAt: new Date(map.lastPlayedTimestamp).toISOString(),
+        lastPlayedAt: new Date(map.lastPlayedTimestamp || 0).toISOString(),
       }));
+
+    let incompleteMaps: KzIncompleteMap[] = [];
+    let incompleteCount = 0;
+    let incompleteFilteredCount = 0;
+    let incompleteTier: number | null = null;
+    let incompletePage = 1;
+    let incompletePageCount = 1;
+    let totalMapLibrary: number | null = null;
+
+    if (view === "incomplete") {
+      const completed = new Set(maps.keys());
+      const allIncomplete = library
+        .filter((map) => !completed.has(map.name.trim().toLowerCase()))
+        .sort(
+          (left, right) =>
+            (left.tier ?? 99) - (right.tier ?? 99) ||
+            left.name.localeCompare(right.name, "en", { sensitivity: "base" }),
+        );
+      incompleteTier = tier;
+      incompleteCount = allIncomplete.length;
+      totalMapLibrary = library.length;
+
+      const filtered =
+        tier === null ? allIncomplete : allIncomplete.filter((map) => map.tier === tier);
+      incompleteFilteredCount = filtered.length;
+      incompletePageCount = Math.max(1, Math.ceil(filtered.length / KZ_INCOMPLETE_PAGE_SIZE));
+      incompletePage = Math.min(Math.max(page, 1), incompletePageCount);
+      const start = (incompletePage - 1) * KZ_INCOMPLETE_PAGE_SIZE;
+      incompleteMaps = filtered.slice(start, start + KZ_INCOMPLETE_PAGE_SIZE).map((map) => ({
+        mapId: Number(map.id),
+        mapName: map.name,
+        difficulty: map.tier,
+      }));
+    }
 
     return {
       uniqueMaps: values.length,
       proMaps: values.filter((map) => map.proTime !== null).length,
       tpMaps: values.filter((map) => map.tpTime !== null).length,
-      totalRuns: rank?.finishes ?? proRecords.length + tpRecords.length,
-      points: rank?.points ?? null,
-      rating: rank?.rating ?? null,
+      totalRuns: rank?.totals ? Number(rank.totals.records) : pbs.length,
+      points: rank?.totals ? Number(rank.totals.points) : null,
+      rankName: rank?.rankName ?? null,
       recentMaps,
       incompleteMaps,
       incompleteCount,

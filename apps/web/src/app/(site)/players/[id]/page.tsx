@@ -153,7 +153,7 @@ export default async function PlayerPage({ params, searchParams }: PlayerPagePro
               </Button>
               <Button asChild variant="outline" size="sm">
                 <a href={kzProfileUrl} target="_blank" rel="noopener noreferrer">
-                  KZ:GO 档案
+                  KZ 档案
                   <ExternalLink aria-hidden="true" />
                 </a>
               </Button>
@@ -211,7 +211,7 @@ export default async function PlayerPage({ params, searchParams }: PlayerPagePro
           </Suspense>
 
           <p className="text-xs leading-relaxed text-muted-foreground">
-            KZ 数据来自 KZ:GO 的 {modeName} 模式；未安装计时器的服务器或未上传的记录不会显示。
+            KZ 数据来自 ThRei KZ 的 {modeName} 模式；未安装计时器的服务器或未上传的记录不会显示。
           </p>
         </div>
 

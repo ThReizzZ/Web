@@ -57,11 +57,11 @@ const noStore = { cache: "no-store" as const };
 
 export async function fetchServers(client: ApiClient): Promise<KzServer[]> {
   const servers = await client.get<KzServer[]>("/api/v1/servers", noStore);
-  let mapInfo = new Map<string, { name: string; difficulty: number }>();
+  let mapInfo = new Map<string, { name: string; difficulty: number | null }>();
   try {
     mapInfo = await fetchKzTimerMapInfo();
   } catch {
-    // The directory still works when KZ:GO is temporarily unreachable.
+    // The directory still works when the KZ API is temporarily unreachable.
   }
 
   return servers.map((server) => {

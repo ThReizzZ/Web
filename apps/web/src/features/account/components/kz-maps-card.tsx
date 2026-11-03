@@ -80,14 +80,16 @@ export async function KzMapsCard({
               <MapIcon className="size-4 text-primary" aria-hidden="true" />
               KZ 地图记录
             </CardTitle>
-            <CardDescription>暂时无法从 KZ:GO 获取 {modeName} 记录，请稍后刷新。</CardDescription>
+            <CardDescription>
+              暂时无法从 KZ 数据服务获取 {modeName} 记录，请稍后刷新。
+            </CardDescription>
           </div>
           <KzSelectors mode={mode} view={view} tier={tier} basePath={basePath} />
         </CardHeader>
         <CardContent>
           <Button asChild variant="outline" size="sm">
             <a href={profileUrl} target="_blank" rel="noopener noreferrer">
-              打开 KZ:GO 档案
+              打开 KZ 档案
               <ExternalLink aria-hidden="true" />
             </a>
           </Button>
@@ -250,7 +252,7 @@ function KzMapsCardContent({
                   : `未完成 ${data.incompleteCount.toLocaleString("zh-CN")} 张 · 地图库共 ${(data.totalMapLibrary ?? 0).toLocaleString("zh-CN")} 张`
                 : `已过 ${data.uniqueMaps.toLocaleString("zh-CN")} 张地图 · 总完成 ${data.totalRuns.toLocaleString("zh-CN")} 次`}
             </CardDescription>
-            {data.points !== null || data.rating !== null ? (
+            {data.points !== null || data.rankName !== null ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 {data.points !== null ? (
                   <span>
@@ -260,11 +262,11 @@ function KzMapsCardContent({
                     </span>
                   </span>
                 ) : null}
-                {data.rating !== null ? (
+                {data.rankName !== null ? (
                   <span>
-                    评级{" "}
+                    段位{" "}
                     <span className="font-mono text-sm font-medium text-foreground">
-                      {data.rating.toFixed(2)}
+                      {data.rankName}
                     </span>
                   </span>
                 ) : null}
@@ -273,7 +275,7 @@ function KzMapsCardContent({
           </div>
           <Button asChild variant="outline" size="sm">
             <a href={profileUrl} target="_blank" rel="noopener noreferrer">
-              KZ:GO 档案
+              KZ 档案
               <ExternalLink aria-hidden="true" />
             </a>
           </Button>
@@ -303,9 +305,11 @@ function KzMapsCardContent({
                         <KzMapThumbnail mapName={map.mapName} />
                         <p className="truncate font-mono text-xs sm:text-sm">{map.mapName}</p>
                       </div>
-                      <Badge variant="outline" className="shrink-0">
-                        Tier {map.difficulty}
-                      </Badge>
+                      {map.difficulty !== null ? (
+                        <Badge variant="outline" className="shrink-0">
+                          Tier {map.difficulty}
+                        </Badge>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -414,7 +418,7 @@ function KzMapsCardContent({
           </>
         ) : (
           <p className="rounded-xl border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
-            还没有 KZ:GO 地图完成记录。
+            还没有 KZ 地图完成记录。
           </p>
         )}
       </CardContent>
@@ -440,7 +444,7 @@ export function KzMapsCardSkeleton({
           <MapIcon className="size-4 text-primary" aria-hidden="true" />
           KZ 地图记录
         </CardTitle>
-        <CardDescription>正在从 KZ:GO 读取地图记录…</CardDescription>
+        <CardDescription>正在从 KZ 数据服务读取地图记录…</CardDescription>
         <KzSelectors mode={mode} view={view} tier={tier} basePath={basePath} />
       </CardHeader>
       <CardContent>
