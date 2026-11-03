@@ -40,6 +40,13 @@ pub struct AuthUser {
     pub last_login_at: DateTime<Utc>,
 }
 
+#[derive(Debug, FromRow)]
+struct SessionUser {
+    #[sqlx(flatten)]
+    user: AuthUser,
+    session_ip: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeUser {
@@ -424,22 +431,45 @@ pub async fn optional_user(
     let Some(token) = session_token(headers) else {
         return Ok(None);
     };
+    let token_hash = hash_token(&token);
 
-    let user = sqlx::query_as::<_, AuthUser>(
+    let session = sqlx::query_as::<_, SessionUser>(
         r"
         SELECT u.id, u.steam_id64, u.persona_name, u.avatar_url, u.role, u.bio,
-               u.location, u.is_disabled, u.created_at, u.last_login_at
+               u.location, u.is_disabled, u.created_at, u.last_login_at,
+               s.ip_address AS session_ip
         FROM sessions s
         JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = $1 AND s.expires_at > now()
           AND u.is_disabled = false
         ",
     )
-    .bind(hash_token(&token))
+    .bind(&token_hash)
     .fetch_optional(&state.db)
     .await?;
 
-    Ok(user)
+    let Some(SessionUser { user, session_ip }) = session else {
+        return Ok(None);
+    };
+
+    // Long-lived sessions never hit the Steam callback again, so refresh the
+    // last known IP on any authenticated request when it actually changes.
+    if let Some(ip) = client_ip(headers)
+        && session_ip.as_deref() != Some(ip.as_str())
+    {
+        sqlx::query("UPDATE sessions SET ip_address = $2 WHERE token_hash = $1")
+            .bind(&token_hash)
+            .bind(&ip)
+            .execute(&state.db)
+            .await?;
+        sqlx::query("UPDATE users SET last_login_ip = $2, updated_at = now() WHERE id = $1")
+            .bind(user.id)
+            .bind(&ip)
+            .execute(&state.db)
+            .await?;
+    }
+
+    Ok(Some(user))
 }
 
 pub async fn require_user(state: &AppState, headers: &HeaderMap) -> Result<AuthUser, AppError> {
@@ -458,43 +488,66 @@ pub async fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<Auth
 
 /// Best-effort client IP from the reverse proxy headers.
 ///
-/// Caddy sits in front of Nginx in production, so Nginx's `X-Real-IP` is
-/// `127.0.0.1`; the original client is the first non-loopback entry of
-/// `X-Forwarded-For`. When the API is reached directly through Nginx,
-/// `X-Real-IP` is the useful value.
+/// The production chain is `edge proxy (Caddy/...) -> Nginx -> API`. Nginx
+/// overwrites `X-Real-IP` with `$remote_addr`, which is the edge proxy's
+/// address rather than the browser's. When the edge proxy runs on the host and
+/// reaches Nginx through a published Docker port, that address is the Docker
+/// bridge gateway (for example `172.19.0.1`).
+///
+/// Nginx appends the same address to `X-Forwarded-For`, so the original client
+/// is the right-most public entry of that header. Walking from the right also
+/// ignores spoofed leading entries. Private, loopback and link-local addresses
+/// are treated as proxy hops; they are still returned as a fallback when the
+/// request only contains internal addresses (for example a LAN client).
 pub fn client_ip(headers: &HeaderMap) -> Option<String> {
     fn parse(value: &str) -> Option<IpAddr> {
-        value.trim().parse().ok()
+        value
+            .trim()
+            .parse()
+            .ok()
+            .map(|ip: IpAddr| ip.to_canonical())
     }
 
-    if let Some(ip) = headers
-        .get("x-real-ip")
-        .and_then(|value| value.to_str().ok())
-        .and_then(parse)
-        && !ip.is_loopback()
-    {
-        return Some(ip.to_string());
+    fn is_internal(ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(ip) => {
+                ip.is_loopback()
+                    || ip.is_private()
+                    || ip.is_link_local()
+                    || ip.is_unspecified()
+                    || ip.is_broadcast()
+                    || ip.is_multicast()
+            }
+            IpAddr::V6(ip) => {
+                ip.is_loopback()
+                    || ip.is_unspecified()
+                    || ip.is_unique_local()
+                    || ip.is_unicast_link_local()
+                    || ip.is_multicast()
+            }
+        }
     }
 
     if let Some(value) = headers
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
     {
-        let mut forwarded = None;
+        let mut client = None;
         let mut fallback = None;
         for part in value.split(',') {
             if let Some(ip) = parse(part) {
-                if ip.is_loopback() {
+                if is_internal(ip) {
+                    // The real client is the first address in the chain; keep it
+                    // when no public address is present.
                     fallback.get_or_insert(ip);
                 } else {
-                    // Use the last non-loopback entry: Caddy is the edge proxy
-                    // and Nginx appends its own loopback address. This also
-                    // ignores a spoofed leading entry.
-                    forwarded = Some(ip);
+                    // Use the last public entry: Nginx appends the address that
+                    // connected to it (the edge proxy / Docker gateway).
+                    client = Some(ip);
                 }
             }
         }
-        if let Some(ip) = forwarded.or(fallback) {
+        if let Some(ip) = client.or(fallback) {
             return Some(ip.to_string());
         }
     }
@@ -503,6 +556,7 @@ pub fn client_ip(headers: &HeaderMap) -> Option<String> {
         .get("x-real-ip")
         .and_then(|value| value.to_str().ok())
         .and_then(parse)
+        .filter(|ip| !ip.is_loopback())
         .map(|ip| ip.to_string())
 }
 
@@ -575,12 +629,12 @@ mod tests {
     }
 
     #[test]
-    fn client_ip_prefers_public_real_ip() {
+    fn client_ip_skips_docker_gateway() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-real-ip", HeaderValue::from_static("203.0.113.10"));
+        headers.insert("x-real-ip", HeaderValue::from_static("172.19.0.1"));
         headers.insert(
             "x-forwarded-for",
-            HeaderValue::from_static("198.51.100.2, 127.0.0.1"),
+            HeaderValue::from_static("203.0.113.10, 172.19.0.1"),
         );
         assert_eq!(client_ip(&headers).as_deref(), Some("203.0.113.10"));
     }
@@ -592,6 +646,43 @@ mod tests {
         headers.insert(
             "x-forwarded-for",
             HeaderValue::from_static("198.51.100.2, 203.0.113.10, 127.0.0.1"),
+        );
+        assert_eq!(client_ip(&headers).as_deref(), Some("203.0.113.10"));
+    }
+
+    #[test]
+    fn client_ip_ignores_spoofed_leading_entry() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.99, 203.0.113.10, 172.19.0.1"),
+        );
+        assert_eq!(client_ip(&headers).as_deref(), Some("203.0.113.10"));
+    }
+
+    #[test]
+    fn client_ip_falls_back_to_internal_client() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("192.168.1.20, 172.19.0.1"),
+        );
+        assert_eq!(client_ip(&headers).as_deref(), Some("192.168.1.20"));
+    }
+
+    #[test]
+    fn client_ip_falls_back_to_real_ip_without_forwarded_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("198.51.100.2"));
+        assert_eq!(client_ip(&headers).as_deref(), Some("198.51.100.2"));
+    }
+
+    #[test]
+    fn client_ip_normalizes_ipv4_mapped_addresses() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("::ffff:203.0.113.10, ::ffff:172.19.0.1"),
         );
         assert_eq!(client_ip(&headers).as_deref(), Some("203.0.113.10"));
     }

@@ -17,6 +17,53 @@
 
 ---
 
+## 2026年11月03日 14时12分21秒 修复登录玩家最近登录 IP 被记录为 Docker 网关
+
+### 背景
+
+管理面板「登录玩家」中全部玩家的最近登录 IP 都显示为 `172.19.0.1`。该地址是宿主机反向代理
+通过 Docker 发布端口访问 Nginx 时的网桥网关，不是玩家的真实公网 IP。
+
+### 原因
+
+`client_ip` 优先采用非回环 `X-Real-IP`。Nginx 的 `X-Real-IP` 由 `$remote_addr` 生成，前置
+代理在本机时该值就是 Docker 网关；同时 Nginx 又把同一地址追加到 `X-Forwarded-For`，旧逻辑
+取「最后一个非回环项」仍会落在网关上。
+
+### 变更内容
+
+- `client_ip` 改为优先解析 `X-Forwarded-For`，从右向左取最后一个公网地址，跳过私网、回环、
+  链路本地、未指定、广播和组播地址；这些地址视为代理跳转地址。
+- 没有公网地址时回退到链首的内部地址；只有缺少 `X-Forwarded-For` 时才使用 `X-Real-IP`，
+  并继续忽略回环地址。
+- IPv4-mapped IPv6 地址（`::ffff:...`）先规范化为 IPv4。
+- 已登录玩家不再依赖重新登录：任意认证请求发现当前 IP 与会话 IP 不同时，同步更新
+  `sessions.ip_address` 和 `users.last_login_ip`；IP 未变化时不写数据库。
+- Next.js 服务端 API 客户端转发 `X-Forwarded-For` / `X-Real-IP`，使服务端渲染页面也能刷新
+  会话 IP。
+- 新增单元测试覆盖 Docker 网关、伪造首项、内部地址回退、仅 `X-Real-IP` 和 IPv4-mapped 地址。
+
+### 涉及文件
+
+- `services/api/src/modules/auth/mod.rs`
+- `apps/web/src/lib/api/server.ts`
+- `docs/DEVELOPMENT.md`
+
+### 数据库与 API 变化
+
+- 无数据库结构或 API 契约变化。
+- 修复后的 IP 会在玩家下一次 Steam 登录或下一次已登录请求时写入 `users.last_login_ip`
+  和 `sessions.ip_address`；历史 `172.19.0.1` 无法还原为真实 IP。
+
+### 测试与结果
+
+- `cargo fmt --all -- --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：通过，54 个单元测试 + 15 个 HTTP 合约测试。
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+
+---
+
 ## 2026年10月28日 02时35分17秒 取消 basebans 检测并固定接管命令（1.8.1）
 
 ### 背景
