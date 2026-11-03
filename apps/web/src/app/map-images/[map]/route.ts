@@ -5,6 +5,7 @@ const CACHE_SECONDS = 86_400;
 function upstreamUrls(mapName: string): string[] {
   const encoded = encodeURIComponent(mapName);
   return [
+    `https://files.threi.cn/csgo/map-images-v1/${encoded}.jpg`,
     `https://raw.githubusercontent.com/KZGlobalTeam/map-images/public/mediums/${encoded}.jpg`,
     `https://cdn.jsdelivr.net/gh/KZGlobalTeam/map-images@public/mediums/${encoded}.jpg`,
   ];

@@ -39,7 +39,12 @@ function KzMapThumbnail({ mapName }: { mapName: string }) {
   return (
     <div className="relative h-12 w-20 shrink-0 overflow-hidden rounded-md border bg-slate-900">
       {imageSrc ? (
-        <ServerMapImage src={imageSrc} fallbackSrc={fallbackSrc} alt={`${mapName} 地图预览`} />
+        <ServerMapImage
+          src={imageSrc}
+          fallbackSrc={fallbackSrc}
+          alt={`${mapName} 地图预览`}
+          emptyLabel={null}
+        />
       ) : (
         <span className="grid size-full place-items-center text-[10px] text-white/50">KZ</span>
       )}

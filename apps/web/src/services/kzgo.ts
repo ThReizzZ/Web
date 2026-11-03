@@ -2,6 +2,15 @@ const KZ_TIMER_API = "https://kztimerglobal.com/api/v2.0";
 const KZ_TIMER_TIMEOUT_MS = 15_000;
 const KZ_TIMER_REVALIDATE_SECONDS = 600;
 const KZ_MAP_REVALIDATE_SECONDS = 3600;
+// Map tiers are cosmetic. Read them from our own download site (kept in sync
+// with KZ:GO by scripts/sync-map-tiers.sh), never block a page render for more
+// than a couple of seconds, and back off after a failure.
+const MAP_TIERS_URL = process.env.MAP_TIERS_URL ?? "https://files.threi.cn/csgo/map-tiers-v1.json";
+const MAP_TIERS_TIMEOUT_MS = 2_000;
+const MAP_TIERS_RETRY_MS = 60_000;
+// When KZ:GO itself is unreachable, fail fast for a while instead of making
+// every visitor wait for a full request timeout.
+const KZ_API_BACKOFF_MS = 60_000;
 const KZ_RECORD_LIMIT = 9999;
 const KZ_MAP_LIMIT = 9999;
 const KZ_RECENT_MAP_LIMIT = 8;
@@ -101,14 +110,66 @@ export interface KzMapInfo {
   difficulty: number;
 }
 
+interface MapInfoCache {
+  value: Map<string, KzMapInfo>;
+  expiresAt: number;
+}
+
+async function fetchMapTierFile(): Promise<Map<string, KzMapInfo>> {
+  const response = await fetch(MAP_TIERS_URL, {
+    headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
+    next: { revalidate: KZ_MAP_REVALIDATE_SECONDS },
+    signal: AbortSignal.timeout(MAP_TIERS_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Map tier index request failed with ${response.status}`);
+  }
+
+  const data = (await response.json()) as Record<string, unknown>;
+  const tiers = new Map<string, KzMapInfo>();
+  for (const [name, tier] of Object.entries(data)) {
+    if (typeof tier === "number" && Number.isInteger(tier)) {
+      tiers.set(name, { name, difficulty: tier });
+    }
+  }
+  return tiers;
+}
+
+let mapInfoCache: MapInfoCache | null = null;
+let mapInfoRetryAt = 0;
+let mapInfoRequest: Promise<Map<string, KzMapInfo>> | null = null;
+
 export async function fetchKzTimerMapInfo(): Promise<Map<string, KzMapInfo>> {
-  const maps = await fetchKzTimerMaps();
-  return new Map(
-    maps.map((map) => [
-      map.name.trim().toLowerCase(),
-      { name: map.name, difficulty: map.difficulty },
-    ]),
-  );
+  const now = Date.now();
+  if (mapInfoCache && mapInfoCache.expiresAt > now) {
+    return mapInfoCache.value;
+  }
+  if (mapInfoRetryAt > now) {
+    return mapInfoCache?.value ?? new Map();
+  }
+  if (!mapInfoRequest) {
+    mapInfoRequest = fetchMapTierFile()
+      .then((value) => {
+        mapInfoCache = {
+          value,
+          expiresAt: Date.now() + KZ_MAP_REVALIDATE_SECONDS * 1000,
+        };
+        mapInfoRetryAt = 0;
+        return value;
+      })
+      .catch((error: unknown) => {
+        mapInfoRetryAt = Date.now() + MAP_TIERS_RETRY_MS;
+        if (mapInfoCache) {
+          // Prefer stale tiers over failing the whole page.
+          return mapInfoCache.value;
+        }
+        throw error;
+      })
+      .finally(() => {
+        mapInfoRequest = null;
+      });
+  }
+  return mapInfoRequest;
 }
 
 export interface KzPlayerMaps {
@@ -142,6 +203,33 @@ function normalizeTimestamp(value: string): string {
   return Number.isNaN(parsed.getTime()) ? new Date(0).toISOString() : parsed.toISOString();
 }
 
+let kzApiRetryAt = 0;
+
+async function fetchKzTimer(
+  path: string,
+  timeoutMs: number,
+  revalidateSeconds: number,
+): Promise<Response> {
+  if (kzApiRetryAt > Date.now()) {
+    throw new Error("KZ:GO API is temporarily unavailable");
+  }
+
+  try {
+    const response = await fetch(`${KZ_TIMER_API}${path}`, {
+      headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
+      next: { revalidate: revalidateSeconds },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (response.status >= 500 || response.status === 429) {
+      kzApiRetryAt = Date.now() + KZ_API_BACKOFF_MS;
+    }
+    return response;
+  } catch (error) {
+    kzApiRetryAt = Date.now() + KZ_API_BACKOFF_MS;
+    throw error;
+  }
+}
+
 async function fetchKzTimerRecords(
   steamId64: string,
   hasTeleports: boolean,
@@ -155,11 +243,11 @@ async function fetchKzTimerRecords(
     has_teleports: String(hasTeleports),
     limit: String(KZ_RECORD_LIMIT),
   });
-  const response = await fetch(`${KZ_TIMER_API}/records/top?${query.toString()}`, {
-    headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
-    next: { revalidate: KZ_TIMER_REVALIDATE_SECONDS },
-    signal: AbortSignal.timeout(KZ_TIMER_TIMEOUT_MS),
-  });
+  const response = await fetchKzTimer(
+    `/records/top?${query.toString()}`,
+    KZ_TIMER_TIMEOUT_MS,
+    KZ_TIMER_REVALIDATE_SECONDS,
+  );
   if (!response.ok) {
     throw new Error(`KZ:GO records request failed with ${response.status}`);
   }
@@ -175,11 +263,11 @@ async function fetchKzTimerRank(steamId64: string, mode: KzMode): Promise<KzTime
     steamid64s: steamId64,
     mode_ids: String(modeId),
   });
-  const response = await fetch(`${KZ_TIMER_API}/player_ranks?${query.toString()}`, {
-    headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
-    next: { revalidate: KZ_TIMER_REVALIDATE_SECONDS },
-    signal: AbortSignal.timeout(KZ_TIMER_TIMEOUT_MS),
-  });
+  const response = await fetchKzTimer(
+    `/player_ranks?${query.toString()}`,
+    KZ_TIMER_TIMEOUT_MS,
+    KZ_TIMER_REVALIDATE_SECONDS,
+  );
   if (!response.ok) {
     throw new Error(`KZ:GO rank request failed with ${response.status}`);
   }
@@ -192,11 +280,11 @@ async function fetchKzTimerMaps(): Promise<KzTimerMap[]> {
     is_validated: "true",
     limit: String(KZ_MAP_LIMIT),
   });
-  const response = await fetch(`${KZ_TIMER_API}/maps?${query.toString()}`, {
-    headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
-    next: { revalidate: KZ_MAP_REVALIDATE_SECONDS },
-    signal: AbortSignal.timeout(KZ_TIMER_TIMEOUT_MS),
-  });
+  const response = await fetchKzTimer(
+    `/maps?${query.toString()}`,
+    KZ_TIMER_TIMEOUT_MS,
+    KZ_MAP_REVALIDATE_SECONDS,
+  );
   if (!response.ok) {
     throw new Error(`KZ:GO map library request failed with ${response.status}`);
   }
@@ -212,11 +300,11 @@ async function fetchKzTimerRecordFilters(mode: KzMode): Promise<KzTimerRecordFil
     mode_ids: String(modeId),
     limit: String(KZ_MAP_LIMIT),
   });
-  const response = await fetch(`${KZ_TIMER_API}/record_filters?${query.toString()}`, {
-    headers: { "User-Agent": "ThRei/0.1 (+https://threi.cn)" },
-    next: { revalidate: KZ_MAP_REVALIDATE_SECONDS },
-    signal: AbortSignal.timeout(KZ_TIMER_TIMEOUT_MS),
-  });
+  const response = await fetchKzTimer(
+    `/record_filters?${query.toString()}`,
+    KZ_TIMER_TIMEOUT_MS,
+    KZ_MAP_REVALIDATE_SECONDS,
+  );
   if (!response.ok) {
     throw new Error(`KZ:GO record filter request failed with ${response.status}`);
   }

@@ -56,6 +56,7 @@ export default async function ServersPage() {
           alt=""
           loading="eager"
           className="scale-105 opacity-55"
+          showEmptyState={false}
         />
         <div
           aria-hidden="true"

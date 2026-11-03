@@ -66,6 +66,7 @@ export default async function HomePage() {
             alt=""
             loading="eager"
             className="scale-105 opacity-30"
+            showEmptyState={false}
           />
         </div>
         <div
