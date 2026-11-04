@@ -10,6 +10,7 @@ export const siteConfig = {
     { title: "论坛", href: "/forum" },
     { title: "服务器", href: "/servers" },
     { title: "下载站", href: "https://cdn.threi.cn/csgo/", external: true },
+    { title: "记录查询", href: "https://kz.threi.cn/", external: true },
     { title: "社区玩家", href: "/players" },
     { title: "加入我们", href: qqGroupUrl, external: true },
   ],
