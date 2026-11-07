@@ -82,7 +82,7 @@ export default async function AdminOverviewPage() {
         </div>
       </header>
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {statCards.map((card) => {
           const Icon = card.icon;
           return (
@@ -103,7 +103,7 @@ export default async function AdminOverviewPage() {
         })}
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         <QuickAction
           href="/admin/admins"
           icon={UserCog}

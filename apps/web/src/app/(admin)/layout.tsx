@@ -39,7 +39,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     <ToastProvider>
       <div className="flex min-h-dvh flex-col bg-muted/25">
         <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur">
-          <div className="mx-auto flex min-h-16 max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex min-h-16 w-full flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8 2xl:px-10">
             <div className="flex items-center gap-3">
               <Brand />
               <Badge variant="outline">管理面板</Badge>
@@ -58,19 +58,19 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               </Button>
             </div>
           </div>
-          <div className="mx-auto max-w-7xl border-t px-4 py-2 sm:px-6 lg:hidden lg:px-8">
+          <div className="w-full border-t px-4 py-2 sm:px-6 lg:hidden lg:px-8">
             <AdminNav className="flex flex-wrap gap-1 pb-1" />
           </div>
         </header>
 
-        <div className="mx-auto flex w-full max-w-7xl flex-1 gap-8 px-4 py-8 sm:px-6 lg:px-8">
-          <aside className="hidden w-56 shrink-0 lg:block">
+        <div className="flex w-full flex-1 gap-6 px-4 py-6 sm:px-6 lg:px-8 2xl:gap-8 2xl:px-10">
+          <aside className="hidden w-56 shrink-0 xl:block 2xl:w-60">
             <div className="sticky top-24 rounded-xl border bg-background p-3 shadow-sm">
               <AdminNav />
             </div>
           </aside>
 
-          <main id="main-content" className="max-w-full min-w-0 flex-1 space-y-6 overflow-x-hidden">
+          <main id="main-content" className="min-w-0 flex-1 space-y-6">
             {children}
           </main>
         </div>

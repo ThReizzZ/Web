@@ -266,7 +266,7 @@ export function PlayerDetailManager({ initialSteamId = "" }: { initialSteamId?: 
             }}
           />
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8">
             <StatCard label="进服成功" value={detail.stats.accessSuccess} tone="success" />
             <StatCard
               label="进服失败"

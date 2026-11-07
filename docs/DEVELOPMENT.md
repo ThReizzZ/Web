@@ -17,6 +17,33 @@
 
 ---
 
+## 2026年11月07日 20时27分28秒 管理面板改为全宽布局
+
+### 背景
+
+管理面板内容被 `max-w-7xl` 限制，宽屏下左右留白过多，新增的进服监控表格和玩家详情在部分分辨率下显示不全。
+
+### 变更内容
+
+- 管理面板顶部栏和主内容容器移除 `max-w-7xl`，桌面端占满视口宽度。
+- 主内容区域移除 `overflow-x-hidden`，避免宽表格/详情内容被裁切；表格自身继续使用横向滚动。
+- 侧边栏在 `xl` 及以上显示，并在 `2xl` 略微加宽。
+- 运营概览统计卡片改为 4 列，快捷入口在超宽屏改为 4 列；玩家详情统计在 `2xl` 下改为 8 列。
+
+### 涉及文件
+
+- `apps/web/src/app/(admin)/layout.tsx`
+- `apps/web/src/app/(admin)/admin/page.tsx`
+- `apps/web/src/features/admin/components/player-detail-manager.tsx`
+
+### 测试与结果
+
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 生产环境已重新构建 `threi-web:0.1.0` 并重建 `web` 容器，健康检查通过。
+- `https://threi.cn/` 返回 `200`；`/admin/access-logs`、`/admin/player-detail` 未登录时正常 `307` 跳转 `/account`。
+
+---
+
 ## 2026年11月07日 18时09分51秒 新增进服监控与玩家详情
 
 ### 背景
