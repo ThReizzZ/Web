@@ -78,7 +78,9 @@ export function ServerCard({
 
       <CardContent className="flex flex-1 flex-col gap-4 p-5">
         {!compact ? (
-          <p className="text-sm leading-relaxed text-muted-foreground">{server.description}</p>
+          <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+            {server.description}
+          </p>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">

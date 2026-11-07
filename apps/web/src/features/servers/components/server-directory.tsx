@@ -78,54 +78,14 @@ function getServerViewSnapshot(): ViewMode {
   return "card";
 }
 
-const COLUMN_QUERIES = [
-  "(min-width: 1280px)",
-  "(min-width: 1024px)",
-  "(min-width: 768px)",
-] as const;
-
-function subscribeToColumns(callback: () => void) {
-  const queries = COLUMN_QUERIES.map((query) => window.matchMedia(query));
-  queries.forEach((query) => query.addEventListener("change", callback));
-  return () => {
-    queries.forEach((query) => query.removeEventListener("change", callback));
-  };
-}
-
-function getColumnCount() {
-  if (window.matchMedia(COLUMN_QUERIES[0]).matches) {
-    return 4;
-  }
-  if (window.matchMedia(COLUMN_QUERIES[1]).matches) {
-    return 3;
-  }
-  if (window.matchMedia(COLUMN_QUERIES[2]).matches) {
-    return 2;
-  }
-  return 1;
-}
-
-function getServerColumnCount() {
-  return 3;
-}
-
 export function ServerDirectory({ servers }: { servers: KzServer[] }) {
   const view = useSyncExternalStore(subscribeToView, getViewSnapshot, getServerViewSnapshot);
-  const columnCount = useSyncExternalStore(
-    subscribeToColumns,
-    getColumnCount,
-    getServerColumnCount,
-  );
   const sort = useSyncExternalStore(subscribeToSort, getSortSnapshot, getServerSortSnapshot);
   const { data: liveServers, isFetching, isError } = useLiveServers(servers);
   const currentServers = liveServers ?? servers;
   const [query, setQuery] = useState("");
   const searchedServers = searchServers(currentServers, query);
   const orderedServers = sortServers(searchedServers, sort);
-  const columns = Array.from({ length: columnCount }, () => [] as typeof orderedServers);
-  orderedServers.forEach((server, index) => {
-    columns[index % columnCount]!.push(server);
-  });
   const onlineTotal = getOnlinePlayerTotal(currentServers);
   const hasFilters = query.length > 0;
 
@@ -280,23 +240,9 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
           ) : null}
         </div>
       ) : view === "card" ? (
-        <div
-          className={
-            columnCount === 4
-              ? "grid grid-cols-4 items-start gap-4"
-              : columnCount === 3
-                ? "grid grid-cols-3 items-start gap-4"
-                : columnCount === 2
-                  ? "grid grid-cols-2 items-start gap-4"
-                  : "grid grid-cols-1 items-start gap-4"
-          }
-        >
-          {columns.map((column, index) => (
-            <div key={index} className="flex min-w-0 flex-col gap-4">
-              {column.map((server) => (
-                <ServerCard key={server.id} server={server} />
-              ))}
-            </div>
+        <div className="grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {orderedServers.map((server) => (
+            <ServerCard key={server.id} server={server} className="h-full" />
           ))}
         </div>
       ) : (

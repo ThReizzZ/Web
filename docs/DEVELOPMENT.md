@@ -17,6 +17,32 @@
 
 ---
 
+## 2026年11月07日 21时18分23秒 服务器卡片改为对齐网格
+
+### 背景
+
+服务器目录此前使用按列分配的瀑布流布局，有人和没人的服务器卡片高度不同，跨列无法对齐。
+
+### 变更内容
+
+- 服务器目录卡片视图改为普通 CSS Grid，不再按列分配服务器。
+- 响应式列数：`sm` 2 列、`lg` 3 列、`xl` 4 列；卡片使用 `items-stretch` 和 `h-full` 对齐行高。
+- 服务器描述限制为两行，减少不同描述长度造成的卡片高度差异。
+
+### 涉及文件
+
+- `apps/web/src/features/servers/components/server-directory.tsx`
+- `apps/web/src/features/servers/components/server-card.tsx`
+
+### 测试与结果
+
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 生产环境重新构建 `threi-web:0.1.0` 并重建 `web` 容器，状态 `healthy`。
+- `/servers` 返回 `200`，HTML 已确认使用
+  `grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4`。
+
+---
+
 ## 2026年11月07日 21时04分16秒 公开网站宽度对齐 CNGOKZ 比例
 
 ### 背景
