@@ -136,7 +136,7 @@ export function PlayerDetailManager({ initialSteamId = "" }: { initialSteamId?: 
         <p className="text-sm font-medium text-primary">核心管理</p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight">玩家详情</h1>
         <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-          汇总玩家的在线状态、服务器会话、进服记录、封禁、白名单、IP 关联与内部备注。
+          汇总玩家的在线状态、在线会话记录、进服记录、封禁、白名单、IP 关联与内部备注。
         </p>
       </div>
 
@@ -273,7 +273,7 @@ export function PlayerDetailManager({ initialSteamId = "" }: { initialSteamId?: 
               value={detail.stats.accessFailure}
               tone={detail.stats.accessFailure > 0 ? "danger" : "default"}
             />
-            <StatCard label="服务器会话" value={detail.stats.sessionCount} />
+            <StatCard label="在线会话" value={detail.stats.sessionCount} />
             <StatCard label="累计时长" value={formatDuration(detail.stats.totalPlaySeconds)} />
             <StatCard
               label="有效游戏封禁"
@@ -646,23 +646,27 @@ function AccessPanel({ detail }: { detail: AdminPlayerDetail }) {
       </section>
 
       <section>
-        <SectionTitle icon={Hash} title="服务器会话" count={detail.sessions.length} />
+        <SectionTitle icon={Hash} title="在线会话记录" count={detail.sessions.length} />
+        <p className="mt-1 text-xs text-muted-foreground">
+          玩家每次进入和退出游戏服务器的记录，包含在线时长、离开原因与 IP。
+        </p>
         <div className="mt-3 overflow-x-auto rounded-lg border">
-          <table className="w-full min-w-[48rem] text-sm">
+          <table className="w-full min-w-[56rem] text-sm">
             <thead>
               <tr className="border-b bg-muted/30 text-left text-xs text-muted-foreground">
                 <th className="px-3 py-2 font-medium">服务器</th>
                 <th className="px-3 py-2 font-medium">进入时间</th>
                 <th className="px-3 py-2 font-medium">退出时间</th>
-                <th className="px-3 py-2 font-medium">时长</th>
+                <th className="px-3 py-2 font-medium">在线时长</th>
+                <th className="px-3 py-2 font-medium">离开原因</th>
                 <th className="px-3 py-2 font-medium">IP</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {detail.sessions.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-sm text-muted-foreground">
-                    暂无服务器会话记录。
+                  <td colSpan={6} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                    暂无在线会话记录。
                   </td>
                 </tr>
               ) : (
@@ -712,6 +716,9 @@ function SessionRow({ session }: { session: AdminPlayerSession }) {
         {session.leftAt ? formatDate(session.leftAt) : "仍在线"}
       </td>
       <td className="px-3 py-2 text-xs">{formatDuration(session.durationSeconds)}</td>
+      <td className="px-3 py-2 text-xs text-muted-foreground">
+        {session.leaveReason ? leaveReasonLabel(session.leaveReason) : "—"}
+      </td>
       <td className="px-3 py-2 font-mono text-xs break-all">{session.ipAddress ?? "—"}</td>
     </tr>
   );
@@ -1315,6 +1322,15 @@ function failureLabel(value: string): string {
   );
 }
 
+function leaveReasonLabel(value: string): string {
+  return (
+    {
+      disconnect: "玩家断开连接",
+      server_stale: "服务器上报中断",
+    }[value] ?? value
+  );
+}
+
 function whitelistStatusLabel(value: string): string {
   return (
     {
@@ -1329,7 +1345,7 @@ function timelineKindLabel(value: string): string {
   return (
     {
       access: "进服",
-      session: "服务器",
+      session: "在线会话",
       ban: "封禁",
       whitelist: "白名单",
       forum: "论坛",
@@ -1342,7 +1358,7 @@ function timelineKindMark(value: string): string {
   return (
     {
       access: "进",
-      session: "服",
+      session: "会",
       ban: "封",
       whitelist: "单",
       forum: "坛",

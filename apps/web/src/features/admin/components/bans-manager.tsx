@@ -8,11 +8,9 @@ import {
   Network,
   Plus,
   Server as ServerIcon,
-  ShieldCheck,
   Undo2,
 } from "lucide-react";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -39,6 +37,9 @@ const durations = [
   { label: "30 天", value: "720" },
 ] as const;
 
+type BanTab = "server" | "ip";
+type BanStatusFilter = "active" | "ended" | "all";
+
 function isValidIp(value: string): boolean {
   const trimmed = value.trim();
   if (/^(\d{1,3}\.){3}\d{1,3}$/.test(trimmed)) {
@@ -49,6 +50,16 @@ function isValidIp(value: string): boolean {
 
 function expiryHours(value: string): number | null {
   return value === "permanent" ? null : Number(value);
+}
+
+function banStatus(ban: Pick<ServerBan, "isActive" | "expiresAt" | "liftedAt">): {
+  label: string;
+  variant: "warning" | "muted";
+} {
+  if (ban.isActive) return { label: "生效中", variant: "warning" };
+  if (ban.liftedAt) return { label: "已解封", variant: "muted" };
+  if (ban.expiresAt) return { label: "已过期", variant: "muted" };
+  return { label: "已结束", variant: "muted" };
 }
 
 export function BansManager({
@@ -62,6 +73,8 @@ export function BansManager({
 }) {
   const [serverBans, setServerBans] = useState(initialServerBans);
   const [ipBans, setIpBans] = useState(initialIpBans);
+  const [tab, setTab] = useState<BanTab>("server");
+  const [statusFilter, setStatusFilter] = useState<BanStatusFilter>("active");
   const [showBan, setShowBan] = useState(false);
   const [showIpBan, setShowIpBan] = useState(false);
   const [steamId64, setSteamId64] = useState("");
@@ -81,6 +94,19 @@ export function BansManager({
 
   const activeServerBans = serverBans.filter((ban) => ban.isActive).length;
   const activeIpBans = ipBans.filter((ban) => ban.isActive).length;
+  const endedServerBans = serverBans.length - activeServerBans;
+  const endedIpBans = ipBans.length - activeIpBans;
+  const activeTabBans = tab === "server" ? activeServerBans : activeIpBans;
+  const endedTabBans = tab === "server" ? endedServerBans : endedIpBans;
+  const totalTabBans = tab === "server" ? serverBans.length : ipBans.length;
+
+  function matchesStatus(isActive: boolean): boolean {
+    if (statusFilter === "all") return true;
+    return statusFilter === "active" ? isActive : !isActive;
+  }
+
+  const visibleServerBans = serverBans.filter((ban) => matchesStatus(ban.isActive));
+  const visibleIpBans = ipBans.filter((ban) => matchesStatus(ban.isActive));
 
   async function reload() {
     const client = getBrowserApiClient();
@@ -122,6 +148,8 @@ export function BansManager({
       setReason("");
       setDuration("permanent");
       setShowBan(false);
+      setTab("server");
+      setStatusFilter("active");
       setFeedback("游戏服务器封禁已创建，网站账号仍可正常登录。");
       await reload();
     } catch (error) {
@@ -153,6 +181,8 @@ export function BansManager({
       setIpReason("");
       setIpDuration("permanent");
       setShowIpBan(false);
+      setTab("ip");
+      setStatusFilter("active");
       setFeedback("游戏 IP 封禁已创建；网站账号仍可正常登录。");
       await reload();
     } catch (error) {
@@ -209,8 +239,7 @@ export function BansManager({
           <p className="text-sm font-medium text-primary">游戏封禁</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">封禁管理</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            封禁只作用于游戏服务器，不会阻止网站登录。玩家登录后会继续留在官网，用户中心会显示
-            封禁原因和对应服务器。
+            封禁只作用于游戏服务器，不会阻止网站登录。解封后插件会立即删除本地封禁，玩家无需等待。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -226,152 +255,155 @@ export function BansManager({
         </div>
       </div>
 
-      <Alert>
-        <AlertDescription>
-          游戏内封禁默认作用于全部服务器。SteamID/IP 封禁只阻止进入游戏服务器；网站账号始终可以
-          登录。解封后插件会立即删除本地封禁，玩家无需等待。
-        </AlertDescription>
-      </Alert>
-
       <div className="rounded-xl border bg-card">
-        <div className="border-b px-5 py-4">
-          <h2 className="flex items-center gap-2 font-semibold">
-            <ShieldCheck className="size-4 text-primary" aria-hidden="true" />
-            游戏服务器封禁
-          </h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            全服封禁对所有服务器生效；单服封禁只影响对应服务器。
-          </p>
-        </div>
-        <div className="divide-y">
-          {serverBans.length > 0 ? (
-            serverBans.map((ban) => (
-              <article key={ban.id} className="px-5 py-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-medium break-words">{ban.playerName}</p>
-                      {ban.isActive ? (
-                        <Badge variant={ban.expiresAt ? "warning" : "destructive"}>
-                          <BanIcon aria-hidden="true" />
-                          {ban.expiresAt ? "临时封禁" : "永久封禁"}
-                        </Badge>
-                      ) : (
-                        <Badge variant="muted">已结束</Badge>
-                      )}
-                      <Badge variant="outline">
-                        {ban.scope === "global" ? (
-                          <>
-                            <Globe2 aria-hidden="true" /> 全服
-                          </>
-                        ) : (
-                          <>
-                            <ServerIcon aria-hidden="true" /> {ban.serverName}
-                          </>
-                        )}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 font-mono text-[11px] break-all text-muted-foreground">
-                      {ban.steamId64}
-                    </p>
-                    <p className="mt-2 text-sm whitespace-pre-wrap">{ban.reason}</p>
-                    <p className="mt-2 text-[11px] text-muted-foreground">
-                      {formatDate(ban.createdAt)}由 {ban.createdBy}创建 ·{" "}
-                      {ban.expiresAt ? `${formatDate(ban.expiresAt)} 到期` : "永久"}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {ban.isActive ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={busy === ban.id}
-                        onClick={() => setLiftServerTarget(ban)}
-                      >
-                        {busy === ban.id ? (
-                          <LoaderCircle className="animate-spin" />
-                        ) : (
-                          <Undo2 aria-hidden="true" />
-                        )}
-                        解封
-                      </Button>
-                    ) : (
-                      <Badge variant="success">已失效</Badge>
-                    )}
-                  </div>
-                </div>
-              </article>
-            ))
-          ) : (
-            <p className="px-5 py-12 text-center text-sm text-muted-foreground">
-              还没有游戏服务器封禁。
+        <div className="flex flex-col gap-3 border-b px-5 py-4 xl:flex-row xl:items-end xl:justify-between">
+          <div className="space-y-2">
+            <div
+              className="flex flex-wrap items-center gap-1.5"
+              role="tablist"
+              aria-label="封禁类型"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "server"}
+                onClick={() => setTab("server")}
+                className={
+                  tab === "server"
+                    ? "inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary"
+                    : "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+                }
+              >
+                <BanIcon aria-hidden="true" className="size-3.5" />
+                游戏封禁
+                <span className="tabular-nums">{serverBans.length}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "ip"}
+                onClick={() => setTab("ip")}
+                className={
+                  tab === "ip"
+                    ? "inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary"
+                    : "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+                }
+              >
+                <Network aria-hidden="true" className="size-3.5" />
+                IP 封禁
+                <span className="tabular-nums">{ipBans.length}</span>
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {tab === "server"
+                ? "全服封禁对所有服务器生效；单服封禁只影响对应服务器。"
+                : "IP 封禁只阻止该 IP 进入游戏服务器，不影响网站登录。"}
             </p>
-          )}
+          </div>
+          <div
+            className="flex flex-wrap items-center gap-1.5"
+            role="group"
+            aria-label="封禁状态筛选"
+          >
+            <StatusFilterButton
+              active={statusFilter === "active"}
+              onClick={() => setStatusFilter("active")}
+            >
+              生效中 {activeTabBans}
+            </StatusFilterButton>
+            <StatusFilterButton
+              active={statusFilter === "ended"}
+              onClick={() => setStatusFilter("ended")}
+            >
+              已结束 {endedTabBans}
+            </StatusFilterButton>
+            <StatusFilterButton
+              active={statusFilter === "all"}
+              onClick={() => setStatusFilter("all")}
+            >
+              全部 {totalTabBans}
+            </StatusFilterButton>
+          </div>
         </div>
-      </div>
 
-      <div className="rounded-xl border bg-card">
-        <div className="border-b px-5 py-4">
-          <h2 className="flex items-center gap-2 font-semibold">
-            <Network className="size-4 text-primary" aria-hidden="true" />
-            游戏 IP 封禁
-          </h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            只阻止该 IP 进入游戏服务器，不影响网站登录。
-          </p>
-        </div>
-        <div className="divide-y">
-          {ipBans.length > 0 ? (
-            ipBans.map((ban) => (
-              <article key={ban.id} className="px-5 py-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-mono text-sm font-medium">{ban.ipAddress}</p>
-                      {ban.isActive ? (
-                        <Badge variant={ban.expiresAt ? "warning" : "destructive"}>
-                          {ban.expiresAt ? "临时封禁" : "永久封禁"}
-                        </Badge>
-                      ) : (
-                        <Badge variant="muted">已结束</Badge>
-                      )}
-                    </div>
-                    <p className="mt-2 text-sm whitespace-pre-wrap">{ban.reason}</p>
-                    <p className="mt-2 text-[11px] text-muted-foreground">
-                      {formatDate(ban.createdAt)}由 {ban.createdBy}创建 ·{" "}
-                      {ban.expiresAt ? `${formatDate(ban.expiresAt)} 到期` : "永久"}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {ban.isActive ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={busy === ban.id}
-                        onClick={() => setLiftIpTarget(ban)}
-                      >
-                        {busy === ban.id ? (
-                          <LoaderCircle className="animate-spin" />
-                        ) : (
-                          <Undo2 aria-hidden="true" />
-                        )}
-                        解封
-                      </Button>
-                    ) : (
-                      <Badge variant="success">已失效</Badge>
-                    )}
-                  </div>
-                </div>
-              </article>
-            ))
-          ) : (
-            <p className="px-5 py-10 text-center text-sm text-muted-foreground">
-              还没有游戏 IP 封禁。
-            </p>
-          )}
-        </div>
+        {tab === "server" ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[64rem] text-sm">
+              <thead>
+                <tr className="border-b bg-muted/30 text-left text-xs text-muted-foreground">
+                  <th className="px-5 py-3 font-medium">玩家</th>
+                  <th className="px-4 py-3 font-medium">范围</th>
+                  <th className="px-4 py-3 font-medium">封禁原因</th>
+                  <th className="px-4 py-3 font-medium">状态</th>
+                  <th className="px-4 py-3 font-medium">创建</th>
+                  <th className="px-4 py-3 font-medium">到期</th>
+                  <th className="px-5 py-3 text-right font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {visibleServerBans.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-5 py-12 text-center text-sm text-muted-foreground"
+                    >
+                      {statusFilter === "active"
+                        ? "暂无生效中的游戏封禁。"
+                        : "当前筛选下暂无游戏封禁记录。"}
+                    </td>
+                  </tr>
+                ) : (
+                  visibleServerBans.map((ban) => (
+                    <ServerBanRow
+                      key={ban.id}
+                      ban={ban}
+                      busy={busy === ban.id}
+                      onLift={() => setLiftServerTarget(ban)}
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[56rem] text-sm">
+              <thead>
+                <tr className="border-b bg-muted/30 text-left text-xs text-muted-foreground">
+                  <th className="px-5 py-3 font-medium">IP 地址</th>
+                  <th className="px-4 py-3 font-medium">封禁原因</th>
+                  <th className="px-4 py-3 font-medium">状态</th>
+                  <th className="px-4 py-3 font-medium">创建</th>
+                  <th className="px-4 py-3 font-medium">到期</th>
+                  <th className="px-5 py-3 text-right font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {visibleIpBans.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      className="px-5 py-12 text-center text-sm text-muted-foreground"
+                    >
+                      {statusFilter === "active"
+                        ? "暂无生效中的 IP 封禁。"
+                        : "当前筛选下暂无 IP 封禁记录。"}
+                    </td>
+                  </tr>
+                ) : (
+                  visibleIpBans.map((ban) => (
+                    <IpBanRow
+                      key={ban.id}
+                      ban={ban}
+                      busy={busy === ban.id}
+                      onLift={() => setLiftIpTarget(ban)}
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <Modal
@@ -401,11 +433,9 @@ export function BansManager({
           onSubmit={handleCreateServerBan}
           className="grid gap-4 md:grid-cols-2"
         >
-          <Alert className="md:col-span-2">
-            <AlertDescription>
-              游戏内封禁默认全服；这里可选择全服或单服。封禁不会影响网站登录，用户中心会显示原因。
-            </AlertDescription>
-          </Alert>
+          <p className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs leading-relaxed md:col-span-2">
+            游戏内封禁默认全服；这里可选择全服或单服。封禁不会影响网站登录，用户中心会显示原因。
+          </p>
           <div className="space-y-1.5">
             <Label htmlFor="game-ban-steam-id">SteamID64</Label>
             <Input
@@ -568,5 +598,126 @@ export function BansManager({
         onConfirm={() => void handleLiftIpBan()}
       />
     </div>
+  );
+}
+
+function StatusFilterButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={
+        active
+          ? "rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
+          : "rounded-md border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted"
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+function ServerBanRow({
+  ban,
+  busy,
+  onLift,
+}: {
+  ban: ServerBan;
+  busy: boolean;
+  onLift: () => void;
+}) {
+  const status = banStatus(ban);
+  return (
+    <tr className={ban.isActive ? undefined : "bg-muted/20"}>
+      <td className="px-5 py-3">
+        <p className="font-medium break-words">{ban.playerName}</p>
+        <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
+          {ban.steamId64}
+        </p>
+      </td>
+      <td className="px-4 py-3">
+        <Badge variant="outline">
+          {ban.scope === "global" ? (
+            <>
+              <Globe2 aria-hidden="true" /> 全服
+            </>
+          ) : (
+            <>
+              <ServerIcon aria-hidden="true" /> {ban.serverName}
+            </>
+          )}
+        </Badge>
+      </td>
+      <td className="max-w-72 px-4 py-3">
+        <p className="line-clamp-2 text-xs break-words" title={ban.reason}>
+          {ban.reason}
+        </p>
+      </td>
+      <td className="px-4 py-3">
+        <Badge variant={status.variant}>{status.label}</Badge>
+      </td>
+      <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">
+        {formatDate(ban.createdAt)}
+        <br />由 {ban.createdBy}
+      </td>
+      <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">
+        {ban.expiresAt ? formatDate(ban.expiresAt) : "永久"}
+      </td>
+      <td className="px-5 py-3 text-right">
+        {ban.isActive ? (
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onLift}>
+            {busy ? <LoaderCircle className="animate-spin" /> : <Undo2 aria-hidden="true" />}
+            解封
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function IpBanRow({ ban, busy, onLift }: { ban: ServerIpBan; busy: boolean; onLift: () => void }) {
+  const status = banStatus(ban);
+  return (
+    <tr className={ban.isActive ? undefined : "bg-muted/20"}>
+      <td className="px-5 py-3">
+        <p className="font-mono text-xs break-all">{ban.ipAddress}</p>
+      </td>
+      <td className="max-w-72 px-4 py-3">
+        <p className="line-clamp-2 text-xs break-words" title={ban.reason}>
+          {ban.reason}
+        </p>
+      </td>
+      <td className="px-4 py-3">
+        <Badge variant={status.variant}>{status.label}</Badge>
+      </td>
+      <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">
+        {formatDate(ban.createdAt)}
+        <br />由 {ban.createdBy}
+      </td>
+      <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">
+        {ban.expiresAt ? formatDate(ban.expiresAt) : "永久"}
+      </td>
+      <td className="px-5 py-3 text-right">
+        {ban.isActive ? (
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onLift}>
+            {busy ? <LoaderCircle className="animate-spin" /> : <Undo2 aria-hidden="true" />}
+            解封
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </td>
+    </tr>
   );
 }

@@ -1349,7 +1349,11 @@ async fn build_timeline(
             id: format!("session-join:{}", session.id),
             kind: "session".to_owned(),
             occurred_at: session.joined_at,
-            title: "进入服务器".to_owned(),
+            title: if session.left_at.is_some() {
+                "在线会话开始".to_owned()
+            } else {
+                "在线会话开始（进行中）".to_owned()
+            },
             description: session
                 .ip_address
                 .as_ref()
@@ -1358,15 +1362,22 @@ async fn build_timeline(
             server_name: Some(session.server_name.clone()),
         });
         if let Some(left_at) = session.left_at {
+            let duration = format_duration_seconds(session.duration_seconds);
+            let description = session.leave_reason.as_deref().map_or_else(
+                || format!("在线时长：{duration}"),
+                |reason| {
+                    format!(
+                        "在线时长：{duration} · 离开原因：{}",
+                        leave_reason_label(reason)
+                    )
+                },
+            );
             events.push(TimelineEvent {
                 id: format!("session-leave:{}", session.id),
                 kind: "session".to_owned(),
                 occurred_at: left_at,
-                title: "退出服务器".to_owned(),
-                description: session
-                    .leave_reason
-                    .as_deref()
-                    .map_or_else(String::new, leave_reason_label),
+                title: "在线会话结束".to_owned(),
+                description,
                 actor: Some(session.player_name.clone()),
                 server_name: Some(session.server_name.clone()),
             });
@@ -1616,6 +1627,33 @@ fn leave_reason_label(value: &str) -> String {
     }
 }
 
+fn format_duration_seconds(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    if seconds < 60 {
+        return format!("{seconds} 秒");
+    }
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{minutes} 分钟");
+    }
+    let hours = minutes / 60;
+    let rest_minutes = minutes % 60;
+    if hours < 24 {
+        return if rest_minutes == 0 {
+            format!("{hours} 小时")
+        } else {
+            format!("{hours} 小时 {rest_minutes} 分钟")
+        };
+    }
+    let days = hours / 24;
+    let rest_hours = hours % 24;
+    if rest_hours == 0 {
+        format!("{days} 天")
+    } else {
+        format!("{days} 天 {rest_hours} 小时")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1625,6 +1663,18 @@ mod tests {
         assert!(is_steam_id64("76561198000000000"));
         assert!(!is_steam_id64("7656119800000000"));
         assert!(!is_steam_id64("7656119800000000a"));
+    }
+
+    #[test]
+    fn session_durations_are_human_readable() {
+        assert_eq!(format_duration_seconds(45), "45 秒");
+        assert_eq!(format_duration_seconds(90), "1 分钟");
+        assert_eq!(
+            format_duration_seconds(3 * 3600 + 12 * 60),
+            "3 小时 12 分钟"
+        );
+        assert_eq!(format_duration_seconds(2 * 86400 + 5 * 3600), "2 天 5 小时");
+        assert_eq!(format_duration_seconds(-5), "0 秒");
     }
 
     #[test]
