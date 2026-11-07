@@ -17,6 +17,30 @@
 
 ---
 
+## 2026年11月07日 20时44分09秒 公开网站改为全宽布局
+
+### 背景
+
+公开网站使用 `PageContainer` 的 `max-w-6xl` 限制，宽屏下内容区域和卡片/表格空间不足。
+
+### 变更内容
+
+- `PageContainer` 移除 `max-w-6xl`，改为占满视口宽度，保留响应式水平内边距。
+- 首页、服务器、论坛、社区玩家、用户中心、页头、页脚和错误页统一使用全宽容器。
+- 首页英雄区、简介等文本块自身的 `max-w-*` 可读性限制保持不变。
+
+### 涉及文件
+
+- `apps/web/src/components/layout/page-container.tsx`
+
+### 测试与结果
+
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 生产环境重新构建 `threi-web:0.1.0` 并重建 `web` 容器，状态 `healthy`。
+- `https://threi.cn/`、`/servers`、`/forum` 返回 `200`；HTML 中已确认容器为 `w-full ... 2xl:px-10`，不再包含 `max-w-6xl`。
+
+---
+
 ## 2026年11月07日 20时27分28秒 管理面板改为全宽布局
 
 ### 背景
