@@ -1,10 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search, Users } from "lucide-react";
+import Link from "next/link";
+import { Search, UserRoundSearch, Users } from "lucide-react";
 
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { AdminPlayer } from "@/features/admin/types";
 import { formatDate, formatRelativeTime } from "@/lib/format";
@@ -96,10 +98,20 @@ export function AdminPlayersManager({ players }: { players: AdminPlayer[] }) {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-xs sm:grid-cols-3 xl:w-[30rem] xl:shrink-0">
-                  <PlayerInfo label="最近登录时间" value={formatDate(player.lastLoginAt)} />
-                  <PlayerInfo label="最近登录 IP" value={player.lastLoginIp ?? "未记录"} mono />
-                  <PlayerInfo label="活跃会话" value={`${player.activeSessions} 个`} />
+                <div className="flex flex-col items-start gap-3 xl:w-[34rem] xl:shrink-0">
+                  <div className="grid w-full grid-cols-2 gap-x-6 gap-y-3 text-xs sm:grid-cols-3">
+                    <PlayerInfo label="最近登录时间" value={formatDate(player.lastLoginAt)} />
+                    <PlayerInfo label="最近登录 IP" value={player.lastLoginIp ?? "未记录"} mono />
+                    <PlayerInfo label="活跃会话" value={`${player.activeSessions} 个`} />
+                  </div>
+                  <Button asChild variant="outline" size="sm">
+                    <Link
+                      href={`/admin/player-detail?steamid=${encodeURIComponent(player.steamId64)}`}
+                    >
+                      <UserRoundSearch />
+                      玩家详情
+                    </Link>
+                  </Button>
                 </div>
               </article>
             ))

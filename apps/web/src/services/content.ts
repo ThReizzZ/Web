@@ -1,5 +1,6 @@
 import type { AccountOverview } from "@/features/account/types";
 import type {
+  AdminAccessLogPage,
   AdminAccount,
   AdminCommunity,
   AdminCommunityOverview,
@@ -9,6 +10,8 @@ import type {
   AdminLookupResponse,
   AdminOverview,
   AdminPlayer,
+  AdminPlayerCandidate,
+  AdminPlayerDetail,
   PluginTokenResponse,
   ServerAdminOverview,
   ServerBan,
@@ -588,4 +591,64 @@ export async function liftServerBan(client: ApiClient, id: string): Promise<void
   await client.request<void>(`/api/v1/admin/server-bans/${encodeURIComponent(id)}/lift`, {
     method: "POST",
   });
+}
+
+export interface AdminAccessLogQuery {
+  page?: number;
+  pageSize?: number;
+  steamId64?: string;
+  serverId?: string;
+  ipAddress?: string;
+  allowed?: boolean;
+  accessMethod?: string;
+  failureCode?: string;
+  search?: string;
+}
+
+export function fetchAdminAccessLogs(
+  client: ApiClient,
+  params: AdminAccessLogQuery = {},
+): Promise<AdminAccessLogPage> {
+  return client.get<AdminAccessLogPage>("/api/v1/admin/access-logs", {
+    ...noStore,
+    query: {
+      page: params.page,
+      page_size: params.pageSize,
+      steam_id64: params.steamId64?.trim() || undefined,
+      server_id: params.serverId?.trim() || undefined,
+      ip_address: params.ipAddress?.trim() || undefined,
+      allowed: params.allowed,
+      access_method: params.accessMethod || undefined,
+      failure_code: params.failureCode || undefined,
+      search: params.search?.trim() || undefined,
+    },
+  });
+}
+
+export function searchAdminPlayers(client: ApiClient, q: string): Promise<AdminPlayerCandidate[]> {
+  return client.get<AdminPlayerCandidate[]>("/api/v1/admin/player-detail/search", {
+    ...noStore,
+    query: { q: q.trim() },
+  });
+}
+
+export function fetchAdminPlayerDetail(
+  client: ApiClient,
+  steamInput: string,
+): Promise<AdminPlayerDetail> {
+  return client.get<AdminPlayerDetail>("/api/v1/admin/player-detail", {
+    ...noStore,
+    query: { steam_input: steamInput.trim() },
+  });
+}
+
+export async function updateAdminPlayerProfile(
+  client: ApiClient,
+  steamId64: string,
+  input: { note: string; tags: string[] },
+): Promise<void> {
+  await client.request<void>(
+    `/api/v1/admin/player-detail/${encodeURIComponent(steamId64)}/profile`,
+    { method: "PUT", body: JSON.stringify(input) },
+  );
 }

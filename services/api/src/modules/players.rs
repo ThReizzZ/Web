@@ -119,7 +119,7 @@ const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
 
 /// Accepts `SteamID64`, `SteamID2` (`STEAM_0:0:...`) and `SteamID3` (`[U:1:...]`).
 /// Returns the canonical 17-digit `SteamID64` used by the database.
-fn parse_steam_identifier(value: &str) -> Option<String> {
+pub(crate) fn parse_steam_identifier(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 64 {
         return None;

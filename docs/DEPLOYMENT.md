@@ -322,7 +322,7 @@ docker compose exec api /app/magic-link --steam-id 76561199125125759
 ### 游戏服务器状态与玩家
 
 API 不再进行 A2S 轮询，也不会向游戏服务器发送任意 RCON 指令。每个游戏服务器需要安装
-`plugins/ThRei_Players/` 中的 SourceMod 插件（当前 `1.5.0`）：
+`plugins/ThRei_Players/` 中的 SourceMod 插件（当前 `1.10.0`）：
 
 1. 游戏服务器安装 SourceMod 1.11+ 与 SteamWorks 扩展；
 2. 在管理面板点击「添加服务器」，只需填写游戏服务器的 Host / IP 与端口；服务器 ID 自动生成，添加成功后自动打开「插件配置」。服务器名称、地图和在线人数会在插件首次上报后自动更新；
@@ -514,7 +514,8 @@ curl -fsS http://127.0.0.1/api/v1/system/info
 - [ ] `docker compose ps` 所有服务 healthy（`migrate` 为 exited 0）
 - [ ] API/Web 健康检查通过
 - [ ] `ADMIN_STEAM_IDS` 已配置，管理面板与管理员 API 验证通过
-- [ ] 每个游戏服务器已安装 `ThRei_Players` 1.5.0+，后台显示「插件已连接」，令牌未写入 Git
+- [ ] 每个游戏服务器已安装 `ThRei_Players` 1.10.0+，后台显示「插件已连接」，令牌未写入 Git
+- [ ] 「进服监控」能看到成功进服记录；用白名单拒绝或封禁连接验证失败记录与玩家详情页
 - [ ] 一主机多实例时，所有实例共用一份 `threi_players.cfg`，每个实例都有匹配 `hostport` 的 `sm_threi_instance` 行，后台各自显示「插件已连接」
 - [ ] 已在「社区组」页面创建社区组并加入同一主机的多个实例，服务器目录按组显示正常
 - [ ] 全服白名单已在一个服务器上审核通过，并验证其他开启白名单的服务器也能进入；网站踢出/封禁约 1 秒内生效，且没有配置 RCON 也能执行

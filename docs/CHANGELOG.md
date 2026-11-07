@@ -17,6 +17,11 @@
 
 ### Added
 
+- **2026-11-07 进服监控与玩家详情：** 新增 `server_access_logs`、`server_player_sessions`、
+  `player_admin_profiles` 与 `player_admin_profile_history`。插件 1.10.0 通过
+  `POST /api/v1/plugin/access-report` 上报被拒绝的连接尝试；成功进服由服务器名单上报自动生成。
+  管理面板新增 `/admin/access-logs`（筛选、分页、跳转玩家）和 `/admin/player-detail`
+  （在线状态、会话历史、进服记录、游戏/IP 封禁、白名单、同 IP 关联账号、事件时间线、内部备注/标签）。
 - **2026-10-28 服务器名单实时刷新：** 新增 `GET /api/v1/servers/stream` SSE 接口；插件上报产生
   实际变化后 API 立即推送 `server-update` 事件，`/servers` 页与首页推荐服务器收到后立刻重新请求
   `GET /api/v1/servers` 并合并在线玩家、人数、地图和状态。保留 30 秒兜底轮询，地图变化时

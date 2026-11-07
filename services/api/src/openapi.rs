@@ -39,6 +39,7 @@ use crate::{
         crate::modules::auth::logout,
         crate::modules::servers::list_servers,
         crate::modules::server_plugin::report,
+        crate::modules::server_plugin::access_report,
         crate::modules::plugin_access::access_snapshot,
         crate::modules::plugin_access::actions,
         crate::modules::plugin_access::ack_action,
@@ -64,7 +65,11 @@ use crate::{
         crate::modules::community::overview,
         crate::modules::account::account_overview,
         crate::modules::account::update_profile,
-        crate::modules::admin::overview
+        crate::modules::admin::overview,
+        crate::modules::player_activity::list_access_logs,
+        crate::modules::player_activity::search_player_detail,
+        crate::modules::player_activity::get_player_detail,
+        crate::modules::player_activity::update_player_profile
     ),
     components(schemas(
         LivenessResponse,
@@ -76,6 +81,8 @@ use crate::{
         ErrorResponse,
         ErrorBody,
         PluginReportRequest,
+        crate::modules::server_plugin::PluginAccessReportRequest,
+        crate::modules::player_activity::UpdatePlayerProfileRequest,
         CreateTopicRequest,
         CreateReplyRequest,
         crate::modules::account::UpdateProfileRequest,

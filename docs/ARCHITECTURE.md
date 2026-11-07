@@ -300,6 +300,7 @@ modules/<name>/
 - **管理状态**：`pluginState` 由 `plugin_token` 与 `last_reported_at` 派生：`disabled`（无令牌）、`waiting`（有令牌但没有最近上报）、`connected`（90 秒内有上报）。
 - **令牌生命周期**：生成/轮换会清空在线快照并标记离线；撤销令牌执行同样的清理。旧令牌立即失效。
 - **访问控制**：`GET /api/v1/plugin/access-snapshot` 返回纯文本 `server`、`requires_whitelist`、全服 `whitelist` 与带过期时间的 `ban` / `banip` 行；插件每 30 秒缓存一次，在 `OnClientPostAdminCheck` 与快照刷新时检查在线玩家。白名单仅在服务器开启 `requires_whitelist` 时拦截，游戏封禁始终生效。快照成功加载后即使 API 暂时不可达也继续使用最后一次规则；首次加载前由插件配置决定是否放行。
+- **进服监控与会话：** `POST /api/v1/plugin/access-report` 记录插件 1.10.0+ 拒绝的连接尝试（封禁、IP 封禁、白名单拒绝、访问控制快照未加载），`occurred_at` + 唯一索引保证重试幂等。成功进服由 `/plugin/report` 的新增名单自动写入 `server_access_logs`，并根据 `servers.requires_whitelist` 与 `global_whitelist` 推断进服方式。名单上报同时 upsert `server_player_sessions`，玩家离开、被踢/封禁、服务器失联或删除服务器时通过 `server_players` 的删除触发器关闭会话；管理员「进服监控」和「玩家详情」页面读取这些表。
 - **管理指令**：踢出/游戏封禁/IP 封禁写入 `server_actions`；`GET /api/v1/plugin/actions` 返回待执行纯文本（封禁附带到期时间），插件执行后 `POST /api/v1/plugin/actions/{id}/ack` 写入 `processed_at`。解封会同时把未执行的封禁指令标记完成，并写入 `unban` / `unbanip` 指令；1.9.0+ 插件会立即清除本地插件封禁。封禁只存在于插件本地缓存和 `configs/threi_bans.cfg`，不写引擎封禁。过期封禁不会被插件执行但会确认。
 - **休眠兜底**：`server_hibernation` 只对启用、非维护、有 RCON 密码且插件上报已过期的服务器执行 `status`。成功时 0 人标记 `hibernating`、有玩家标记 `online`；连续 3 次失败标记 `offline`。不会更新 `last_reported_at`，因此管理面板仍能区分插件失联与进程死亡。该任务不提供任意 RCON 执行面。
 
@@ -330,6 +331,7 @@ modules/<name>/
 - `server_players` 的 SteamID64 非空，插件上报时按 `(server_id, steam_id64)` upsert，并保存插件 1.6.0+ 上报的 `ip_address`；不再保存 A2S 匿名槽位。
 - `global_whitelist` 保存全服白名单（SteamID64 唯一）；`whitelist_applications` 保存全服申请与审核；`servers.requires_whitelist` 标记该服务器是否使用全服白名单。旧的 `server_whitelist` 已迁移并标记为 deprecated。
 - `forum_mutes` 记录论坛禁言；`server_bans` 记录全服/单服游戏封禁（含 `ban_group_id`）；`server_ip_bans` 记录游戏 IP 封禁；`server_actions` 保存待游戏服务器插件消费的踢出/封禁/解封/IP 封禁指令（`kick` / `ban` / `unban` / `banip` / `unbanip`）。
+- `server_access_logs` 记录进服尝试（成功由名单差异生成，失败由插件上报）；`server_player_sessions` 记录服务器会话历史，`server_players` 删除触发器自动关闭会话；`player_admin_profiles` 与 `player_admin_profile_history` 保存仅后台可见的内部备注、标签和变更历史。
 - 迁移只新增，不修改已应用迁移。
 - 禁止应用启动时删除/重建数据库；禁止容器启动时无条件清空卷。
 - 备份/恢复流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。

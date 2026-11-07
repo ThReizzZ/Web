@@ -264,6 +264,32 @@ action 5c8b2d3e-... unbanip 203.0.113.10 网站解除 IP 封禁
 - 网站下发的指令不会回传，避免循环。
 - 令牌缺失或错误返回 `401`；SteamID64、原因或时长不合法返回 `422`。
 
+### `POST /api/v1/plugin/access-report`
+
+供 `ThRei_Players` 1.10.0+ 上报被拒绝的连接尝试。请求头与上报相同。
+
+```json
+{
+  "steamId64": "76561199125125759",
+  "playerName": "玩家昵称",
+  "ipAddress": "203.0.113.10",
+  "allowed": false,
+  "accessMethod": "banned",
+  "failureCode": "banned",
+  "rejectReason": "违反服务器规则",
+  "occurredAt": 1793510400
+}
+```
+
+- `accessMethod` 可选值：`unrestricted`、`whitelist`、`snapshot_fallback`、`banned`、
+  `whitelist_rejected`、`access_unavailable`。
+- `failureCode` 可选值：`banned`、`ip_banned`、`not_whitelisted`、`access_unavailable`、
+  `no_steamid`；可为空。
+- `occurredAt` 为游戏服务器 Unix 秒；插件重试时保持相同值，API 依靠唯一索引去重。
+- 成功返回 `204`。成功进服不由插件上报，而是由 `/plugin/report` 的在线名单差异自动生成，
+  进服方式根据服务器是否要求白名单推断为 `whitelist`、`snapshot_fallback` 或 `unrestricted`。
+- 令牌缺失或错误返回 `401`；SteamID64、方式或失败原因不合法返回 `422`。
+
 ### `POST /api/v1/plugin/ip-ban-report`
 
 供插件 `sm_banip` 回传 IP 封禁。请求头与上报相同。
@@ -426,6 +452,28 @@ Query：
 
 - `GET /admin/players` 返回所有非系统账号，按最近登录时间倒序；包含 `steamId64`、昵称、头像、角色、禁用状态、注册时间、最近登录时间、`lastLoginIp` 与当前 `activeSessions`。
 - 该接口仅管理员可访问，用于管理面板「登录玩家」页面。
+
+### 6.4.2 进服监控与玩家详情
+
+两者都只允许管理员访问；IP、会话和封禁记录不会出现在公开接口。
+
+- `GET /admin/access-logs`：分页返回 `server_access_logs`。查询参数：
+  - `page`（默认 1）、`page_size`（1–100，默认 30）；
+  - `steam_id64`、`server_id`、`ip_address`；
+  - `allowed`（`true` / `false`）；
+  - `access_method`、`failure_code`、`search`（玩家名、SteamID64 或服务器名）。
+  - 返回 `{ items, total, page, pageSize }`；每项包含服务器、玩家、IP、结果、进服方式、失败原因和发生时间。
+- `GET /admin/player-detail/search?q=...`：按 SteamID64/2/3、玩家名或 IP 查询候选玩家（最多 10 个），返回昵称、头像、在线状态和最近活跃时间。
+- `GET /admin/player-detail?steam_input=...`：返回聚合档案，包括：
+  - `profile`：昵称、头像、角色、注册/最近登录、首次/最后活跃、在线状态；
+  - `onlineServers`、`stats`（进服成功/失败、会话数、累计时长、有效封禁、已知 IP、关联账号、论坛主题/回复）；
+  - `accessLogs`、`sessions`、`gameBans`、`ipBans`、`whitelistApplications`、`whitelistEntries`；
+  - `ipGroups`：每个 IP 的首次/最后出现、次数和同 IP 关联账号（含封禁/白名单/在线标记）；
+  - `timeline`：进服、会话、封禁、白名单、论坛和内部备注事件，最多 200 条；
+  - `internalProfile`：内部备注、标签和最近 20 条变更历史。
+- `PUT /admin/player-detail/{steam_id64}/profile` body `{ "note": "...", "tags": ["重点关注"] }`：
+  保存仅后台可见的内部备注与标签，并写入历史；备注最长 4000 字符，最多 10 个标签、每个最长 32 字符。
+- 成功进服由插件 `/plugin/report` 的在线名单差异自动记录；插件 1.10.0+ 只上报被拒绝的尝试。
 
 ### 6.5 封禁管理
 

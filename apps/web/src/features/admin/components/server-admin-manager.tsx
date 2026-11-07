@@ -18,6 +18,7 @@ import {
   Trash2,
   Undo2,
   UserMinus,
+  UserRoundSearch,
   Wifi,
   WifiOff,
 } from "lucide-react";
@@ -799,7 +800,14 @@ export function ServerAdminManager({
                               </p>
                             </div>
                           </div>
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap gap-2">
+                            <Button asChild size="sm" variant="ghost">
+                              <Link
+                                href={`/admin/player-detail?steamid=${encodeURIComponent(player.steamId64)}`}
+                              >
+                                <UserRoundSearch /> 详情
+                              </Link>
+                            </Button>
                             <Button
                               type="button"
                               size="sm"

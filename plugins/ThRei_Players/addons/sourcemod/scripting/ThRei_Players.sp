@@ -5,6 +5,7 @@
  *   POST /api/v1/plugin/report
  *   GET  /api/v1/plugin/access-snapshot
  *   GET  /api/v1/plugin/actions
+ *   POST /api/v1/plugin/access-report
  *   POST /api/v1/plugin/ban-report
  *
  * Whitelist and ban enforcement is local: the plugin keeps the latest
@@ -31,7 +32,7 @@
 #include <SteamWorks>
 #include <adt_array>
 
-#define PLUGIN_VERSION "1.9.3"
+#define PLUGIN_VERSION "1.10.0"
 
 #define TOKEN_HEADER "X-ThRei-Plugin-Token"
 #define MAX_SERVER_NAME_LENGTH 256
@@ -228,7 +229,7 @@ public void OnMapStart() {
 }
 
 public void OnClientPostAdminCheck(int client) {
-    CheckClientAccess(client);
+    CheckClientAccess(client, true);
     QueueReport(1.0);
 }
 
@@ -1590,7 +1591,7 @@ void SendNextBanReport() {
     }
     if (!SteamWorks_IsLoaded()) {
         if (!g_bSteamWorksWarned) {
-            LogError("[ThRei_Players] SteamWorks extension is not loaded; ban reports will retry.");
+            LogError("[ThRei_Players] SteamWorks extension is not loaded; queued reports will retry.");
             g_bSteamWorksWarned = true;
         }
         g_fNextBanReport = GetGameTime() + 30.0;
@@ -1612,6 +1613,8 @@ void SendNextBanReport() {
     char endpoint[32];
     if (kind == 2) {
         strcopy(endpoint, sizeof(endpoint), "/plugin/ip-ban-report");
+    } else if (kind == 3) {
+        strcopy(endpoint, sizeof(endpoint), "/plugin/access-report");
     } else {
         strcopy(endpoint, sizeof(endpoint), "/plugin/ban-report");
     }
@@ -1636,13 +1639,13 @@ void SendNextBanReport() {
     }
     if (!SteamWorks_SetHTTPRequestRawPostBody(request, "application/json", body,
             strlen(body))) {
-        LogError("[ThRei_Players] Could not set the ban report body.");
+        LogError("[ThRei_Players] Could not set the queued report body.");
         CloseRequest(request);
         g_fNextBanReport = GetGameTime() + 30.0;
         return;
     }
     if (!SteamWorks_SetHTTPCallbacks(request, OnBanReportComplete)) {
-        LogError("[ThRei_Players] Could not set ban report callbacks.");
+        LogError("[ThRei_Players] Could not set queued report callbacks.");
         CloseRequest(request);
         g_fNextBanReport = GetGameTime() + 30.0;
         return;
@@ -1650,7 +1653,7 @@ void SendNextBanReport() {
 
     g_hBanReportRequest = request;
     if (!SteamWorks_SendHTTPRequest(request)) {
-        LogError("[ThRei_Players] Could not send the ban report; will retry.");
+        LogError("[ThRei_Players] Could not send the queued report; will retry.");
         if (g_hBanReportRequest == request) {
             g_hBanReportRequest = null;
             CloseHandle(request);
@@ -1664,13 +1667,13 @@ void QueueBanReport(int kind, const char[] body) {
         return;
     }
     if (g_aBanReportQueue.Length >= MAX_ACK_QUEUE) {
-        LogError("[ThRei_Players] Ban report queue is full; dropping report.");
+        LogError("[ThRei_Players] Report queue is full; dropping report.");
         return;
     }
     g_aBanReportQueue.PushString(body);
     g_aBanReportKinds.Push(kind);
     g_fNextBanReport = 0.0;
-    LogMessage("[ThRei_Players] Queued ban report (kind=%d, pending=%d).", kind,
+    LogMessage("[ThRei_Players] Queued report (kind=%d, pending=%d).", kind,
         g_aBanReportQueue.Length);
     if (g_hBanReportRequest == null) {
         SendNextBanReport();
@@ -1816,8 +1819,8 @@ public void OnBanReportComplete(Handle request, bool failure, bool requestSucces
             // A malformed payload / bad token / unknown route cannot succeed
             // by retrying; drop it so later reports are not blocked. The
             // local SourceMod ban is already in effect.
-            LogHttpStatus("ban report", request, statusCode);
-            LogError("[ThRei_Players] Ban report rejected with HTTP %d; dropping it.",
+            LogHttpStatus("report", request, statusCode);
+            LogError("[ThRei_Players] Report rejected with HTTP %d; dropping it.",
                 code);
             if (g_aBanReportQueue != null && g_aBanReportQueue.Length > 0) {
                 g_aBanReportQueue.Erase(0);
@@ -1832,9 +1835,9 @@ public void OnBanReportComplete(Handle request, bool failure, bool requestSucces
             g_fNextBanReport = GetGameTime()
                 + BackoffDelay(15, g_iBanReportFailures);
             if (failure || !requestSuccessful) {
-                LogError("[ThRei_Players] Ban report failed; will retry.");
+                LogError("[ThRei_Players] Report failed; will retry.");
             } else {
-                LogHttpStatus("ban report", request, statusCode);
+                LogHttpStatus("report", request, statusCode);
             }
         }
     }
@@ -1965,7 +1968,7 @@ public void OnAccessComplete(Handle request, bool failure, bool requestSuccessfu
 
     for (int client = 1; client <= MaxClients; client++) {
         if (IsClientInGame(client) && !IsFakeClient(client) && IsClientAuthorized(client)) {
-            CheckClientAccess(client);
+            CheckClientAccess(client, false);
         }
     }
     CloseHandle(request);
@@ -2549,7 +2552,7 @@ int FindClientBySteamId(const char[] steamId) {
     return 0;
 }
 
-void CheckClientAccess(int client) {
+void CheckClientAccess(int client, bool report) {
     if (!g_cvAccessEnabled.BoolValue || IsFakeClient(client)
             || IsClientSourceTV(client) || IsClientReplay(client)) {
         return;
@@ -2578,6 +2581,9 @@ void CheckClientAccess(int client) {
         // report it before kicking, letting every server block alt accounts
         // from the same IP.
         CaptureBannedClientIp(client, steamId, expiresAt, banReason);
+        if (report) {
+            ReportAccessDenied(client, steamId, "banned", "banned", banReason);
+        }
         KickForBan(client, steamId, "");
         return;
     }
@@ -2590,6 +2596,9 @@ void CheckClientAccess(int client) {
             char ipReason[MAX_REASON_LENGTH];
             ipReason[0] = '\0';
             g_smIpBanReasons.GetString(clientIp, ipReason, sizeof(ipReason));
+            if (report) {
+                ReportAccessDenied(client, steamId, "banned", "ip_banned", ipReason);
+            }
             KickForBan(client, steamId, ipReason);
             return;
         }
@@ -2597,6 +2606,10 @@ void CheckClientAccess(int client) {
 
     if (!g_bAccessLoaded) {
         if (!g_cvAccessFailOpen.BoolValue) {
+            if (report) {
+                ReportAccessDenied(client, steamId, "access_unavailable",
+                    "access_unavailable", "访问控制快照尚未加载");
+            }
             KickForWhitelist(client, true);
         }
         return;
@@ -2608,8 +2621,58 @@ void CheckClientAccess(int client) {
 
     int listed = 0;
     if (!g_smWhitelist.GetValue(steamId, listed)) {
+        if (report) {
+            ReportAccessDenied(client, steamId, "whitelist_rejected",
+                "not_whitelisted", "");
+        }
         KickForWhitelist(client, false);
     }
+}
+
+/**
+ * Queues a rejected connection attempt for the admin access monitor.
+ * Successful joins are derived from the roster report, so this only needs to
+ * run when the plugin is about to kick the player.
+ */
+void ReportAccessDenied(int client, const char[] steamId, const char[] accessMethod,
+        const char[] failureCode, const char[] reason) {
+    if (!g_cvEnabled.BoolValue || g_aBanReportQueue == null) {
+        return;
+    }
+
+    char name[MAX_NAME_LENGTH];
+    char safeName[MAX_NAME_LENGTH];
+    char nameJson[FRAGMENT_BUFFER_SIZE];
+    GetClientName(client, name, sizeof(name));
+    if (name[0] != '\0' && IsValidUtf8(name)) {
+        strcopy(safeName, sizeof(safeName), name);
+    } else {
+        strcopy(safeName, sizeof(safeName), steamId);
+    }
+    JsonEscape(safeName, nameJson, sizeof(nameJson));
+
+    char ip[64];
+    char ipJson[256];
+    ip[0] = '\0';
+    GetClientIP(client, ip, sizeof(ip), true);
+    JsonEscape(ip, ipJson, sizeof(ipJson));
+
+    char safeReason[MAX_REASON_LENGTH];
+    if (reason[0] != '\0' && IsValidUtf8(reason)) {
+        strcopy(safeReason, sizeof(safeReason), reason);
+    } else {
+        safeReason[0] = '\0';
+    }
+    char reasonJson[FRAGMENT_BUFFER_SIZE];
+    JsonEscape(safeReason, reasonJson, sizeof(reasonJson));
+
+    char body[BAN_REPORT_BODY_SIZE];
+    Format(body, sizeof(body),
+        "{\"steamId64\":\"%s\",\"playerName\":\"%s\",\"ipAddress\":\"%s\","
+        ... "\"allowed\":false,\"accessMethod\":\"%s\",\"failureCode\":\"%s\","
+        ... "\"rejectReason\":\"%s\",\"occurredAt\":%d}",
+        steamId, nameJson, ipJson, accessMethod, failureCode, reasonJson, GetTime());
+    QueueBanReport(3, body);
 }
 
 void KickForWhitelist(int client, bool unavailable) {

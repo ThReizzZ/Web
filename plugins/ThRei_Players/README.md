@@ -6,6 +6,7 @@
 - 从 threi API 同步白名单与游戏封禁快照，在玩家连接时执行拦截；
 - 长轮询管理后台下发的踢出/封禁/解封/IP 封禁指令，通常 1 秒内执行，执行后向 API 确认；
 - 把游戏内通过 `sm_ban` / `!ban` 菜单等 ThRei 封禁命令执行的封禁回传网站；游戏内封禁默认作用于全部服务器，并自动封禁玩家 IP；
+- 把被拒绝的连接尝试（游戏封禁、IP 封禁、白名单未通过、访问控制快照未加载）上报到网站「进服监控」；
 - SteamID 封禁玩家再次连接时自动补抓其 IP：本服立即拦截同 IP 的其他账号，并把 IP 同步到全部服务器；
 - 网站解除游戏封禁或 IP 封禁时，立即清除服务器本地插件封禁；
 - 在最后一名玩家断开时立即补报一次，尽量让网站先清理名单再进入空服休眠。
@@ -67,13 +68,17 @@ sm_threi_status
 统一使用标准命令 `sm_addban` / `sm_unban` / `sm_banip` / `sm_unbanip`。仅保留
 `sm_threi_report` / `sm_threi_status` 作为插件诊断命令。
 
+1.10.0 起新增进服监控上报：玩家因 SteamID 封禁、IP 封禁、白名单拒绝或访问控制快照未加载
+而被踢出时，插件会向 `POST /api/v1/plugin/access-report` 上报原因、当前 IP 和发生时间。
+成功进服由在线名单上报自动记录，不需要额外请求。
+
 1.7.0 新增 `sm_threi_*` 封禁命令和网站分组解封；1.7.1 支持 SteamID64/2/3；1.7.2 修复
 非法 UTF-8 与 4xx 队列堵塞；1.7.3 支持不加引号的 SteamID2/3 参数。1.6.1 增加了网站
 解封时的本地 `unban` 指令。1.6.0 增加了在线玩家 IP 上报与游戏内封禁回传。1.5.0 使用
 `/plugin/actions?wait=20` 长轮询，新指令通常 1 秒内到达；旧 API 会返回 404，此时插件仍会
 上报状态，但不会执行访问控制。
 
-> 1.9.3 的封禁只存在于插件和 `configs/threi_bans.cfg` 中；插件未加载时封禁不会生效。
+> 1.10.0 的封禁只存在于插件和 `configs/threi_bans.cfg` 中；插件未加载时封禁不会生效。
 > 网站仍然是权威来源，插件会定期从访问快照刷新 SteamID/IP 封禁。
 
 ## 获取服务器令牌
@@ -288,7 +293,7 @@ CS:GO 的 `sv_hibernate_when_empty` 会在空服时暂停游戏帧与 SourceMod 
 
 ### 封禁行为
 
-- 1.9.3 的封禁只写入插件内存和 `configs/threi_bans.cfg`，**不写 basebans/引擎封禁**。
+- 1.10.0 的封禁只写入插件内存和 `configs/threi_bans.cfg`，**不写 basebans/引擎封禁**。
   玩家连接时由 `CheckClientAccess` 用 `sm_threi_ban_kick_message` + 具体原因踢出，因此重连
   也能看到自定义提示。
 - SteamID 封禁玩家再次连接时，插件在踢出前读取其 IP，立即写入本地 IP 封禁（同服的其他账号
@@ -371,7 +376,7 @@ Content-Type: application/json
 
 ### 游戏内封禁回传
 
-插件 1.9.3 的 `sm_ban` / `!ban` 菜单 / `sm_addban` 会将封禁异步上报：
+插件 1.10.0 的 `sm_ban` / `!ban` 菜单 / `sm_addban` 会将封禁异步上报：
 
 ```http
 POST /api/v1/plugin/ban-report
@@ -403,6 +408,31 @@ Content-Type: application/json
   管理员手动封禁时返回 `409`，不会在本地解封。
 - 一次游戏内封禁在网站产生分组记录；通过网站解除「游戏封禁」会同时解除同组 IP 封禁。没有
   分组的历史记录需要分别检查。
+
+### 进服拒绝上报
+
+```http
+POST /api/v1/plugin/access-report
+Content-Type: application/json
+```
+
+```json
+{
+  "steamId64": "76561199125125759",
+  "playerName": "玩家昵称",
+  "ipAddress": "203.0.113.10",
+  "allowed": false,
+  "accessMethod": "banned",
+  "failureCode": "banned",
+  "rejectReason": "违反服务器规则",
+  "occurredAt": 1793510400
+}
+```
+
+- 1.10.0+ 在踢出玩家前上报；`accessMethod` / `failureCode` 由本地判定结果决定。
+- `occurredAt` 使用 `GetTime()` 的 Unix 秒，重试时保持不变，API 会按唯一索引去重。
+- 成功进服不在插件端上报；网站根据在线名单的新增玩家生成记录。
+- 上报失败不会阻止踢出，队列会按退避间隔重试。
 
 ### IP 封禁回传
 
@@ -555,7 +585,7 @@ sm_threi_instance 10001 "该服务器的令牌"
 
 1.9.3+ 会在网站解除「游戏封禁」时自动下发 `unban`，删除插件封禁文件/缓存中的 SteamID
 条目，玩家无需等待引擎解封即可重连；同组游戏 IP 封禁也会解除并下发 `unbanip`。如果仍然
-被封，确认 `sm_threi_status` 显示 `version=1.9.3`，并确认解除的是「游戏封禁」而不是只解除了
+被封，确认 `sm_threi_status` 显示 `version=1.10.0`，并确认解除的是「游戏封禁」而不是只解除了
 单独的 IP 封禁记录。
 
 如果是从 1.7.x 升级，旧版写入的引擎封禁会在首次快照加载时清理；basebans 自己遗留的、
@@ -572,11 +602,11 @@ sm_unban "[U:1:24691356]"
 
 **游戏内封禁没有出现在网站**
 
-- 确认插件版本为 1.9.3 或更高：`sm_threi_status` 应显示 `version=1.9.3`。
+- 确认插件版本为 1.10.0 或更高：`sm_threi_status` 应显示 `version=1.10.0`。
 - `sm_ban` / `!ban` 菜单 / `sm_addban` / `sm_banip` 会主动上报；控制台原始 `banid` /
   `addip` 不会回传。
-- 查看 `addons/sourcemod/logs/` 中是否出现 `Queued in-game ban report`；出现
-  `Ban report failed` 时检查 API 连通性、令牌和 `sm_threi_api_url`。
+- 查看 `addons/sourcemod/logs/` 中是否出现 `Queued report`；出现
+  `Report failed` 时检查 API 连通性、令牌和 `sm_threi_api_url`。
 - 网站已有同一玩家的生效全服游戏封禁时，不会重复写入；IP 封禁仍会按需补写。
 
 **API 返回 401**
@@ -586,8 +616,8 @@ sm_unban "[U:1:24691356]"
 
 **API 返回 404（访问控制接口）**
 
-- API 版本过旧，不包含 `plugin/access-snapshot`、`plugin/actions`、`plugin/ban-report`
-  或确认接口。
+- API 版本过旧，不包含 `plugin/access-snapshot`、`plugin/actions`、`plugin/access-report`、
+  `plugin/ban-report` 或确认接口。
 - 升级网站 API 后重载插件。
 
 **API 返回 422**

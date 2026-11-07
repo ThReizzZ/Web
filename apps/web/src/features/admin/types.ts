@@ -264,3 +264,186 @@ export interface ServerAdminOverview {
   servers: AdminServer[];
   bans: ServerBan[];
 }
+
+export interface AdminAccessLogItem {
+  id: string;
+  serverId: string;
+  serverName: string;
+  serverPort: number;
+  communityName: string | null;
+  steamId64: string;
+  playerName: string;
+  ipAddress: string | null;
+  allowed: boolean;
+  accessMethod: string;
+  failureCode: string | null;
+  rejectReason: string | null;
+  rating: number | null;
+  steamLevel: number | null;
+  occurredAt: string;
+}
+
+export interface AdminAccessLogPage {
+  items: AdminAccessLogItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface AdminPlayerCandidate {
+  steamId64: string;
+  name: string;
+  avatarUrl: string | null;
+  online: boolean;
+  lastSeenAt: string | null;
+}
+
+export interface AdminPlayerDetailProfile {
+  steamId64: string;
+  name: string;
+  avatarUrl: string | null;
+  role: string;
+  bio: string;
+  location: string;
+  isDisabled: boolean;
+  registeredAt: string | null;
+  lastLoginAt: string | null;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  online: boolean;
+}
+
+export interface AdminPlayerOnlineServer {
+  id: string;
+  name: string;
+  map: string;
+  connectedAt: string;
+}
+
+export interface AdminPlayerSession {
+  id: string;
+  serverId: string;
+  serverName: string;
+  playerName: string;
+  ipAddress: string | null;
+  joinedAt: string;
+  lastSeenAt: string;
+  leftAt: string | null;
+  leaveReason: string | null;
+  durationSeconds: number;
+}
+
+export interface AdminPlayerGameBan {
+  id: string;
+  scope: "global" | "server";
+  serverName: string;
+  reason: string;
+  createdAt: string;
+  expiresAt: string | null;
+  liftedAt: string | null;
+  createdBy: string;
+  liftedBy: string | null;
+  isActive: boolean;
+}
+
+export interface AdminPlayerIpBan {
+  id: string;
+  ipAddress: string;
+  reason: string;
+  createdAt: string;
+  expiresAt: string | null;
+  liftedAt: string | null;
+  createdBy: string;
+  liftedBy: string | null;
+  isActive: boolean;
+}
+
+export interface AdminPlayerWhitelistApplication {
+  id: string;
+  status: string;
+  message: string;
+  createdAt: string;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
+  reviewNote: string | null;
+  serverName: string;
+}
+
+export interface AdminPlayerWhitelistEntry {
+  serverName: string;
+  createdAt: string;
+  addedBy: string | null;
+}
+
+export interface AdminLinkedAccount {
+  steamId64: string;
+  name: string;
+  avatarUrl: string | null;
+  lastSeenAt: string;
+  online: boolean;
+  hasActiveBan: boolean;
+  hasActiveIpBan: boolean;
+  hasWhitelist: boolean;
+}
+
+export interface AdminPlayerIpGroup {
+  ipAddress: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  accessCount: number;
+  linkedAccounts: AdminLinkedAccount[];
+}
+
+export interface AdminPlayerDetailStats {
+  accessSuccess: number;
+  accessFailure: number;
+  activeBanCount: number;
+  knownIpCount: number;
+  linkedAccountCount: number;
+  totalPlaySeconds: number;
+  sessionCount: number;
+  topics: number;
+  replies: number;
+}
+
+export interface AdminPlayerTimelineEvent {
+  id: string;
+  kind: string;
+  occurredAt: string;
+  title: string;
+  description: string;
+  actor: string | null;
+  serverName: string | null;
+}
+
+export interface AdminPlayerNoteHistoryItem {
+  id: string;
+  note: string;
+  tags: string[];
+  changedAt: string;
+  changedBy: string | null;
+}
+
+export interface AdminPlayerInternalProfile {
+  note: string;
+  tags: string[];
+  updatedAt: string | null;
+  updatedBy: string | null;
+  history: AdminPlayerNoteHistoryItem[];
+}
+
+export interface AdminPlayerDetail {
+  profile: AdminPlayerDetailProfile;
+  onlineServers: AdminPlayerOnlineServer[];
+  stats: AdminPlayerDetailStats;
+  accessLogs: AdminAccessLogItem[];
+  sessions: AdminPlayerSession[];
+  gameBans: AdminPlayerGameBan[];
+  ipBans: AdminPlayerIpBan[];
+  whitelistApplications: AdminPlayerWhitelistApplication[];
+  whitelistEntries: AdminPlayerWhitelistEntry[];
+  ipGroups: AdminPlayerIpGroup[];
+  timeline: AdminPlayerTimelineEvent[];
+  timelineTotal: number;
+  internalProfile: AdminPlayerInternalProfile;
+}

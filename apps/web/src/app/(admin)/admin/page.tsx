@@ -10,6 +10,7 @@ import {
   Server,
   ShieldCheck,
   UserCog,
+  UserRoundSearch,
   Users,
 } from "lucide-react";
 
@@ -137,6 +138,20 @@ export default async function AdminOverviewPage() {
           title="白名单审核"
           description="审核申请、配置服务器白名单和移除权限。"
           meta={`${overview.stats.pendingWhitelist} 条待审核`}
+        />
+        <QuickAction
+          href="/admin/access-logs"
+          icon={Activity}
+          title="进服监控"
+          description="查看玩家每次连接的成功/失败、IP、服务器与拒绝原因。"
+          meta="连接审计"
+        />
+        <QuickAction
+          href="/admin/player-detail"
+          icon={UserRoundSearch}
+          title="玩家详情"
+          description="聚合在线、会话、进服记录、封禁、IP 关联与内部备注。"
+          meta="调查档案"
         />
       </section>
 

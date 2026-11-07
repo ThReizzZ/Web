@@ -17,6 +17,59 @@
 
 ---
 
+## 2026年11月07日 18时09分51秒 新增进服监控与玩家详情
+
+### 背景
+
+需要参考 LumiAdmin 的「进服监控」和「玩家详情」页面，为 ThRei 增加连接尝试审计和玩家调查能力。
+参考站包含 QQ 绑定、Rating、全球封禁、证据与审计等 ThRei 没有数据源的模块，因此按现有数据做等价适配。
+
+### 变更内容
+
+- 新增 `server_access_logs`：插件 1.10.0 上报被拒绝的连接尝试；成功进服由在线名单新增玩家自动生成。
+- 新增 `server_player_sessions`：在线名单上报时 upsert 会话，`server_players` 删除触发器自动关闭会话。
+- 新增 `player_admin_profiles` / `player_admin_profile_history`：仅后台可见的内部备注、标签和变更历史。
+- 新增管理接口：`GET /admin/access-logs`（分页/筛选）、`GET /admin/player-detail/search`、
+  `GET /admin/player-detail`、`PUT /admin/player-detail/{steam_id64}/profile`。
+- 新增插件接口 `POST /plugin/access-report`；插件新增拒绝连接上报队列（复用控制上报队列，kind=3）。
+- 管理面板新增 `/admin/access-logs` 与 `/admin/player-detail`，导航增加「进服监控」「玩家详情」。
+- 玩家详情包含：在线状态、会话历史、进服记录、游戏/IP 封禁、白名单、同 IP 关联账号、事件时间线、
+  内部备注/标签；可发起全服游戏封禁。
+
+### 涉及文件
+
+- `services/api/migrations/20261107090000_player_activity.sql`
+- `services/api/src/modules/player_activity.rs`
+- `services/api/src/modules/server_plugin.rs`
+- `services/api/src/modules/players.rs`、`routes/mod.rs`、`modules/mod.rs`、`openapi.rs`
+- `apps/web/src/app/(admin)/admin/access-logs/page.tsx`
+- `apps/web/src/app/(admin)/admin/player-detail/page.tsx`
+- `apps/web/src/features/admin/components/access-logs-manager.tsx`
+- `apps/web/src/features/admin/components/player-detail-manager.tsx`
+- `apps/web/src/features/admin/components/admin-nav.tsx`、`types.ts`
+- `apps/web/src/services/content.ts`
+- `plugins/ThRei_Players/addons/sourcemod/scripting/ThRei_Players.sp`（1.10.0）
+- `plugins/ThRei_Players/addons/sourcemod/plugins/ThRei_Players.smx`
+- `README.md`、`docs/API.md`、`docs/ARCHITECTURE.md`、`docs/CHANGELOG.md`、插件 README
+
+### 数据库与 API
+
+- 迁移新增 4 张表、访问日志/会话来索引、会话关闭触发器和备注更新时间触发器。
+- 新 API 均为管理员权限；插件上报使用每服务器令牌。
+- 成功进服日志的进服方式：服务器要求白名单且玩家在白名单时为 `whitelist`；要求白名单但玩家不在
+  名单（通常是快照未加载时的 fail-open）为 `snapshot_fallback`；否则为 `unrestricted`。
+
+### 测试与结果
+
+- `cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：58 个单元测试 + 15 个 HTTP 契约测试通过。
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- SourceMod `1.11.0.6970`（与 GOKZ 3.6.4 服务器 `kz1` 自带的 `spcomp64`/include 一致）编译
+  `ThRei_Players.sp`：通过，已更新 `.smx`；同时用 1.12 编译器验证通过，但最终文件是 1.11 构建。
+- 未执行：迁移真实数据库（本机没有 PostgreSQL/psql，未连接开发库）；未用真实游戏服务器验证进服上报。
+
+---
+
 ## 2026年11月03日 14时12分21秒 修复登录玩家最近登录 IP 被记录为 Docker 网关
 
 ### 背景

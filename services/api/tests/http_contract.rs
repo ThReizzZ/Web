@@ -316,6 +316,9 @@ async fn admin_endpoints_require_authentication() {
         "/api/v1/admin/server-bans",
         "/api/v1/admin/server-ip-bans",
         "/api/v1/admin/whitelist",
+        "/api/v1/admin/access-logs",
+        "/api/v1/admin/player-detail/search?q=test",
+        "/api/v1/admin/player-detail?steam_input=76561198000000000",
     ] {
         let router = test_router(&test_settings(false, ""));
         let request = Request::builder()

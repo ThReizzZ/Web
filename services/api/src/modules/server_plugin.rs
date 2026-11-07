@@ -77,6 +77,36 @@ pub struct PluginReportResponse {
     pub reported_at: DateTime<Utc>,
 }
 
+/// Connection attempt rejected by the plugin's local access checks.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginAccessReportRequest {
+    #[serde(default)]
+    pub server_id: Option<String>,
+    pub steam_id64: String,
+    #[serde(default)]
+    pub player_name: String,
+    #[serde(default)]
+    pub ip_address: Option<String>,
+    /// Successful joins are derived from the roster report. Rejection reports
+    /// always send `false`; the field is kept explicit for future clients.
+    #[serde(default)]
+    pub allowed: bool,
+    pub access_method: String,
+    #[serde(default)]
+    pub failure_code: Option<String>,
+    #[serde(default)]
+    pub reject_reason: Option<String>,
+    #[serde(default)]
+    pub rating: Option<i32>,
+    #[serde(default)]
+    pub steam_level: Option<i32>,
+    /// Unix timestamp from the game server. Retries keep the same value, which
+    /// makes the insert idempotent through `server_access_logs_event_idx`.
+    #[serde(default)]
+    pub occurred_at: Option<i64>,
+}
+
 /// In-game ban reported by plugin 1.6.0+ through `OnBanClient`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -147,11 +177,29 @@ struct PreviousServerRow {
     status: String,
     max_players: i32,
     player_count: Option<i32>,
+    requires_whitelist: bool,
 }
+
+pub(crate) const ACCESS_METHODS: [&str; 6] = [
+    "unrestricted",
+    "whitelist",
+    "snapshot_fallback",
+    "banned",
+    "whitelist_rejected",
+    "access_unavailable",
+];
+pub(crate) const FAILURE_CODES: [&str; 5] = [
+    "banned",
+    "ip_banned",
+    "not_whitelisted",
+    "access_unavailable",
+    "no_steamid",
+];
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/plugin/report", post(report))
+        .route("/plugin/access-report", post(access_report))
         .route("/plugin/ban-report", post(ban_report))
         .route("/plugin/ip-ban-report", post(ip_ban_report))
         .route("/plugin/unban-report", post(unban_report))
@@ -369,6 +417,99 @@ pub async fn ban_report(
             tracing::warn!(%error, %steam_id64, "failed to auto-create game IP ban");
         }
     }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/plugin/access-report",
+    tag = "plugin",
+    params(
+        ("x-threi-plugin-token" = String, Header, description = "Per-server plugin token generated in the admin panel")
+    ),
+    request_body = PluginAccessReportRequest,
+    responses(
+        (status = 204, description = "Access attempt recorded"),
+        (status = 401, description = "Missing or invalid plugin token", body = crate::errors::ErrorResponse),
+        (status = 422, description = "Invalid access report fields", body = crate::errors::ErrorResponse)
+    )
+)]
+pub async fn access_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PluginAccessReportRequest>,
+) -> Result<StatusCode, AppError> {
+    let token = plugin_token(&headers)?;
+    let requested_server_id = normalize_server_id(request.server_id)?;
+    let steam_id64 = request.steam_id64.trim();
+    if !is_valid_steam_id(steam_id64) {
+        return Err(AppError::Validation(
+            "steamId64 must be a 17-digit number".to_owned(),
+        ));
+    }
+    let server_id =
+        resolve_server_for_token(&state.db, token, requested_server_id.as_deref()).await?;
+
+    let access_method = request.access_method.trim();
+    if !ACCESS_METHODS.contains(&access_method) {
+        return Err(AppError::Validation(
+            "accessMethod is not a supported access method".to_owned(),
+        ));
+    }
+    let failure_code = request
+        .failure_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(code) = failure_code
+        && !FAILURE_CODES.contains(&code)
+    {
+        return Err(AppError::Validation(
+            "failureCode is not a supported failure code".to_owned(),
+        ));
+    }
+    let reject_reason = request
+        .reject_reason
+        .as_deref()
+        .map(sanitize_controls)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| truncate(&value, 1000));
+    let occurred_at = request
+        .occurred_at
+        .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0))
+        .filter(|timestamp| {
+            let now = Utc::now();
+            *timestamp <= now + ChronoDuration::minutes(5)
+                && *timestamp >= now - ChronoDuration::days(7)
+        })
+        .unwrap_or_else(Utc::now);
+
+    sqlx::query(
+        r"
+        INSERT INTO server_access_logs (
+            server_id, steam_id64, player_name, ip_address, allowed,
+            access_method, failure_code, reject_reason, rating, steam_level,
+            occurred_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT DO NOTHING
+        ",
+    )
+    .bind(&server_id)
+    .bind(steam_id64)
+    .bind(clean_name(&request.player_name, steam_id64))
+    .bind(normalize_player_ip(request.ip_address.as_deref()))
+    .bind(request.allowed)
+    .bind(access_method)
+    .bind(failure_code)
+    .bind(reject_reason)
+    .bind(request.rating)
+    .bind(request.steam_level)
+    .bind(occurred_at)
+    .execute(&state.db)
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -943,7 +1084,7 @@ async fn persist_report(
 
     let previous = sqlx::query_as::<_, PreviousServerRow>(
         r"
-        SELECT id, map, name, status, max_players, player_count
+        SELECT id, map, name, status, max_players, player_count, requires_whitelist
         FROM servers
         WHERE plugin_token = $1
           AND ($2::text IS NULL OR id = $2)
@@ -1017,6 +1158,10 @@ async fn persist_report(
         .iter()
         .map(|player| player.steam_id64.clone())
         .collect::<Vec<_>>();
+    let previous_ids = previous_players
+        .iter()
+        .map(|(steam_id, _)| steam_id.as_str())
+        .collect::<HashSet<_>>();
     sqlx::query(
         r"
         DELETE FROM server_players
@@ -1028,6 +1173,25 @@ async fn persist_report(
     .bind(&steam_ids)
     .execute(&mut *transaction)
     .await?;
+
+    let new_steam_ids = report
+        .players
+        .iter()
+        .filter(|player| !previous_ids.contains(player.steam_id64.as_str()))
+        .map(|player| player.steam_id64.clone())
+        .collect::<Vec<_>>();
+    let whitelisted_ids = if previous.requires_whitelist && !new_steam_ids.is_empty() {
+        sqlx::query_scalar::<_, String>(
+            "SELECT steam_id64 FROM global_whitelist WHERE steam_id64 = ANY($1)",
+        )
+        .bind(&new_steam_ids)
+        .fetch_all(&mut *transaction)
+        .await?
+        .into_iter()
+        .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
 
     for player in report.players {
         sqlx::query(
@@ -1058,6 +1222,57 @@ async fn persist_report(
         .bind(player.connected_at)
         .execute(&mut *transaction)
         .await?;
+
+        sqlx::query(
+            r"
+            INSERT INTO server_player_sessions (
+                server_id, steam_id64, player_name, ip_address, joined_at,
+                last_seen_at
+            )
+            VALUES ($1, $2, $3, $4, $5, now())
+            ON CONFLICT (server_id, steam_id64) WHERE left_at IS NULL DO UPDATE SET
+                player_name = EXCLUDED.player_name,
+                ip_address = COALESCE(EXCLUDED.ip_address, server_player_sessions.ip_address),
+                last_seen_at = now()
+            ",
+        )
+        .bind(&server.id)
+        .bind(&player.steam_id64)
+        .bind(&player.name)
+        .bind(player.ip_address.as_deref())
+        .bind(player.connected_at)
+        .execute(&mut *transaction)
+        .await?;
+
+        if new_steam_ids.iter().any(|id| id == &player.steam_id64) {
+            let access_method = if previous.requires_whitelist {
+                if whitelisted_ids.contains(&player.steam_id64) {
+                    "whitelist"
+                } else {
+                    "snapshot_fallback"
+                }
+            } else {
+                "unrestricted"
+            };
+            sqlx::query(
+                r"
+                INSERT INTO server_access_logs (
+                    server_id, steam_id64, player_name, ip_address, allowed,
+                    access_method, occurred_at
+                )
+                VALUES ($1, $2, $3, $4, true, $5, $6)
+                ON CONFLICT DO NOTHING
+                ",
+            )
+            .bind(&server.id)
+            .bind(&player.steam_id64)
+            .bind(&player.name)
+            .bind(player.ip_address.as_deref())
+            .bind(access_method)
+            .bind(player.connected_at)
+            .execute(&mut *transaction)
+            .await?;
+        }
     }
 
     transaction.commit().await?;
@@ -1118,6 +1333,21 @@ async fn sweep_stale(db: &PgPool, skip_rcon_servers: bool) -> Result<(u64, u64),
             latency_ms = NULL,
             updated_at = now()
         WHERE id = ANY($1)
+        ",
+    )
+    .bind(&stale_ids)
+    .execute(&mut *transaction)
+    .await?;
+
+    sqlx::query(
+        r"
+        UPDATE server_player_sessions p
+        SET left_at = coalesce(s.last_reported_at, now()),
+            leave_reason = 'server_stale'
+        FROM servers s
+        WHERE p.server_id = s.id
+          AND p.server_id = ANY($1)
+          AND p.left_at IS NULL
         ",
     )
     .bind(&stale_ids)
