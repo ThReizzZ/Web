@@ -78,7 +78,11 @@ function getServerViewSnapshot(): ViewMode {
   return "card";
 }
 
-const COLUMN_QUERIES = ["(min-width: 1280px)", "(min-width: 768px)"] as const;
+const COLUMN_QUERIES = [
+  "(min-width: 1280px)",
+  "(min-width: 1024px)",
+  "(min-width: 768px)",
+] as const;
 
 function subscribeToColumns(callback: () => void) {
   const queries = COLUMN_QUERIES.map((query) => window.matchMedia(query));
@@ -90,9 +94,12 @@ function subscribeToColumns(callback: () => void) {
 
 function getColumnCount() {
   if (window.matchMedia(COLUMN_QUERIES[0]).matches) {
-    return 3;
+    return 4;
   }
   if (window.matchMedia(COLUMN_QUERIES[1]).matches) {
+    return 3;
+  }
+  if (window.matchMedia(COLUMN_QUERIES[2]).matches) {
     return 2;
   }
   return 1;
@@ -275,11 +282,13 @@ export function ServerDirectory({ servers }: { servers: KzServer[] }) {
       ) : view === "card" ? (
         <div
           className={
-            columnCount === 3
-              ? "grid grid-cols-3 items-start gap-4"
-              : columnCount === 2
-                ? "grid grid-cols-2 items-start gap-4"
-                : "grid grid-cols-1 items-start gap-4"
+            columnCount === 4
+              ? "grid grid-cols-4 items-start gap-4"
+              : columnCount === 3
+                ? "grid grid-cols-3 items-start gap-4"
+                : columnCount === 2
+                  ? "grid grid-cols-2 items-start gap-4"
+                  : "grid grid-cols-1 items-start gap-4"
           }
         >
           {columns.map((column, index) => (

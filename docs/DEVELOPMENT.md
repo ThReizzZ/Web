@@ -17,6 +17,34 @@
 
 ---
 
+## 2026年11月07日 21时04分16秒 公开网站宽度对齐 CNGOKZ 比例
+
+### 背景
+
+公开网站改为贴边全宽后，在大屏上内容被拉得过宽，整体比例不协调。参考 `https://cngokz.com/` 的
+布局，其内容容器固定为 `1360px` 并居中。
+
+### 变更内容
+
+- `PageContainer` 改为 `mx-auto w-full max-w-[1360px]`，保持响应式水平内边距。
+- 首页、服务器、论坛、社区玩家、用户中心、页头页脚统一回到 1360px 居中布局。
+- 服务器目录在 `>=1280px` 下由 3 列改为 4 列，`1024–1279px` 为 3 列，`768–1023px` 为 2 列。
+- 首页焦点服务器仍保留 3 张卡片，避免首页推荐区过密。
+
+### 涉及文件
+
+- `apps/web/src/components/layout/page-container.tsx`
+- `apps/web/src/features/servers/components/server-directory.tsx`
+
+### 测试与结果
+
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 生产环境重新构建 `threi-web:0.1.0` 并重建 `web` 容器，状态 `healthy`。
+- `/`、`/servers`、`/forum`、`/players`、`/account` 均返回 `200`；HTML 已确认容器为
+  `mx-auto w-full max-w-[1360px]`。
+
+---
+
 ## 2026年11月07日 20时44分09秒 公开网站改为全宽布局
 
 ### 背景
