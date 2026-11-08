@@ -17,6 +17,55 @@
 
 ---
 
+## 2026年11月08日 16时38分20秒 封禁记录自动解析玩家名称
+
+### 背景
+
+管理员在「封禁管理」中只填 SteamID64 手动封禁时，如果服务器没有上报过昵称、玩家也没有网站
+账号，封禁列表会把 SteamID64 当作玩家名显示，不利于后续识别。生产库中当时有 2 条这类记录，
+它们完全没有网站或游戏记录，只能通过 Steam 公开资料补名称。
+
+### 变更内容
+
+- 新增 `resolve_ban_player_name`：创建 SteamID 封禁时，名称解析顺序为
+  管理员填写 → 网站账号/游戏在线名单/最近游戏会话/进服记录/历史封禁 → Steam 公开资料。
+- `POST /admin/server-bans` 与 `POST /admin/servers/{id}/players/{steam_id64}/ban` 都接入该逻辑，
+  解析结果写入 `server_bans.player_name`。
+- 抽出 `fetch_steam_profile_optional`，Steam 资料不可用时返回 `None`，不阻塞封禁创建。
+- 封禁列表 SQL 对旧记录同样从网站/游戏记录解析名称；最终回退为
+  `Steam 用户 <SteamID64 后 6 位>`，不再把 64 位 ID 当作玩家名。
+- 生产库已回填历史封禁名称：`76561199626924492` → `Луна`，
+  `76561199693699361` → `XY`，其余可解析记录也已写入。
+- 同步更新 `docs/API.md` 与 `docs/CHANGELOG.md`。
+
+### 涉及文件
+
+- `services/api/src/modules/auth/mod.rs`
+- `services/api/src/modules/server_admin.rs`
+- `docs/API.md`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 无数据库迁移。
+- `server_bans.player_name` 仍是可空字段；创建封禁时现在会自动解析并写入。
+- `GET /admin/server-bans` 的 `playerName` 会使用本地记录解析，缺失时使用 `Steam 用户 xxxxxx`
+  占位；Steam 资料查询只发生在创建封禁时。
+- 已有封禁记录通过一次性 SQL 回填名称。
+
+### 测试与结果
+
+- `cargo fmt --check`、`cargo check`、`cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：61 个单元测试与 15 个 HTTP 合约测试全部通过（新增玩家名清洗测试）。
+- 生产 PostgreSQL 执行新封禁列表名称解析 SQL：4 条缺失名称记录均不再返回 64 位 ID，
+  其中 2 条解析为 `ElliezzZ`，2 条使用 `Steam 用户 xxxxxx` 占位。
+- 生产 Steam 中继 `https://steam.threi.online` 已验证可返回公开昵称：两个无本地记录的
+  SteamID 分别返回 `Луна` 和 `XY`。
+- 生产环境重新构建 `threi-api:0.1.0` 并重建 `threi-api-1`，状态 `healthy`；回滚镜像
+  `threi-api:rollback-20261108T083514Z`。`web` 无改动。
+
+---
+
 ## 2026年11月08日 15时57分27秒 玩家 IP 来源标注与自动封禁优先游戏 IP
 
 ### 背景

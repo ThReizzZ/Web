@@ -2,7 +2,7 @@ use std::net::IpAddr;
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
     routing::{delete, get, patch, post, put},
@@ -14,9 +14,10 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
+    config::AuthSettings,
     errors::AppError,
     modules::{
-        auth::{client_ip, require_admin},
+        auth::{client_ip, fetch_steam_profile_optional, require_admin},
         server_plugin::STALE_AFTER_SECS,
     },
     state::AppState,
@@ -414,7 +415,25 @@ async fn load_server_bans(db: &sqlx::PgPool) -> Result<Vec<ServerBan>, AppError>
                coalesce(s.name, '全服') AS server_name,
                CASE WHEN b.server_id IS NULL THEN 'global' ELSE 'server' END AS scope,
                b.steam_id64,
-               coalesce(b.player_name, u.persona_name, b.steam_id64) AS player_name,
+               coalesce(
+                   nullif(b.player_name, b.steam_id64),
+                   u.persona_name,
+                   (SELECT p.display_name FROM server_players p
+                    WHERE p.steam_id64 = b.steam_id64
+                    ORDER BY p.last_seen_at DESC LIMIT 1),
+                   (SELECT s.player_name FROM server_player_sessions s
+                    WHERE s.steam_id64 = b.steam_id64
+                    ORDER BY s.last_seen_at DESC LIMIT 1),
+                   (SELECT l.player_name FROM server_access_logs l
+                    WHERE l.steam_id64 = b.steam_id64
+                    ORDER BY l.occurred_at DESC LIMIT 1),
+                   (SELECT pb.player_name FROM server_bans pb
+                    WHERE pb.steam_id64 = b.steam_id64
+                      AND pb.player_name IS NOT NULL
+                      AND pb.player_name <> pb.steam_id64
+                    ORDER BY pb.created_at DESC LIMIT 1),
+                   concat('Steam 用户 ', right(b.steam_id64, 6))
+               ) AS player_name,
                u.avatar_url, b.reason, b.expires_at, b.created_at,
                coalesce(creator.persona_name, '已删除管理员') AS created_by,
                b.lifted_at, lifter.persona_name AS lifted_by,
@@ -450,10 +469,75 @@ async fn list_server_bans(
     Ok(Json(load_server_bans(&state.db).await?))
 }
 
+fn clean_player_name(value: &str, steam_id64: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value == steam_id64 {
+        return None;
+    }
+    Some(value.chars().take(80).collect())
+}
+
+/// Finds the most recent human-readable name already stored for a player.
+/// Website accounts are checked first, then live/historical game records.
+async fn lookup_recorded_player_name(
+    db: &sqlx::PgPool,
+    steam_id64: &str,
+) -> Result<Option<String>, AppError> {
+    let name = sqlx::query_scalar::<_, Option<String>>(
+        r"
+        SELECT coalesce(
+            (SELECT persona_name FROM users WHERE steam_id64 = $1),
+            (SELECT display_name FROM server_players
+             WHERE steam_id64 = $1
+             ORDER BY last_seen_at DESC LIMIT 1),
+            (SELECT player_name FROM server_player_sessions
+             WHERE steam_id64 = $1
+             ORDER BY last_seen_at DESC LIMIT 1),
+            (SELECT player_name FROM server_access_logs
+             WHERE steam_id64 = $1
+             ORDER BY occurred_at DESC LIMIT 1),
+            (SELECT player_name FROM server_bans
+             WHERE steam_id64 = $1
+               AND player_name IS NOT NULL
+               AND player_name <> $1
+             ORDER BY created_at DESC LIMIT 1)
+        )
+        ",
+    )
+    .bind(steam_id64)
+    .fetch_one(db)
+    .await?;
+    Ok(name.and_then(|value| clean_player_name(&value, steam_id64)))
+}
+
+/// Resolves the name stored on a new ban. Explicit input wins, then any name
+/// already recorded locally, and finally the public Steam profile. Returning
+/// `None` keeps the database value NULL so the list can retry resolution later.
+async fn resolve_ban_player_name(
+    db: &sqlx::PgPool,
+    settings: &AuthSettings,
+    steam_id64: &str,
+    provided: Option<String>,
+) -> Result<Option<String>, AppError> {
+    if let Some(name) = provided
+        .as_deref()
+        .and_then(|value| clean_player_name(value, steam_id64))
+    {
+        return Ok(Some(name));
+    }
+    if let Some(name) = lookup_recorded_player_name(db, steam_id64).await? {
+        return Ok(Some(name));
+    }
+    Ok(fetch_steam_profile_optional(settings, steam_id64)
+        .await
+        .and_then(|(name, _)| clean_player_name(&name, steam_id64)))
+}
+
 #[allow(clippy::too_many_lines)]
 async fn create_server_ban(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Extension(settings): Extension<AuthSettings>,
     Json(request): Json<CreateServerBanRequest>,
 ) -> Result<StatusCode, AppError> {
     let admin = require_admin(&state, &headers).await?;
@@ -525,11 +609,8 @@ async fn create_server_ban(
         return Err(AppError::Conflict);
     }
 
-    let player_name = request
-        .player_name
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.chars().take(80).collect::<String>());
+    let player_name =
+        resolve_ban_player_name(&state.db, &settings, steam_id64, request.player_name).await?;
     let target_ip = find_recent_game_ip(&state.db, steam_id64, server_id).await?;
     let ban_group_id = Uuid::new_v4();
 
@@ -1365,6 +1446,7 @@ async fn ban_player(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((server_id, steam_id64)): Path<(String, String)>,
+    Extension(settings): Extension<AuthSettings>,
     Json(request): Json<ServerBanRequest>,
 ) -> Result<StatusCode, AppError> {
     let admin = require_admin(&state, &headers).await?;
@@ -1379,10 +1461,8 @@ async fn ban_player(
             ));
         }
     };
-    let player_name = request
-        .player_name
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
+    let player_name =
+        resolve_ban_player_name(&state.db, &settings, &steam_id64, request.player_name).await?;
     let server_exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM servers WHERE id = $1 AND is_active = true)",
     )
@@ -1743,4 +1823,30 @@ fn validate_ip(value: &str) -> Result<String, AppError> {
         AppError::Validation("ipAddress must be a valid IPv4 or IPv6 address".to_owned())
     })?;
     Ok(parsed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_player_name;
+
+    const STEAM_ID: &str = "76561198000000000";
+
+    #[test]
+    fn player_names_trim_and_reject_steam_ids() {
+        assert_eq!(
+            clean_player_name("  Alice  ", STEAM_ID),
+            Some("Alice".to_owned())
+        );
+        assert_eq!(clean_player_name(STEAM_ID, STEAM_ID), None);
+        assert_eq!(clean_player_name("   ", STEAM_ID), None);
+    }
+
+    #[test]
+    fn player_names_are_limited_to_the_database_width() {
+        let long = "名".repeat(100);
+        assert_eq!(
+            clean_player_name(&long, STEAM_ID).map(|name| name.chars().count()),
+            Some(80)
+        );
+    }
 }

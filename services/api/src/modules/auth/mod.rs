@@ -373,14 +373,25 @@ async fn fetch_steam_profile(
     settings: &AuthSettings,
     steam_id64: &str,
 ) -> (String, Option<String>) {
-    let (fallback_name, _) = steam_profile_fallback(steam_id64);
+    fetch_steam_profile_optional(settings, steam_id64)
+        .await
+        .unwrap_or_else(|| steam_profile_fallback(steam_id64))
+}
+
+/// Fetches the public Steam persona name and avatar. Returns `None` when the
+/// profile cannot be fetched or does not expose a usable name, so callers can
+/// decide whether to fall back to a synthetic label.
+pub(crate) async fn fetch_steam_profile_optional(
+    settings: &AuthSettings,
+    steam_id64: &str,
+) -> Option<(String, Option<String>)> {
     let Ok(xml) = steam::get(settings, &format!("/profiles/{steam_id64}?xml=1")).await else {
-        return (fallback_name, None);
+        return None;
     };
 
-    let name = xml_value(&xml, "steamID").unwrap_or(fallback_name);
+    let name = xml_value(&xml, "steamID")?;
     let avatar = xml_value(&xml, "avatarFull").filter(|url| url.starts_with("https://"));
-    (name, avatar)
+    Some((name, avatar))
 }
 
 #[utoipa::path(
