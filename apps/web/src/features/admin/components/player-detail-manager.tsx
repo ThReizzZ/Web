@@ -63,6 +63,42 @@ const tabs: { key: TabKey; label: string }[] = [
   { key: "notes", label: "内部备注" },
 ];
 
+const ipSourceLabels: Record<string, string> = {
+  game_roster: "游戏在线",
+  game_session: "游戏会话",
+  game_access: "进服记录",
+  website_login: "网站登录",
+  website_session: "网站会话",
+};
+
+interface IpRecency {
+  ipAddress: string;
+  seenAt: string;
+}
+
+function latestIpBySource(
+  groups: AdminPlayerIpGroup[],
+  field: "gameLastSeenAt" | "websiteLastSeenAt",
+): IpRecency | null {
+  return groups.reduce<IpRecency | null>((latest, group) => {
+    const seenAt = group[field];
+    if (!seenAt) {
+      return latest;
+    }
+    if (!latest || new Date(seenAt).getTime() > new Date(latest.seenAt).getTime()) {
+      return { ipAddress: group.ipAddress, seenAt };
+    }
+    return latest;
+  }, null);
+}
+
+function latestGameIpGroup(groups: AdminPlayerIpGroup[]): IpRecency | null {
+  // Match the ban backend: a live roster row wins over older session/access
+  // records, because that is the connection the server currently sees.
+  const rosterGroups = groups.filter((group) => group.sources.includes("game_roster"));
+  return latestIpBySource(rosterGroups.length > 0 ? rosterGroups : groups, "gameLastSeenAt");
+}
+
 export function PlayerDetailManager({ initialSteamId = "" }: { initialSteamId?: string }) {
   const normalizedInitial = initialSteamId.trim();
   const [searchInput, setSearchInput] = useState(normalizedInitial);
@@ -367,7 +403,8 @@ function PlayerHero({
   onExport: () => void;
 }) {
   const profile = detail.profile;
-  const latestIp = detail.ipGroups[0]?.ipAddress ?? null;
+  const latestGameIp = latestGameIpGroup(detail.ipGroups);
+  const latestWebsiteIp = latestIpBySource(detail.ipGroups, "websiteLastSeenAt");
   return (
     <div className="rounded-xl border bg-card p-5">
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -429,9 +466,16 @@ function PlayerHero({
               <p>
                 最近登录：<span className="text-foreground">{formatDate(profile.lastLoginAt)}</span>
               </p>
-              {latestIp ? (
-                <p className="sm:col-span-2">
-                  最近 IP：<span className="font-mono text-foreground">{latestIp}</span>
+              {latestGameIp ? (
+                <p>
+                  最近游戏 IP：
+                  <span className="font-mono text-foreground">{latestGameIp.ipAddress}</span>
+                </p>
+              ) : null}
+              {latestWebsiteIp ? (
+                <p>
+                  最近网站 IP：
+                  <span className="font-mono text-foreground">{latestWebsiteIp.ipAddress}</span>
                 </p>
               ) : null}
             </div>
@@ -872,6 +916,10 @@ function NetworkPanel({ detail }: { detail: AdminPlayerDetail }) {
   }
   return (
     <div className="space-y-4">
+      <p className="text-xs text-muted-foreground">
+        IP 来自游戏服务器（在线名单、会话、进服记录）与网站访问（登录、会话），已按来源标注。 同 IP
+        关联账号不会区分来源，仅表示曾使用过该 IP。
+      </p>
       {detail.ipGroups.map((group) => (
         <IpGroupCard key={group.ipAddress} group={group} />
       ))}
@@ -886,14 +934,26 @@ function IpGroupCard({ group }: { group: AdminPlayerIpGroup }) {
         <div className="flex flex-wrap items-center gap-2">
           <Network className="size-4 text-primary" aria-hidden="true" />
           <span className="font-mono text-sm font-medium">{group.ipAddress}</span>
-          <Badge variant="secondary">{group.accessCount} 次出现</Badge>
+          {group.sources.map((source) => (
+            <Badge key={source} variant={source.startsWith("game_") ? "warning" : "secondary"}>
+              {ipSourceLabels[source] ?? source}
+            </Badge>
+          ))}
+          <Badge variant="muted">{group.accessCount} 条记录</Badge>
           {group.linkedAccounts.some((account) => account.hasActiveIpBan) ? (
             <Badge variant="destructive">该 IP 存在封禁</Badge>
           ) : null}
         </div>
-        <p className="text-[11px] text-muted-foreground">
-          {formatDate(group.firstSeenAt)} → {formatDate(group.lastSeenAt)}
-        </p>
+        <div className="text-right text-[11px] text-muted-foreground">
+          <p>
+            {formatDate(group.firstSeenAt)} → {formatDate(group.lastSeenAt)}
+          </p>
+          <p>
+            {group.gameLastSeenAt ? `游戏 ${formatRelativeTime(group.gameLastSeenAt)}` : ""}
+            {group.gameLastSeenAt && group.websiteLastSeenAt ? " · " : ""}
+            {group.websiteLastSeenAt ? `网站 ${formatRelativeTime(group.websiteLastSeenAt)}` : ""}
+          </p>
+        </div>
       </div>
       <div className="divide-y">
         {group.linkedAccounts.length === 0 ? (
@@ -1028,6 +1088,13 @@ function PlayerBanModal({
   const [reason, setReason] = useState("违反服务器规则");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const latestGameIp = latestGameIpGroup(detail.ipGroups);
+  const latestWebsiteIp = latestIpBySource(detail.ipGroups, "websiteLastSeenAt");
+  const banTargetIp = latestGameIp
+    ? { label: "游戏 IP", ipAddress: latestGameIp.ipAddress }
+    : latestWebsiteIp
+      ? { label: "网站 IP", ipAddress: latestWebsiteIp.ipAddress }
+      : null;
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1059,7 +1126,7 @@ function PlayerBanModal({
       open={open}
       onOpenChange={onOpenChange}
       title="发起全服游戏封禁"
-      description="封禁只影响游戏服务器，网站账号仍可正常登录。若网站已知该玩家的 IP，会自动同步 IP 封禁。"
+      description="封禁只影响游戏服务器，网站账号仍可正常登录。自动 IP 封禁优先使用最近游戏 IP，没有游戏记录时才回退到网站 IP。"
       size="md"
       footer={
         <div className="flex justify-end gap-2">
@@ -1083,7 +1150,14 @@ function PlayerBanModal({
           <p className="text-sm font-medium">{detail.profile.name}</p>
           <p className="font-mono text-[11px] text-muted-foreground">
             {detail.profile.steamId64}
-            {detail.ipGroups[0]?.ipAddress ? ` · ${detail.ipGroups[0].ipAddress}` : ""}
+            {banTargetIp ? ` · ${banTargetIp.label} ${banTargetIp.ipAddress}` : ""}
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {latestGameIp
+              ? `将自动同步封禁最近游戏 IP：${latestGameIp.ipAddress}`
+              : latestWebsiteIp
+                ? `未找到游戏 IP，将回退封禁最近网站 IP：${latestWebsiteIp.ipAddress}`
+                : "未找到可用 IP，仅封禁 SteamID。"}
           </p>
         </div>
         <div className="space-y-1.5">

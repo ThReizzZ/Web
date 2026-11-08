@@ -468,7 +468,10 @@ Query：
   - `profile`：昵称、头像、角色、注册/最近登录、首次/最后活跃、在线状态；
   - `onlineServers`、`stats`（进服成功/失败、会话数、累计时长、有效封禁、已知 IP、关联账号、论坛主题/回复）；
   - `accessLogs`、`sessions`、`gameBans`、`ipBans`、`whitelistApplications`、`whitelistEntries`；
-  - `ipGroups`：每个 IP 的首次/最后出现、次数和同 IP 关联账号（含封禁/白名单/在线标记）；
+  - `ipGroups`：每个 IP 的首次/最后出现、记录数、来源和同 IP 关联账号（含封禁/白名单/在线标记）。
+    `sources` 取值：`game_roster`（游戏在线名单）、`game_session`（游戏会话）、
+    `game_access`（进服记录）、`website_login`（网站登录）、`website_session`（网站会话）；
+    `gameLastSeenAt` / `websiteLastSeenAt` 分别表示该 IP 最近一次从游戏或网站出现的时间。
   - `timeline`：进服、会话、封禁、白名单、论坛和内部备注事件，最多 200 条；
   - `internalProfile`：内部备注、标签和最近 20 条变更历史。
 - `PUT /admin/player-detail/{steam_id64}/profile` body `{ "note": "...", "tags": ["重点关注"] }`：
@@ -481,7 +484,10 @@ Query：
 
 - `GET /admin/server-bans` 返回生效和历史的游戏封禁；每项包含 `scope`（`global` / `server`）、`serverId`、`serverName`、`steamId64`、原因、到期时间、操作者与解封记录。
 - `POST /admin/server-bans` body `{ "steamId64": "...", "reason": "...", "playerName": "...", "expiresInHours": 24, "scope": "global" | "server", "serverId": "..." }`；`scope` 缺省为 `global`，`expiresInHours` 缺省/`null` 为永久。
-- 全服封禁对所有启用服务器写入 `ban` 指令；单服封禁只写指定服务器。若已知玩家 IP（插件上报的服务器 IP，或网站最近登录 IP），会自动创建游戏 IP 封禁，且与 SteamID 封禁共享 `ban_group_id`。管理员当前 IP 不会被自动封禁。
+- 全服封禁对所有启用服务器写入 `ban` 指令；单服封禁只写指定服务器。自动创建游戏 IP 封禁时，
+  会优先使用当前游戏在线名单 IP，其次使用最近一次游戏会话/进服记录 IP，最后才回退到网站最近
+  登录 IP / 有效网站会话 IP；自动创建的 IP 封禁与 SteamID 封禁共享 `ban_group_id`。管理员当前
+  IP 不会被自动封禁。
 - `POST /admin/server-bans/{id}/lift` 解除封禁；会清理未执行的旧 `ban` 指令，写入 `unban`，并按 `ban_group_id` 解除同组游戏 IP 封禁、下发 `unbanip`。
 - `GET /admin/server-ip-bans` 返回游戏 IP 封禁记录；`POST /admin/server-ip-bans` body `{ "ipAddress": "...", "reason": "...", "expiresInHours": 24 }` 创建并立即下发 `banip`。
 - `POST /admin/server-ip-bans/{id}/lift` body `{ "reason": "..." }` 解除 IP 封禁并下发 `unbanip`。
@@ -521,7 +527,7 @@ Query：
 - `PUT /admin/servers/{id}/rcon-password` body `{ "password": "..." }`：设置可选的 RCON 密码，仅用于空服休眠存活探测。密码只写不读，任何接口都不会返回；成功 `204`，空密码、控制字符或超过 256 字符返回 `422`。
 - `DELETE /admin/servers/{id}/rcon-password`：删除 RCON 密码并清除休眠状态，成功 `204`。
 - `POST /admin/servers/{id}/players/{steam_id64}/kick` body `{ "reason": "..." }`：写入 `server_actions`，由 `ThRei_Players` 1.5.0+ 通过 long-poll 通常在 1 秒内执行；插件离线时恢复后执行。
-- `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "...", "scope": "global" }`：原子写入 `server_bans` 与 `server_actions`。`scope` 为 `global`（默认，`server_id = NULL`，对所有启用服务器生效）或 `server`（仅路径指定的服务器）；全局封禁会为每台启用服务器写入一条指令，插件立即踢出在线目标并阻止重连。若已知玩家 IP（插件 1.6.0+ 上报的服务器 IP，或网站最近登录 IP），还会自动创建 IP 封禁；管理员当前 IP 不会被自动封禁。
+- `POST /admin/servers/{id}/players/{steam_id64}/ban` body `{ "reason": "...", "expiresInHours": 24, "playerName": "...", "scope": "global" }`：原子写入 `server_bans` 与 `server_actions`。`scope` 为 `global`（默认，`server_id = NULL`，对所有启用服务器生效）或 `server`（仅路径指定的服务器）；全局封禁会为每台启用服务器写入一条指令，插件立即踢出在线目标并阻止重连。自动创建 IP 封禁时优先使用当前游戏在线名单 IP，其次最近游戏会话/进服记录 IP（单服封禁优先该服务器），最后回退网站最近登录/会话 IP；管理员当前 IP 不会被自动封禁。
 - `GET /admin/server-bans`：返回所有游戏服务器封禁（含全服封禁），每项带 `scope`（`global` / `server`）和 `serverName`（全服封禁为 `全服`）。
 - `POST /admin/server-bans/{id}/lift` 解除服务器封禁；会同时把尚未执行的封禁指令标记为已处理，避免解封后旧指令再次生效，并写入 `unban` 指令。若该封禁带 `ban_group_id`，还会解除同组游戏 IP 封禁并下发 `unbanip`。所有封禁生效和解封都只影响游戏服务器，网站登录不受影响。
 - 踢出/封禁指令由插件确认后写入 `processed_at`；`pendingActions` 是尚未确认的指令数。封禁到期或已解除时，插件不会执行对应指令，但仍会确认队列项。

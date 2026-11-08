@@ -391,6 +391,9 @@ export interface AdminPlayerIpGroup {
   firstSeenAt: string;
   lastSeenAt: string;
   accessCount: number;
+  sources: string[];
+  gameLastSeenAt: string | null;
+  websiteLastSeenAt: string | null;
   linkedAccounts: AdminLinkedAccount[];
 }
 

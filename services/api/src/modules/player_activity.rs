@@ -214,6 +214,12 @@ pub struct PlayerIpGroup {
     pub first_seen_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
     pub access_count: i64,
+    /// Where this IP was observed: game roster/session/access log or website
+    /// login/session. The admin UI uses these to separate game IPs from
+    /// website IPs instead of treating them as the same thing.
+    pub sources: Vec<String>,
+    pub game_last_seen_at: Option<DateTime<Utc>>,
+    pub website_last_seen_at: Option<DateTime<Utc>>,
     pub linked_accounts: Vec<LinkedAccount>,
 }
 
@@ -329,6 +335,9 @@ struct KnownIpRow {
     first_seen_at: DateTime<Utc>,
     last_seen_at: DateTime<Utc>,
     access_count: i64,
+    sources: Vec<String>,
+    game_last_seen_at: Option<DateTime<Utc>>,
+    website_last_seen_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, FromRow)]
@@ -544,31 +553,37 @@ pub async fn search_player_detail(
             SELECT u.steam_id64, u.persona_name AS name, u.avatar_url,
                    u.last_login_at AS seen_at
             FROM users u
-            WHERE ($1::text IS NOT NULL AND (u.persona_name ILIKE $1 OR u.steam_id64 = $2))
+            WHERE ($1::text IS NOT NULL AND u.persona_name ILIKE $1)
+               OR ($2::text IS NOT NULL AND u.steam_id64 = $2)
                OR ($3::text IS NOT NULL AND u.last_login_ip = $3)
             UNION ALL
             SELECT p.steam_id64, p.display_name, p.avatar_url, p.last_seen_at
             FROM server_players p
-            WHERE ($1::text IS NOT NULL AND (p.display_name ILIKE $1 OR p.steam_id64 = $2))
+            WHERE ($1::text IS NOT NULL AND p.display_name ILIKE $1)
+               OR ($2::text IS NOT NULL AND p.steam_id64 = $2)
                OR ($3::text IS NOT NULL AND p.ip_address = $3)
             UNION ALL
             SELECT l.steam_id64, l.player_name, NULL, l.occurred_at
             FROM server_access_logs l
-            WHERE ($1::text IS NOT NULL AND (l.player_name ILIKE $1 OR l.steam_id64 = $2))
+            WHERE ($1::text IS NOT NULL AND l.player_name ILIKE $1)
+               OR ($2::text IS NOT NULL AND l.steam_id64 = $2)
                OR ($3::text IS NOT NULL AND l.ip_address = $3)
             UNION ALL
             SELECT p.steam_id64, p.player_name, NULL, p.last_seen_at
             FROM server_player_sessions p
-            WHERE ($1::text IS NOT NULL AND (p.player_name ILIKE $1 OR p.steam_id64 = $2))
+            WHERE ($1::text IS NOT NULL AND p.player_name ILIKE $1)
+               OR ($2::text IS NOT NULL AND p.steam_id64 = $2)
                OR ($3::text IS NOT NULL AND p.ip_address = $3)
             UNION ALL
             SELECT b.steam_id64, coalesce(b.player_name, b.steam_id64), NULL, b.created_at
             FROM server_bans b
-            WHERE ($1::text IS NOT NULL AND (b.player_name ILIKE $1 OR b.steam_id64 = $2))
+            WHERE ($1::text IS NOT NULL AND b.player_name ILIKE $1)
+               OR ($2::text IS NOT NULL AND b.steam_id64 = $2)
             UNION ALL
             SELECT w.steam_id64, coalesce(w.player_name, w.steam_id64), NULL, w.created_at
             FROM global_whitelist w
-            WHERE ($1::text IS NOT NULL AND (w.player_name ILIKE $1 OR w.steam_id64 = $2))
+            WHERE ($1::text IS NOT NULL AND w.player_name ILIKE $1)
+               OR ($2::text IS NOT NULL AND w.steam_id64 = $2)
         )
         SELECT h.steam_id64,
                coalesce(
@@ -1081,29 +1096,32 @@ async fn load_player_ips(
     let known_ips = sqlx::query_as::<_, KnownIpRow>(
         r"
         WITH sightings AS (
-            SELECT ip_address, occurred_at AS seen_at
+            SELECT ip_address, occurred_at AS seen_at, 'game_access'::text AS source
             FROM server_access_logs
             WHERE steam_id64 = $1 AND ip_address IS NOT NULL
             UNION ALL
-            SELECT ip_address, last_seen_at
+            SELECT ip_address, last_seen_at, 'game_roster'
             FROM server_players
             WHERE steam_id64 = $1 AND ip_address IS NOT NULL
             UNION ALL
-            SELECT ip_address, last_seen_at
+            SELECT ip_address, last_seen_at, 'game_session'
             FROM server_player_sessions
             WHERE steam_id64 = $1 AND ip_address IS NOT NULL
             UNION ALL
-            SELECT last_login_ip, last_login_at
+            SELECT last_login_ip, last_login_at, 'website_login'
             FROM users
             WHERE steam_id64 = $1 AND last_login_ip IS NOT NULL
             UNION ALL
-            SELECT s.ip_address, s.created_at
+            SELECT s.ip_address, s.created_at, 'website_session'
             FROM sessions s
             JOIN users u ON u.id = s.user_id
             WHERE u.steam_id64 = $1 AND s.ip_address IS NOT NULL
         )
         SELECT ip_address, min(seen_at) AS first_seen_at,
-               max(seen_at) AS last_seen_at, count(*)::bigint AS access_count
+               max(seen_at) AS last_seen_at, count(*)::bigint AS access_count,
+               array_agg(DISTINCT source) AS sources,
+               max(seen_at) FILTER (WHERE source LIKE 'game_%') AS game_last_seen_at,
+               max(seen_at) FILTER (WHERE source LIKE 'website_%') AS website_last_seen_at
         FROM sightings
         GROUP BY ip_address
         ORDER BY max(seen_at) DESC
@@ -1216,6 +1234,9 @@ async fn load_player_ips(
             first_seen_at: row.first_seen_at,
             last_seen_at: row.last_seen_at,
             access_count: row.access_count,
+            sources: row.sources,
+            game_last_seen_at: row.game_last_seen_at,
+            website_last_seen_at: row.website_last_seen_at,
             linked_accounts: linked_by_ip.remove(&row.ip_address).unwrap_or_default(),
         })
         .collect::<Vec<_>>();

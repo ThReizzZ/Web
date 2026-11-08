@@ -17,6 +17,112 @@
 
 ---
 
+## 2026年11月08日 15时57分27秒 玩家 IP 来源标注与自动封禁优先游戏 IP
+
+### 背景
+
+玩家详情此前把网站访问 IP 和游戏服务器 IP 合并展示，但不标注来源；管理员无法判断某个 IP
+是玩家登录网站时的出口 IP，还是游戏服务器实际看到的连接 IP。更关键的是，网站发起 SteamID
+封禁时，自动 IP 封禁只查当前 `server_players` 在线名单；玩家下线后该行会被删除，随后直接
+回退到网站 IP。对于只在游戏里出现、没有网站登录 IP 的玩家，则完全找不到可封禁的 IP。
+
+### 变更内容
+
+- `GET /admin/player-detail` 的 `ipGroups` 新增 `sources`、`gameLastSeenAt`、
+  `websiteLastSeenAt`。来源包括 `game_roster`、`game_session`、`game_access`、
+  `website_login`、`website_session`。
+- 玩家详情顶部拆分显示「最近游戏 IP」与「最近网站 IP」；IP 关联卡片按来源显示徽章和
+  游戏/网站最近出现时间，并把记录数文案改为「N 条记录」。
+- 封禁弹窗显示本次将自动封禁的 IP：有游戏记录时显示游戏 IP，没有游戏记录时提示回退到
+  网站 IP；都没有时提示仅封禁 SteamID。
+- `find_recent_game_ip` 的取值顺序改为：
+  1. 当前 `server_players` 在线名单 IP；
+  2. 最近 `server_player_sessions` / `server_access_logs` 游戏 IP（单服封禁优先该服务器）；
+  3. 网站 `users.last_login_ip` / 有效 `sessions.ip_address`。
+- 同步更新 `docs/API.md` 与 `docs/CHANGELOG.md`。
+
+### 涉及文件
+
+- `services/api/src/modules/player_activity.rs`
+- `services/api/src/modules/server_admin.rs`
+- `apps/web/src/features/admin/components/player-detail-manager.tsx`
+- `apps/web/src/features/admin/types.ts`
+- `docs/API.md`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 无数据库迁移。
+- `GET /admin/player-detail` 的 `ipGroups` 增加以下字段（只增不减，向后兼容）：
+  `sources: string[]`、`gameLastSeenAt: string | null`、`websiteLastSeenAt: string | null`。
+- 网站创建 SteamID 封禁时的自动 IP 封禁来源顺序改变；封禁表结构不变。
+
+### 测试与结果
+
+- `cargo fmt --check`、`cargo check`、`cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：59 个单元测试与 15 个 HTTP 合约测试全部通过。
+- `npm run typecheck`、`npm run lint`、`npm run format:check`：通过。
+- 在 PostgreSQL 中执行新的 `ipGroups` 聚合 SQL：返回来源数组及游戏/网站最近时间；
+  测试玩家 `76561198830098162` 返回 `183.34.200.209` 与 `14.21.195.47` 两组 IP，
+  来源分别包含游戏和网站记录。
+- 在 PostgreSQL 中执行新的历史游戏 IP 查询：对已离线、无网站登录 IP 的玩家也能返回
+  最近游戏会话 IP（如 `76561199303197553` → `114.97.180.79`）。
+- 单服封禁的服务器优先级已验证：同一玩家在两个服务器使用不同 IP 时，全局查询返回最新
+  `183.34.200.209`，指定旧服务器返回 `14.21.195.47`，指定新服务器返回 `183.34.200.209`。
+- 生产环境重新构建 `threi-api:0.1.0`、`threi-web:0.1.0` 并重建 `threi-api-1`、
+  `threi-web-1`，二者均为 `healthy`；回滚镜像 `threi-api:rollback-20261108T075504Z`、
+  `threi-web:rollback-20261108T075504Z`。
+- 部署后通过一次性管理员登录链接实测玩家详情接口：`ipGroups` 返回 2 组 IP，来源字段
+  正确；测试会话已登出（HTTP 204）。
+- 对只有游戏记录、无网站登录 IP 的玩家 `76561199303197553` 实测：详情接口返回 1 组 IP
+  `114.97.180.79`，来源为 `game_access,game_session`，`websiteLastSeenAt` 为 `null`；
+  该 IP 会成为自动 IP 封禁目标。
+
+---
+
+## 2026年11月08日 15时25分43秒 修复玩家详情无法按 SteamID64 搜索
+
+### 背景
+
+管理面板玩家详情页要求支持 SteamID64/2/3、玩家名和 IP 查询，但用户反馈直接输入
+SteamID64 时搜索结果为空。检查发现：输入可解析为 SteamID 时，搜索接口把昵称模糊匹配参数
+`$1` 设为 `NULL`；而 SQL 各分支把 `steam_id64 = $2` 放在
+`($1::text IS NOT NULL AND (name ILIKE $1 OR steam_id64 = $2))` 内，导致精确 SteamID
+条件永远不参与判断。玩家名和 IP 查询分别走 `$1`、`$3`，因此只有 SteamID 查询失效。
+
+### 变更内容
+
+- 将搜索 SQL 的每个分支改为独立条件：
+  `($1::text IS NOT NULL AND name ILIKE $1) OR ($2::text IS NOT NULL AND steam_id64 = $2)
+  OR ($3::text IS NOT NULL AND ip_address = $3)`。
+- `users`、`server_players`、`server_access_logs`、`server_player_sessions`、
+  `server_bans`、`global_whitelist` 六个来源统一修复；SteamID64/2/3 均按解析后的
+  SteamID64 精确匹配。
+
+### 涉及文件
+
+- `services/api/src/modules/player_activity.rs`
+- `docs/CHANGELOG.md`
+
+### 数据库与 API 变化
+
+- 无数据库迁移，无 API 结构变化；仅修正 `GET /api/v1/admin/player-detail/search` 的查询条件。
+
+### 测试与结果
+
+- `cargo fmt --check`、`cargo check`、`cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：59 个单元测试与 15 个 HTTP 合约测试全部通过。
+- `npm run typecheck`、`npm run lint`：通过。
+- 生产环境重新构建 `threi-api:0.1.0` 并重建 `threi-api-1`，健康检查为 `healthy`；
+  `web` 容器未改动。回滚镜像为 `threi-api:rollback-20261108T072806Z`，旧源文件备份为
+  `player_activity.rs.bak-20261108T072806Z`。
+- 部署后通过一次性管理员登录链接实测：
+  `GET /api/v1/admin/player-detail/search?q=76561199685594027` 返回 1 个候选，返回的
+  `steamId64` 与查询值一致；测试会话已登出（HTTP 204）。未登录访问该接口返回 401，
+  `https://threi.cn/` 返回 200。
+
+---
+
 ## 2026年11月08日 00时06分45秒 玩家详情在线会话与封禁管理界面调整
 
 ### 背景

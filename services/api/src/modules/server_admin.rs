@@ -792,6 +792,36 @@ pub(crate) async fn find_recent_game_ip(
         return Ok(roster_ip);
     }
 
+    // The live roster is deleted as soon as the player disconnects, so an
+    // offline player's game IP only survives in session history and access
+    // logs. Prefer those over the website IP: the game server's view is what
+    // the ban needs to target.
+    let historical_game_ip = sqlx::query_scalar::<_, String>(
+        r"
+        SELECT ip_address
+        FROM (
+            SELECT ip_address, last_seen_at AS seen_at,
+                   (server_id IS NOT DISTINCT FROM $2::text) AS server_match
+            FROM server_player_sessions
+            WHERE steam_id64 = $1 AND ip_address IS NOT NULL
+            UNION ALL
+            SELECT ip_address, occurred_at,
+                   (server_id IS NOT DISTINCT FROM $2::text)
+            FROM server_access_logs
+            WHERE steam_id64 = $1 AND ip_address IS NOT NULL
+        ) sightings
+        ORDER BY server_match DESC, seen_at DESC
+        LIMIT 1
+        ",
+    )
+    .bind(steam_id64)
+    .bind(server_id)
+    .fetch_optional(db)
+    .await?;
+    if historical_game_ip.is_some() {
+        return Ok(historical_game_ip);
+    }
+
     let session_ip = sqlx::query_scalar::<_, Option<String>>(
         r"
         SELECT coalesce(
